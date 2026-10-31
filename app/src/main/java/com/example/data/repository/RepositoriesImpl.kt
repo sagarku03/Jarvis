@@ -75,6 +75,10 @@ class AgentBackendRepositoryImpl @Inject constructor(
             if (offlineDecision != null) {
                 return offlineDecision
             }
+            return AgentStepDecision(
+                assistantText = "You appear to be offline. Connect to the internet or use an offline command like setting an alarm, timer, flashlight, volume, or opening an app.",
+                toolCalls = emptyList()
+            )
         }
 
         val systemMemoryPrompt = buildString {
@@ -137,7 +141,26 @@ class AgentBackendRepositoryImpl @Inject constructor(
             )
         } catch (ce: CancellationException) {
             throw ce
+        } catch (httpEx: retrofit2.HttpException) {
+            if (httpEx.code() == 429) {
+                return AgentStepDecision(
+                    assistantText = "Daily free limit reached. Please try again tomorrow.",
+                    toolCalls = emptyList()
+                )
+            }
+            val fallback = if (lastToolMsg == null) tryOfflineCommandFallback(lastUserMsg) else null
+            fallback ?: AgentStepDecision(
+                assistantText = "Backend connection error (HTTP ${httpEx.code()}).",
+                toolCalls = emptyList()
+            )
         } catch (e: Exception) {
+            val msg = e.message.orEmpty()
+            if (msg.contains("429") || msg.contains("DAILY_FREE_LIMIT_REACHED", ignoreCase = true)) {
+                return AgentStepDecision(
+                    assistantText = "Daily free limit reached. Please try again tomorrow.",
+                    toolCalls = emptyList()
+                )
+            }
             val fallback = if (lastToolMsg == null) tryOfflineCommandFallback(lastUserMsg) else null
             fallback ?: AgentStepDecision(
                 assistantText = "Backend connection error: ${e.localizedMessage ?: "Unable to reach server"}",
@@ -162,7 +185,7 @@ class AgentBackendRepositoryImpl @Inject constructor(
         val lower = userText.lowercase()
         return when {
             lower.contains("flashlight") || lower.contains("torch") -> {
-                val turnOff = lower.contains("off") || lower.contains("band")
+                val turnOff = lower.contains("off")
                 AgentStepDecision(
                     assistantText = "Updating flashlight.",
                     toolCalls = listOf(
@@ -246,28 +269,32 @@ class ChatRepositoryImpl @Inject constructor(
 
     override val messagesFlow: Flow<List<ChatMessage>> =
         chatMessageDao.observeAllMessages().map { list ->
-            list.map { entity ->
-                ChatMessage(
-                    id = entity.id,
-                    role = runCatching { MessageRole.valueOf(entity.role) }.getOrDefault(MessageRole.USER),
-                    content = entity.content,
-                    toolName = entity.toolName,
-                    timestampMs = entity.timestampMs
-                )
+            list.mapNotNull { entity ->
+                runCatching {
+                    ChatMessage(
+                        id = entity.id,
+                        role = runCatching { MessageRole.valueOf(entity.role) }.getOrDefault(MessageRole.USER),
+                        content = com.example.data.local.FieldCipher.decrypt(entity.content),
+                        toolName = entity.toolName,
+                        timestampMs = entity.timestampMs
+                    )
+                }.getOrNull()
             }
         }
 
     override suspend fun getRecentContextMessages(limit: Int): List<ChatMessage> {
         return chatMessageDao.getRecentMessages(limit)
             .reversed()
-            .map { entity ->
-                ChatMessage(
-                    id = entity.id,
-                    role = runCatching { MessageRole.valueOf(entity.role) }.getOrDefault(MessageRole.USER),
-                    content = entity.content,
-                    toolName = entity.toolName,
-                    timestampMs = entity.timestampMs
-                )
+            .mapNotNull { entity ->
+                runCatching {
+                    ChatMessage(
+                        id = entity.id,
+                        role = runCatching { MessageRole.valueOf(entity.role) }.getOrDefault(MessageRole.USER),
+                        content = com.example.data.local.FieldCipher.decrypt(entity.content),
+                        toolName = entity.toolName,
+                        timestampMs = entity.timestampMs
+                    )
+                }.getOrNull()
             }
     }
 
@@ -275,7 +302,7 @@ class ChatRepositoryImpl @Inject constructor(
         chatMessageDao.insertMessage(
             ChatMessageEntity(
                 role = message.role.name,
-                content = message.content,
+                content = com.example.data.local.FieldCipher.encrypt(message.content),
                 toolName = message.toolName,
                 timestampMs = message.timestampMs
             )
@@ -297,33 +324,46 @@ class MemoryRepositoryImpl @Inject constructor(
     init {
         seedScope.launch {
             if (memoryDao.getAllMemoriesSnapshot().isEmpty()) {
-                memoryDao.insertMemory(
-                    MemoryFactEntity(
-                        category = "PREFERENCE",
-                        key = "Preferred Speech Locale",
-                        value = "English (India) en-IN",
-                        updatedAtMs = System.currentTimeMillis()
+                runCatching {
+                    memoryDao.insertMemory(
+                        MemoryFactEntity(
+                            category = "PREFERENCE",
+                            key = "Preferred Speech Locale",
+                            value = com.example.data.local.FieldCipher.encrypt("English (India) en-IN"),
+                            updatedAtMs = System.currentTimeMillis()
+                        )
                     )
-                )
+                }
             }
         }
     }
 
     override val memoriesFlow: Flow<List<MemoryFact>> =
-        memoryDao.observeMemories().map { list -> list.map { it.toDomain() } }
+        memoryDao.observeMemories().map { list -> list.mapNotNull { runCatching { it.toDomain() }.getOrNull() } }
 
     override fun searchMemories(query: String): Flow<List<MemoryFact>> =
-        memoryDao.searchMemories(query).map { list -> list.map { it.toDomain() } }
+        memoriesFlow.map { list ->
+            val q = query.trim().lowercase()
+            if (q.isEmpty()) {
+                list
+            } else {
+                list.filter {
+                    it.key.lowercase().contains(q) ||
+                        it.value.lowercase().contains(q) ||
+                        it.category.lowercase().contains(q)
+                }
+            }
+        }
 
     override suspend fun getAllMemoriesSnapshot(): List<MemoryFact> =
-        memoryDao.getAllMemoriesSnapshot().map { it.toDomain() }
+        memoryDao.getAllMemoriesSnapshot().mapNotNull { runCatching { it.toDomain() }.getOrNull() }
 
     override suspend fun upsertMemory(category: String, key: String, value: String) {
         memoryDao.insertMemory(
             MemoryFactEntity(
                 category = category.trim().ifEmpty { "GENERAL" },
                 key = key.trim(),
-                value = value.trim(),
+                value = com.example.data.local.FieldCipher.encrypt(value.trim()),
                 updatedAtMs = System.currentTimeMillis()
             )
         )
@@ -341,7 +381,7 @@ class MemoryRepositoryImpl @Inject constructor(
         id = id,
         category = category,
         key = key,
-        value = value,
+        value = com.example.data.local.FieldCipher.decrypt(value),
         updatedAtMs = updatedAtMs
     )
 }
@@ -353,17 +393,19 @@ class ActivityLogRepositoryImpl @Inject constructor(
 
     override val logsFlow: Flow<List<ActivityLogEntry>> =
         activityLogDao.observeLogs().map { list ->
-            list.map { entity ->
-                ActivityLogEntry(
-                    id = entity.id,
-                    toolName = entity.toolName,
-                    riskLevel = runCatching { RiskLevel.valueOf(entity.riskLevel) }.getOrDefault(RiskLevel.LOW),
-                    argumentsSummary = entity.argumentsSummary,
-                    resultSummary = entity.resultSummary,
-                    userConfirmed = entity.userConfirmed,
-                    durationMs = entity.durationMs,
-                    timestampMs = entity.timestampMs
-                )
+            list.mapNotNull { entity ->
+                runCatching {
+                    ActivityLogEntry(
+                        id = entity.id,
+                        toolName = entity.toolName,
+                        riskLevel = runCatching { RiskLevel.valueOf(entity.riskLevel) }.getOrDefault(RiskLevel.LOW),
+                        argumentsSummary = com.example.data.local.FieldCipher.decrypt(entity.argumentsSummary),
+                        resultSummary = entity.resultSummary,
+                        userConfirmed = entity.userConfirmed,
+                        durationMs = entity.durationMs,
+                        timestampMs = entity.timestampMs
+                    )
+                }.getOrNull()
             }
         }
 
@@ -372,7 +414,7 @@ class ActivityLogRepositoryImpl @Inject constructor(
             ActivityLogEntity(
                 toolName = entry.toolName,
                 riskLevel = entry.riskLevel.name,
-                argumentsSummary = entry.argumentsSummary,
+                argumentsSummary = com.example.data.local.FieldCipher.encrypt(entry.argumentsSummary),
                 resultSummary = entry.resultSummary,
                 userConfirmed = entry.userConfirmed,
                 durationMs = entry.durationMs,

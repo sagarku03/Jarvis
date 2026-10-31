@@ -67,10 +67,12 @@ class ContactsResolver @Inject constructor(
         }
 
         // 2. Query Android ContactsContract if READ_CONTACTS permission is granted
-        val hasContactsPermission = ContextCompat.checkSelfPermission(
-            context,
-            Manifest.permission.READ_CONTACTS
-        ) == PackageManager.PERMISSION_GRANTED
+        val hasContactsPermission = runCatching {
+            ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.READ_CONTACTS
+            ) == PackageManager.PERMISSION_GRANTED
+        }.getOrDefault(false)
 
         if (hasContactsPermission) {
             runCatching {

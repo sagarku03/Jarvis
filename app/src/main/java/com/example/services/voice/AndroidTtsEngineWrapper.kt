@@ -1,6 +1,5 @@
 package com.example.services.voice
 
-import ai.picovoice.porcupine.Porcupine
 import android.content.Context
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
@@ -23,6 +22,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -37,12 +37,11 @@ import java.util.UUID
 import kotlin.coroutines.resume
 
 /**
- * Natural Voice TTS engine with:
- * 1. Sentence-level streaming via backend `/v1/tts` when `BuildConfig.AI_VOICE` is true and backend URL is configured.
- * 2. Disk cache for short frequent phrases ("Okay", "Done", etc.) to achieve instant playback.
- * 3. Exclusive assistant audio focus (`USAGE_ASSISTANT` + `CONTENT_TYPE_SPEECH`, `AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE`).
- * 4. Automatic fallback to the highest-quality local `en-IN`/`en-US` Android TTS voice (`QUALITY_HIGH`, offline)
- *    with `isUsingOfflineFallback` exposed to the UI so an "Offline voice" chip is shown.
+ * Free Mode TTS engine:
+ * 1. Primary = Android `TextToSpeech` selecting the best installed `en-IN` voice (`Voice.QUALITY_VERY_HIGH` / `QUALITY_HIGH`, offline preferred).
+ * 2. Optional = Gemini TTS via Cloudflare Worker `/v1/tts` when `BuildConfig.AI_VOICE` is enabled and backend is configured.
+ * 3. Exposes `isUsingOfflineFallback` (`true` for Device voice, `false` for Cloud voice) so the UI shows a clear "Device voice" vs "Cloud voice" chip.
+ * 4. Exclusive assistant audio focus (`USAGE_ASSISTANT` + `CONTENT_TYPE_SPEECH`, `AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE`).
  */
 @Singleton
 class AndroidTtsEngineWrapper @Inject constructor(
@@ -66,7 +65,7 @@ class AndroidTtsEngineWrapper @Inject constructor(
     private val _firstAudioLatencyMs = MutableStateFlow(0L)
     override val firstAudioLatencyMs: StateFlow<Long> = _firstAudioLatencyMs.asStateFlow()
 
-    private val _isUsingOfflineFallback = MutableStateFlow(false)
+    private val _isUsingOfflineFallback = MutableStateFlow(!BuildConfig.AI_VOICE)
     override val isUsingOfflineFallback: StateFlow<Boolean> = _isUsingOfflineFallback.asStateFlow()
 
     private var pendingCompletionCallback: (() -> Unit)? = null
@@ -136,10 +135,13 @@ class AndroidTtsEngineWrapper @Inject constructor(
         val sentences = splitIntoSentenceChunks(sanitized)
         streamingJob = scope.launch {
             var firstChunkStarted = false
-            val canTryNeuralBackend = BuildConfig.AI_VOICE &&
-                BuildConfig.JARVIS_BACKEND_BASE_URL.startsWith("http")
+            val backendUrl = BuildConfig.JARVIS_BACKEND_BASE_URL.trim()
+            val canTryCloudWorkerTts = BuildConfig.AI_VOICE &&
+                backendUrl.startsWith("https://") &&
+                !backendUrl.contains("jarvis-proxy.example.com") &&
+                !backendUrl.contains("UNCONFIGURED")
 
-            val streamedSuccess = if (canTryNeuralBackend) {
+            val streamedSuccess = if (canTryCloudWorkerTts) {
                 streamChunksViaBackend(
                     sentences = sentences,
                     language = language,
@@ -166,7 +168,7 @@ class AndroidTtsEngineWrapper @Inject constructor(
                 pendingCompletionCallback = null
                 cb?.invoke()
             } else if (isActive) {
-                // Fallback to highest-quality local Android TTS voice
+                // Primary Free Mode path: best installed en-IN / English Android TTS voice
                 _isUsingOfflineFallback.value = true
                 _firstAudioLatencyMs.value =
                     (SystemClock.elapsedRealtime() - startTime).coerceAtLeast(1L)
@@ -188,12 +190,12 @@ class AndroidTtsEngineWrapper @Inject constructor(
         onFirstChunkReady: () -> Unit
     ): Boolean {
         for (sentence in sentences) {
-            if (! kotlinx.coroutines.currentCoroutineContext().isActive) return false
+            if (!currentCoroutineContext().isActive) return false
             val cachedFile = getShortPhraseCacheFile(sentence, voiceProfile.id, speed)
             val audioBytes: ByteArray? = if (cachedFile != null && cachedFile.exists() && cachedFile.length() > 64L) {
                 runCatching { cachedFile.readBytes() }.getOrNull()
             } else {
-                val fetched = try {
+                try {
                     val responseBody = apiService.synthesizeSpeech(
                         TtsRequestDto(
                             text = sentence,
@@ -211,7 +213,6 @@ class AndroidTtsEngineWrapper @Inject constructor(
                 } catch (_: Exception) {
                     null
                 }
-                fetched
             }
 
             if (audioBytes == null || audioBytes.size <= 64) {
@@ -226,7 +227,6 @@ class AndroidTtsEngineWrapper @Inject constructor(
     }
 
     private fun getShortPhraseCacheFile(sentence: String, voiceId: String, speed: Float): File? {
-        // Cache short confirmation phrases (<= 48 chars) on disk
         if (sentence.length > 48) return null
         val key = "${voiceId}_${speed}_${sentence.lowercase().trim()}"
         val digest = MessageDigest.getInstance("SHA-256")
@@ -283,6 +283,7 @@ class AndroidTtsEngineWrapper @Inject constructor(
         val preferredTags = listOf(language.speechLocale, "en-IN", "en-US", "en-GB")
         val availableVoices = runCatching { engine.voices }.getOrNull().orEmpty()
 
+        // Prefer Voice.QUALITY_VERY_HIGH (500) or Voice.QUALITY_HIGH (400), offline first
         val bestVoice: Voice? = preferredTags.firstNotNullOfOrNull { tag ->
             val targetLocale = Locale.forLanguageTag(tag)
             availableVoices
@@ -292,7 +293,7 @@ class AndroidTtsEngineWrapper @Inject constructor(
                         !v.isNetworkConnectionRequired &&
                         v.quality >= Voice.QUALITY_HIGH
                 }
-                .maxByOrNull { it.quality }
+                .maxWithOrNull(compareBy<Voice> { it.quality >= Voice.QUALITY_VERY_HIGH }.thenBy { it.quality })
         } ?: availableVoices
             .filter { v -> v.locale.language.equals("en", ignoreCase = true) && !v.isNetworkConnectionRequired }
             .maxByOrNull { it.quality }
@@ -412,149 +413,5 @@ class AndroidTtsEngineWrapper @Inject constructor(
         stop()
         tts?.shutdown()
         tts = null
-    }
-}
-
-/**
- * On-device wake word engine ("Hey Jarvis") powered by Picovoice Porcupine.
- * Strictly requires BOTH:
- * 1. Non-blank `BuildConfig.PORCUPINE_ACCESS_KEY`
- * 2. Bundled `hey_jarvis_android.ppn` in `assets/` (or Porcupine built-in `JARVIS` keyword if `.ppn` is present).
- * Never fakes wake-word detection when unconfigured.
- */
-@Singleton
-class PorcupineWakeWordEngineImpl @Inject constructor(
-    private val context: Context,
-    private val pcmAudioRecorder: PcmAudioRecorder
-) : WakeWordEngine {
-
-    companion object {
-        const val CUSTOM_KEYWORD_ASSET = "hey_jarvis_android.ppn"
-    }
-
-    private val _isMonitoring = MutableStateFlow(false)
-    override val isMonitoring: StateFlow<Boolean> = _isMonitoring.asStateFlow()
-
-    private val _isPaused = MutableStateFlow(false)
-    override val isPaused: StateFlow<Boolean> = _isPaused.asStateFlow()
-
-    private val _sensitivity = MutableStateFlow(0.65f)
-    override val sensitivity: StateFlow<Float> = _sensitivity.asStateFlow()
-
-    private var wakeCallback: (() -> Unit)? = null
-    private var porcupine: Porcupine? = null
-    private var frameAccumulator = ShortArray(0)
-
-    override val isWakeWordConfigured: Boolean
-        get() {
-            val accessKey = BuildConfig.PORCUPINE_ACCESS_KEY.trim()
-            if (accessKey.isEmpty() || accessKey.startsWith("YOUR_")) return false
-            val hasCustomPpn = runCatching {
-                context.assets.list("")?.contains(CUSTOM_KEYWORD_ASSET) == true
-            }.getOrDefault(false)
-            return hasCustomPpn
-        }
-
-    override fun startMonitoring(onWakeWordDetected: () -> Unit) {
-        wakeCallback = onWakeWordDetected
-        if (_isPaused.value || !isWakeWordConfigured) {
-            _isMonitoring.value = false
-            return
-        }
-
-        val accessKey = BuildConfig.PORCUPINE_ACCESS_KEY.trim()
-        try {
-            if (porcupine == null) {
-                porcupine = Porcupine.Builder()
-                    .setAccessKey(accessKey)
-                    .setKeywordPath(CUSTOM_KEYWORD_ASSET)
-                    .setSensitivity(_sensitivity.value.coerceIn(0.1f, 1.0f))
-                    .build(context.applicationContext)
-            }
-        } catch (_: Throwable) {
-            porcupine = null
-            _isMonitoring.value = false
-            return
-        }
-
-        val engine = porcupine ?: return
-        val requiredFrameLength = engine.frameLength
-        frameAccumulator = ShortArray(0)
-
-        val started = pcmAudioRecorder.startRecording(
-            onPcmFrame = { pcmChunk ->
-                if (_isPaused.value || !_isMonitoring.value) return@startRecording
-                processPorcupineFrames(engine, requiredFrameLength, pcmChunk)
-            }
-        )
-        _isMonitoring.value = started
-    }
-
-    private fun processPorcupineFrames(
-        engine: Porcupine,
-        frameLength: Int,
-        incoming: ShortArray
-    ) {
-        val combined = ShortArray(frameAccumulator.size + incoming.size)
-        System.arraycopy(frameAccumulator, 0, combined, 0, frameAccumulator.size)
-        System.arraycopy(incoming, 0, combined, frameAccumulator.size, incoming.size)
-
-        var offset = 0
-        while (offset + frameLength <= combined.size) {
-            val slice = combined.copyOfRange(offset, offset + frameLength)
-            offset += frameLength
-            try {
-                val keywordIndex = engine.process(slice)
-                if (keywordIndex >= 0) {
-                    // Release mic BEFORE starting STT
-                    stopMonitoring()
-                    wakeCallback?.invoke()
-                    return
-                }
-            } catch (_: Throwable) {
-                return
-            }
-        }
-
-        frameAccumulator = if (offset < combined.size) {
-            combined.copyOfRange(offset, combined.size)
-        } else {
-            ShortArray(0)
-        }
-    }
-
-    override fun stopMonitoring() {
-        pcmAudioRecorder.stopRecording()
-        frameAccumulator = ShortArray(0)
-        _isMonitoring.value = false
-    }
-
-    override fun setPaused(paused: Boolean) {
-        _isPaused.value = paused
-        if (paused) {
-            pcmAudioRecorder.stopRecording()
-            _isMonitoring.value = false
-        } else if (wakeCallback != null && isWakeWordConfigured) {
-            startMonitoring(wakeCallback!!)
-        }
-    }
-
-    override fun setSensitivity(value: Float) {
-        val clamped = value.coerceIn(0.1f, 1.0f)
-        _sensitivity.value = clamped
-        if (porcupine != null) {
-            runCatching { porcupine?.delete() }
-            porcupine = null
-            if (_isMonitoring.value && !_isPaused.value && wakeCallback != null) {
-                startMonitoring(wakeCallback!!)
-            }
-        }
-    }
-
-    override fun release() {
-        stopMonitoring()
-        runCatching { porcupine?.delete() }
-        porcupine = null
-        wakeCallback = null
     }
 }

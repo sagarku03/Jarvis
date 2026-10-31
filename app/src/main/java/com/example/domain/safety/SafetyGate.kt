@@ -183,10 +183,12 @@ class SafetyGateImpl @Inject constructor(
             emptyList()
         }
 
-        val enrichedEn = if (candidates.size == 1) {
-            "$reasonEn\nMatched contact: ${candidates.first().displayName} (${candidates.first().maskedNumber})"
-        } else {
-            reasonEn
+        val enrichedEn = when {
+            candidates.size == 1 ->
+                "$reasonEn\nMatched contact: ${candidates.first().displayName} (${candidates.first().maskedNumber})"
+            candidates.size > 1 ->
+                "$reasonEn\nMultiple contacts match (${candidates.size}): ${candidates.joinToString { "${it.displayName} (${it.maskedNumber})" }}. Please select which one to use:"
+            else -> reasonEn
         }
 
         _pendingConfirmation.value = ConfirmationRequest(

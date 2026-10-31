@@ -10,23 +10,19 @@ import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.Icon
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.R
+import com.example.ui.components.AuroraBackground
+import com.example.ui.components.AuroraFloatingPillNav
 import com.example.ui.screens.ActivityLogScreen
 import com.example.ui.screens.HomeScreen
 import com.example.ui.screens.LoginScreen
@@ -34,7 +30,6 @@ import com.example.ui.screens.MemoryScreen
 import com.example.ui.screens.PermissionsScreen
 import com.example.ui.screens.RoutinesScreen
 import com.example.ui.screens.SettingsScreen
-import com.example.ui.theme.AuroraColors
 import com.example.ui.viewmodel.ActivityLogViewModel
 import com.example.ui.viewmodel.AuthViewModel
 import com.example.ui.viewmodel.HomeViewModel
@@ -95,70 +90,48 @@ fun JarvisRootApp(
         BackHandler { currentTab = JarvisDestination.HOME }
     }
 
-    Scaffold(
-        containerColor = AuroraColors.BackgroundDeep,
-        bottomBar = {
-            NavigationBar(
-                containerColor = AuroraColors.SurfacePrimary
+    AuroraBackground {
+        Scaffold(
+            containerColor = Color.Transparent,
+            bottomBar = {
+                AuroraFloatingPillNav(
+                    currentDestination = currentTab,
+                    onSelectDestination = { currentTab = it }
+                )
+            }
+        ) { innerPadding ->
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding)
             ) {
-                JarvisDestination.entries.forEach { destination ->
-                    val selected = currentTab == destination
-                    NavigationBarItem(
-                        selected = selected,
-                        onClick = { currentTab = destination },
-                        icon = {
-                            Icon(
-                                imageVector = destination.icon,
-                                contentDescription = stringResource(destination.labelRes)
-                            )
-                        },
-                        label = {
-                            Text(text = stringResource(destination.labelRes))
-                        },
-                        colors = NavigationBarItemDefaults.colors(
-                            selectedIconColor = AuroraColors.CyanGlow,
-                            selectedTextColor = AuroraColors.TextPrimary,
-                            indicatorColor = AuroraColors.ElectricViolet.copy(alpha = 0.22f),
-                            unselectedIconColor = AuroraColors.TextSecondary,
-                            unselectedTextColor = AuroraColors.TextSecondary
-                        ),
-                        modifier = Modifier.testTag(destination.testTag)
+                when (currentTab) {
+                    JarvisDestination.HOME -> HomeScreen(
+                        viewModel = homeViewModel,
+                        onOpenPermissions = { showPermissionsScreen = true }
+                    )
+
+                    JarvisDestination.ACTIVITY -> ActivityLogScreen(
+                        viewModel = activityLogViewModel
+                    )
+
+                    JarvisDestination.MEMORY -> MemoryScreen(
+                        viewModel = memoryViewModel
+                    )
+
+                    JarvisDestination.ROUTINES -> RoutinesScreen(
+                        viewModel = routinesViewModel
+                    )
+
+                    JarvisDestination.SETTINGS -> SettingsScreen(
+                        viewModel = settingsViewModel,
+                        onOpenPermissionsScreen = { showPermissionsScreen = true },
+                        onSignOut = {
+                            authViewModel.signOut()
+                            showLoginScreen = true
+                        }
                     )
                 }
-            }
-        }
-    ) { innerPadding ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-        ) {
-            when (currentTab) {
-                JarvisDestination.HOME -> HomeScreen(
-                    viewModel = homeViewModel,
-                    onOpenPermissions = { showPermissionsScreen = true }
-                )
-
-                JarvisDestination.ACTIVITY -> ActivityLogScreen(
-                    viewModel = activityLogViewModel
-                )
-
-                JarvisDestination.MEMORY -> MemoryScreen(
-                    viewModel = memoryViewModel
-                )
-
-                JarvisDestination.ROUTINES -> RoutinesScreen(
-                    viewModel = routinesViewModel
-                )
-
-                JarvisDestination.SETTINGS -> SettingsScreen(
-                    viewModel = settingsViewModel,
-                    onOpenPermissionsScreen = { showPermissionsScreen = true },
-                    onSignOut = {
-                        authViewModel.signOut()
-                        showLoginScreen = true
-                    }
-                )
             }
         }
     }

@@ -3,15 +3,14 @@ package com.example.ui.theme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.graphics.Color
 
 private val AuroraDarkColorScheme = darkColorScheme(
     primary = Violet500,
-    onPrimary = Color.White,
+    onPrimary = TextPrimary,
     primaryContainer = Violet600,
     onPrimaryContainer = TextPrimary,
-    secondary = ElectricBlue,
-    onSecondary = Color.White,
+    secondary = Lavender,
+    onSecondary = Bg0,
     secondaryContainer = SurfaceVariantDark,
     onSecondaryContainer = TextPrimary,
     tertiary = Aqua,
@@ -23,8 +22,9 @@ private val AuroraDarkColorScheme = darkColorScheme(
     surfaceVariant = SurfaceVariantDark,
     onSurfaceVariant = TextSecondary,
     outline = GlassStroke,
+    outlineVariant = GlassStrokeStrong,
     error = Danger,
-    onError = Color.White
+    onError = Bg0
 )
 
 @Composable

@@ -28,7 +28,9 @@ class CallContactTool @Inject constructor(
         val explicitPhone = args["phone_number"]?.trim().orEmpty()
 
         val targetCandidate = if (explicitPhone.isNotBlank()) {
-            com.example.domain.model.ContactCandidate(
+            val matched = contactsResolver.resolveCandidates(contactName)
+                .firstOrNull { it.phoneNumber == explicitPhone }
+            matched ?: com.example.domain.model.ContactCandidate(
                 displayName = contactName.ifEmpty { explicitPhone },
                 phoneNumber = explicitPhone,
                 maskedNumber = ContactsResolver.maskPhoneNumber(explicitPhone)
@@ -40,6 +42,14 @@ class CallContactTool @Inject constructor(
                     toolName = name,
                     success = false,
                     outputEn = "Contact '$contactName' was not found in your Contacts or saved Memory facts."
+                )
+            }
+            if (candidates.size > 1) {
+                val options = candidates.joinToString(", ") { "${it.displayName} (${it.maskedNumber})" }
+                return ToolExecutionResult(
+                    toolName = name,
+                    success = false,
+                    outputEn = "Multiple contacts match '$contactName': $options. Please specify which one to call."
                 )
             }
             candidates.first()

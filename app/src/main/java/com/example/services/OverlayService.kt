@@ -24,7 +24,7 @@ import com.example.di.AndroidEntryPoint
 /**
  * Floating draggable Aurora Violet Glass orb overlay over other apps.
  * Only starts when `Settings.canDrawOverlays(context)` is granted and user enables it.
- * Provides quick assistant launch and a 1-tap emergency STOP button tied to the global KillSwitch.
+ * Uses the Aurora violet glass style (#0E0A1F glass fill + #8B5CF6 stroke) and #FF6B87 STOP pill.
  */
 @AndroidEntryPoint
 class OverlayService : Service() {
@@ -80,15 +80,15 @@ class OverlayService : Service() {
             background = GradientDrawable().apply {
                 shape = GradientDrawable.RECTANGLE
                 cornerRadius = 999f
-                setColor(Color.parseColor("#E60F1322")) // Aurora Surface #0F1322 with glass alpha
-                setStroke((1.5f * density).toInt(), Color.parseColor("#8B5CF6")) // Electric Violet stroke
+                setColor(Color.parseColor("#E60E0A1F")) // Aurora Surface #0E0A1F with glass alpha
+                setStroke((1.5f * density).toInt(), Color.parseColor("#8B5CF6")) // Violet #8B5CF6 stroke
             }
             elevation = 12f * density
         }
 
         val orbChip = TextView(this).apply {
             text = getString(R.string.overlay_chip_label)
-            setTextColor(Color.parseColor("#F5F7FF"))
+            setTextColor(Color.parseColor("#F5F3FF")) // Aurora TextPrimary #F5F3FF
             textSize = 12f
             setPadding(0, 0, (10 * density).toInt(), 0)
             setOnClickListener {
@@ -101,13 +101,13 @@ class OverlayService : Service() {
 
         val stopButton = TextView(this).apply {
             text = getString(R.string.overlay_stop_button)
-            setTextColor(Color.parseColor("#FFFFFF"))
+            setTextColor(Color.parseColor("#07050F"))
             textSize = 12f
             setPadding((10 * density).toInt(), (4 * density).toInt(), (10 * density).toInt(), (4 * density).toInt())
             background = GradientDrawable().apply {
                 shape = GradientDrawable.RECTANGLE
                 cornerRadius = 999f
-                setColor(Color.parseColor("#EF4444")) // Coral Red #EF4444
+                setColor(Color.parseColor("#FF6B87")) // Aurora Danger #FF6B87 STOP pill
             }
             setOnClickListener {
                 val app = applicationContext as? JarvisApplication

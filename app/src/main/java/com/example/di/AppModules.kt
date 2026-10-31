@@ -13,8 +13,6 @@ import com.example.data.remote.AgentStepResponseDto
 import com.example.data.remote.ApiService
 import com.example.data.remote.AuthHeaderInterceptor
 import com.example.data.remote.FakeBackend
-import com.example.data.remote.SttRequestDto
-import com.example.data.remote.SttResponseDto
 import com.example.data.remote.TokenProvider
 import com.example.data.remote.TtsRequestDto
 import com.example.data.repository.ActivityLogRepositoryImpl
@@ -39,9 +37,7 @@ import com.example.domain.safety.SafetyGateImpl
 import com.example.domain.tool.ToolRegistry
 import com.example.services.voice.AndroidSpeechRecognizerWrapper
 import com.example.services.voice.AndroidTtsEngineWrapper
-import com.example.services.voice.PcmAudioRecorder
-import com.example.services.voice.PcmAudioRecorderImpl
-import com.example.services.voice.PorcupineWakeWordEngineImpl
+import com.example.services.voice.FreeWakeWordEngineImpl
 import com.example.services.voice.SpeechRecognizerWrapper
 import com.example.services.voice.TtsEngineWrapper
 import com.example.services.voice.VoiceSessionManager
@@ -67,20 +63,16 @@ import com.example.tools.WaitForElementTool
 import com.example.tools.WebSearchTool
 import com.example.tools.WhatsAppTelegramTool
 import com.google.firebase.FirebaseApp
-import com.google.firebase.appcheck.FirebaseAppCheck
-import com.google.firebase.appcheck.playintegrity.PlayIntegrityAppCheckProviderFactory
 import com.google.firebase.auth.FirebaseAuth
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.tasks.await
-import okhttp3.CertificatePinner
 import okhttp3.OkHttpClient
 import okhttp3.ResponseBody
 import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
-import java.net.URI
 import java.util.concurrent.TimeUnit
 
 @Target(AnnotationTarget.CONSTRUCTOR, AnnotationTarget.FIELD, AnnotationTarget.FUNCTION)
@@ -119,7 +111,9 @@ class AppContainer(context: Context) {
             appContext,
             JarvisDatabase::class.java,
             "jarvis_assistant.db"
-        ).fallbackToDestructiveMigration().build()
+        )
+            .addMigrations(JarvisDatabase.MIGRATION_1_2, JarvisDatabase.MIGRATION_2_3)
+            .build()
     }
 
     val firebaseAuth: FirebaseAuth? by lazy {
@@ -131,12 +125,6 @@ class AppContainer(context: Context) {
                 FirebaseApp.initializeApp(appContext)
             }
             if (app != null) {
-                runCatching {
-                    val appCheck = FirebaseAppCheck.getInstance()
-                    appCheck.installAppCheckProviderFactory(
-                        PlayIntegrityAppCheckProviderFactory.getInstance()
-                    )
-                }
                 FirebaseAuth.getInstance(app)
             } else {
                 null
@@ -158,16 +146,6 @@ class AppContainer(context: Context) {
                     runBlocking { user.getIdToken(false).await().token }
                 }.getOrNull()
             }
-
-            override fun getAppCheckToken(): String? {
-                return runCatching {
-                    val apps = FirebaseApp.getApps(appContext)
-                    if (apps.isEmpty()) return@runCatching null
-                    runBlocking {
-                        FirebaseAppCheck.getInstance().getAppCheckToken(false).await().token
-                    }
-                }.getOrNull()
-            }
         }
     }
 
@@ -186,24 +164,13 @@ class AppContainer(context: Context) {
             }
         }
 
-        val builder = OkHttpClient.Builder()
+        OkHttpClient.Builder()
             .addInterceptor(AuthHeaderInterceptor(tokenProvider))
             .addInterceptor(logging)
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(25, TimeUnit.SECONDS)
             .writeTimeout(20, TimeUnit.SECONDS)
-
-        val configuredPin = BuildConfig.JARVIS_BACKEND_CERT_SHA256.trim()
-        val baseUrl = sanitizeBaseUrl(BuildConfig.JARVIS_BACKEND_BASE_URL)
-        val host = runCatching { URI(baseUrl).host }.getOrNull()
-        if (!host.isNullOrBlank() && configuredPin.startsWith("sha256/") && configuredPin.length > 15) {
-            val pinner = CertificatePinner.Builder()
-                .add(host, configuredPin)
-                .build()
-            builder.certificatePinner(pinner)
-        }
-
-        builder.build()
+            .build()
     }
 
     val retrofit: Retrofit by lazy {
@@ -227,9 +194,6 @@ class AppContainer(context: Context) {
         if (!BuildConfig.USE_FAKE_BACKEND) {
             networkApiService
         } else {
-            // In debug builds, allow /v1/tts neural voice synthesis to call the real backend
-            // when BuildConfig.AI_VOICE is enabled and a non-placeholder URL is configured,
-            // falling back to FakeBackend when unreachable.
             object : ApiService {
                 private val hasConfiguredBackend: Boolean
                     get() {
@@ -246,17 +210,6 @@ class AppContainer(context: Context) {
                         }
                     }
                     return fakeBackend.agentStep(request)
-                }
-
-                override suspend fun speechToText(request: SttRequestDto): SttResponseDto {
-                    if (hasConfiguredBackend) {
-                        return try {
-                            networkApiService.speechToText(request)
-                        } catch (_: Exception) {
-                            fakeBackend.speechToText(request)
-                        }
-                    }
-                    return fakeBackend.speechToText(request)
                 }
 
                 override suspend fun synthesizeSpeech(request: TtsRequestDto): ResponseBody {
@@ -352,10 +305,6 @@ class AppContainer(context: Context) {
         )
     }
 
-    val pcmAudioRecorder: PcmAudioRecorder by lazy {
-        PcmAudioRecorderImpl(appContext)
-    }
-
     val speechRecognizerWrapper: SpeechRecognizerWrapper by lazy {
         AndroidSpeechRecognizerWrapper(appContext)
     }
@@ -365,14 +314,14 @@ class AppContainer(context: Context) {
     }
 
     val wakeWordEngine: WakeWordEngine by lazy {
-        PorcupineWakeWordEngineImpl(appContext, pcmAudioRecorder)
+        FreeWakeWordEngineImpl()
     }
 
     val voiceSessionManager: VoiceSessionManager by lazy {
         VoiceSessionManager(
             speechRecognizer = speechRecognizerWrapper,
             ttsEngine = ttsEngineWrapper,
-            audioRecorder = pcmAudioRecorder,
+            audioRecorder = null,
             wakeWordEngine = wakeWordEngine
         )
     }

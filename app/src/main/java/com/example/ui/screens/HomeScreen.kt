@@ -7,10 +7,11 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -20,7 +21,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -32,37 +32,22 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Hearing
 import androidx.compose.material.icons.filled.MicOff
-import androidx.compose.material.icons.filled.PowerSettingsNew
-import androidx.compose.material.icons.filled.Security
-import androidx.compose.material.icons.filled.StopCircle
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material.icons.filled.WarningAmber
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
-import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -71,16 +56,17 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.R
 import com.example.domain.model.AssistantOrbState
 import com.example.domain.model.ChatMessage
-import com.example.domain.model.ConfirmationRequest
 import com.example.domain.model.MessageRole
+import com.example.ui.components.AuroraBackground
 import com.example.ui.components.AuroraGlassCard
+import com.example.ui.components.AuroraGlassSafetySheet
 import com.example.ui.components.AuroraStatusPill
+import com.example.ui.components.AuroraStopPill
 import com.example.ui.components.JarvisOrb
-import com.example.ui.components.RiskLevelBadge
 import com.example.ui.theme.AuroraColors
 import com.example.ui.viewmodel.HomeViewModel
-import kotlinx.coroutines.delay
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun HomeScreen(
     viewModel: HomeViewModel,
@@ -117,20 +103,7 @@ fun HomeScreen(
         AssistantOrbState.PAUSED_KILLSWITCH -> stringResource(R.string.home_paused_killswitch)
     }
 
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(
-                Brush.verticalGradient(
-                    colors = listOf(
-                        AuroraColors.BackgroundDeep,
-                        AuroraColors.SurfacePrimary,
-                        AuroraColors.BackgroundDeep
-                    )
-                )
-            )
-            .imePadding()
-    ) {
+    AuroraBackground(modifier = Modifier.imePadding()) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -138,16 +111,16 @@ fun HomeScreen(
                 .align(Alignment.TopCenter)
                 .padding(horizontal = 16.dp, vertical = 12.dp)
         ) {
-            // Top Status Header
+            // Top Status Header — responsive FlowRow prevents clipping at 360dp / 1.3x font scale
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column(modifier = Modifier.weight(1f)) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         Text(
                             text = stringResource(R.string.app_name),
@@ -156,12 +129,12 @@ fun HomeScreen(
                         )
                         AuroraStatusPill(
                             text = settings.language.code,
-                            color = AuroraColors.CyanGlow
+                            color = AuroraColors.Aqua
                         )
                         if (isOfflineVoiceActive) {
                             AuroraStatusPill(
                                 text = stringResource(R.string.home_offline_voice_chip),
-                                color = AuroraColors.AmberWarning,
+                                color = AuroraColors.Lavender,
                                 icon = Icons.Default.VolumeUp,
                                 modifier = Modifier.testTag("home_offline_voice_chip")
                             )
@@ -177,57 +150,33 @@ fun HomeScreen(
                     Text(
                         text = stringResource(R.string.home_subtitle),
                         style = MaterialTheme.typography.bodySmall,
-                        color = AuroraColors.TextSecondary
+                        color = AuroraColors.TextSecondary,
+                        modifier = Modifier.padding(top = 2.dp)
                     )
                 }
 
-                // KillSwitch Emergency Stop / Resume Button
-                Button(
-                    onClick = {
+                // Red (#FF6B87) STOP pill / Emerald (#3DDC97) Resume pill
+                AuroraStopPill(
+                    isKilled = isKilled,
+                    onToggle = {
                         if (isKilled) viewModel.resetKillSwitch()
                         else viewModel.triggerKillSwitch()
                     },
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = if (isKilled) AuroraColors.EmeraldSuccess else AuroraColors.CoralDanger,
-                        contentColor = AuroraColors.TextPrimary
-                    ),
-                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp),
-                    modifier = Modifier
-                        .height(48.dp)
-                        .testTag("home_kill_switch_button")
-                ) {
-                    Icon(
-                        imageVector = if (isKilled) Icons.Default.PowerSettingsNew else Icons.Default.StopCircle,
-                        contentDescription = if (isKilled) {
-                            stringResource(R.string.home_kill_switch_resume)
-                        } else {
-                            stringResource(R.string.home_kill_switch_trigger)
-                        },
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = if (isKilled) {
-                            stringResource(R.string.home_kill_switch_resume)
-                        } else {
-                            stringResource(R.string.home_kill_switch_trigger)
-                        },
-                        style = MaterialTheme.typography.labelLarge
-                    )
-                }
+                    modifier = Modifier.testTag("home_kill_switch_button")
+                )
             }
 
             // Active Mic / Wake Word Status Row
             if (orbState == AssistantOrbState.LISTENING || settings.wakeWordEnabled) {
                 Spacer(modifier = Modifier.height(8.dp))
-                Row(
+                FlowRow(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     if (orbState == AssistantOrbState.LISTENING) {
                         AuroraStatusPill(
                             text = stringResource(R.string.home_mic_active_badge),
-                            color = AuroraColors.CyanGlow,
+                            color = AuroraColors.Aqua,
                             icon = Icons.Default.GraphicEq,
                             modifier = Modifier.testTag("home_mic_active_badge")
                         )
@@ -276,12 +225,13 @@ fun HomeScreen(
                     text = stateStatusText,
                     style = MaterialTheme.typography.labelLarge,
                     color = when (orbState) {
-                        AssistantOrbState.LISTENING -> AuroraColors.CyanGlow
-                        AssistantOrbState.THINKING -> AuroraColors.ElectricViolet
+                        AssistantOrbState.LISTENING -> AuroraColors.Aqua
+                        AssistantOrbState.THINKING -> AuroraColors.Lavender
                         AssistantOrbState.SPEAKING -> AuroraColors.EmeraldSuccess
                         AssistantOrbState.PAUSED_KILLSWITCH -> AuroraColors.CoralDanger
                         AssistantOrbState.IDLE -> AuroraColors.TextSecondary
                     },
+                    textAlign = TextAlign.Center,
                     modifier = Modifier.testTag("home_state_caption")
                 )
 
@@ -290,7 +240,7 @@ fun HomeScreen(
                     Text(
                         text = stringResource(R.string.home_Partial_prefix, partialTranscript),
                         style = MaterialTheme.typography.bodyMedium,
-                        color = AuroraColors.CyanGlow,
+                        color = AuroraColors.Aqua,
                         textAlign = TextAlign.Center,
                         modifier = Modifier
                             .padding(top = 4.dp, start = 16.dp, end = 16.dp)
@@ -303,9 +253,9 @@ fun HomeScreen(
                     Row(
                         modifier = Modifier
                             .padding(top = 6.dp)
-                            .clip(RoundedCornerShape(12.dp))
+                            .clip(RoundedCornerShape(14.dp))
                             .background(AuroraColors.AmberWarning.copy(alpha = 0.14f))
-                            .border(1.dp, AuroraColors.AmberWarning.copy(alpha = 0.4f), RoundedCornerShape(12.dp))
+                            .border(1.dp, AuroraColors.AmberWarning.copy(alpha = 0.4f), RoundedCornerShape(14.dp))
                             .padding(horizontal = 12.dp, vertical = 6.dp)
                             .testTag("home_stt_status_banner"),
                         verticalAlignment = Alignment.CenterVertically,
@@ -340,6 +290,7 @@ fun HomeScreen(
                 Spacer(modifier = Modifier.height(8.dp))
 
                 AuroraGlassCard(
+                    elevated = true,
                     modifier = Modifier
                         .fillMaxWidth()
                         .testTag("home_latest_reply_card")
@@ -412,7 +363,7 @@ fun HomeScreen(
                     singleLine = true,
                     shape = RoundedCornerShape(24.dp),
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = AuroraColors.ElectricViolet,
+                        focusedBorderColor = AuroraColors.Violet500,
                         unfocusedBorderColor = AuroraColors.GlassBorder,
                         focusedContainerColor = AuroraColors.SurfacePrimary,
                         unfocusedContainerColor = AuroraColors.SurfacePrimary,
@@ -429,7 +380,7 @@ fun HomeScreen(
                         .clip(CircleShape)
                         .background(
                             if (inputDraft.isNotBlank() && !isKilled) {
-                                AuroraColors.ElectricViolet
+                                AuroraColors.Violet500
                             } else {
                                 AuroraColors.SurfaceElevated
                             }
@@ -445,9 +396,9 @@ fun HomeScreen(
             }
         }
 
-        // SafetyGate High/Medium Risk Confirmation Modal with Contact Disambiguation Picker & Countdown
+        // Glass Safety Bottom Sheet with Contact Disambiguation Picker & Countdown
         pendingConfirmation?.let { request ->
-            SafetyConfirmationModal(
+            AuroraGlassSafetySheet(
                 request = request,
                 onApprove = { selectedPhone ->
                     viewModel.resolveConfirmation(approved = true, selectedPhoneOverride = selectedPhone)
@@ -466,13 +417,13 @@ private fun ChatBubbleItem(message: ChatMessage) {
     val isTool = message.role == MessageRole.TOOL
 
     val bubbleColor = when {
-        isUser -> AuroraColors.ElectricViolet.copy(alpha = 0.22f)
-        isTool -> AuroraColors.CyanGlow.copy(alpha = 0.12f)
-        else -> AuroraColors.SurfaceElevated
+        isUser -> AuroraColors.Violet500.copy(alpha = 0.22f)
+        isTool -> AuroraColors.Aqua.copy(alpha = 0.12f)
+        else -> AuroraColors.GlassFillStrong
     }
     val borderColor = when {
-        isUser -> AuroraColors.ElectricViolet.copy(alpha = 0.45f)
-        isTool -> AuroraColors.CyanGlow.copy(alpha = 0.35f)
+        isUser -> AuroraColors.Violet500.copy(alpha = 0.45f)
+        isTool -> AuroraColors.Aqua.copy(alpha = 0.35f)
         else -> AuroraColors.GlassBorder
     }
 
@@ -483,16 +434,20 @@ private fun ChatBubbleItem(message: ChatMessage) {
         Column(
             modifier = Modifier
                 .widthIn(max = 320.dp)
-                .clip(RoundedCornerShape(16.dp))
+                .clip(RoundedCornerShape(18.dp))
+                .background(AuroraColors.SurfacePrimary.copy(alpha = 0.85f))
                 .background(bubbleColor)
-                .border(1.dp, borderColor, RoundedCornerShape(16.dp))
+                .border(1.dp, borderColor, RoundedCornerShape(18.dp))
                 .padding(horizontal = 14.dp, vertical = 10.dp)
         ) {
             if (isTool && message.toolName != null) {
+                val formattedToolName = message.toolName
+                    .replace('_', ' ')
+                    .replaceFirstChar { it.uppercase() }
                 Text(
-                    text = message.toolName.replace('_', ' ').uppercase(),
+                    text = formattedToolName,
                     style = MaterialTheme.typography.labelSmall,
-                    color = AuroraColors.CyanGlow
+                    color = AuroraColors.Aqua
                 )
                 Spacer(modifier = Modifier.height(2.dp))
             }
@@ -503,133 +458,4 @@ private fun ChatBubbleItem(message: ChatMessage) {
             )
         }
     }
-}
-
-@Composable
-private fun SafetyConfirmationModal(
-    request: ConfirmationRequest,
-    onApprove: (String?) -> Unit,
-    onDeny: () -> Unit
-) {
-    var remainingSeconds by remember(request.id) { mutableIntStateOf(request.countdownSeconds) }
-    var selectedPhone by remember(request.id) {
-        mutableStateOf(request.candidateContacts.firstOrNull()?.phoneNumber)
-    }
-
-    LaunchedEffect(request.id) {
-        while (remainingSeconds > 0) {
-            delay(1000)
-            remainingSeconds--
-        }
-        onDeny()
-    }
-
-    AlertDialog(
-        onDismissRequest = onDeny,
-        containerColor = AuroraColors.SurfaceElevated,
-        titleContentColor = AuroraColors.TextPrimary,
-        textContentColor = AuroraColors.TextSecondary,
-        icon = {
-            Icon(
-                imageVector = Icons.Default.Security,
-                contentDescription = stringResource(
-                    R.string.safety_confirm_title,
-                    request.riskLevel.name
-                ),
-                tint = AuroraColors.AmberWarning,
-                modifier = Modifier.size(32.dp)
-            )
-        },
-        title = {
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                Text(
-                    text = stringResource(R.string.safety_confirm_title, request.riskLevel.name),
-                    style = MaterialTheme.typography.titleMedium,
-                    color = AuroraColors.TextPrimary
-                )
-                RiskLevelBadge(riskLevel = request.riskLevel)
-            }
-        },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(
-                    text = request.summaryEn,
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = AuroraColors.TextPrimary,
-                    fontWeight = FontWeight.SemiBold
-                )
-
-                if (request.candidateContacts.size > 1) {
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = stringResource(R.string.safety_contact_picker_title),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = AuroraColors.CyanGlow
-                    )
-                    request.candidateContacts.forEach { candidate ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(10.dp))
-                                .clickable { selectedPhone = candidate.phoneNumber }
-                                .padding(vertical = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            RadioButton(
-                                selected = selectedPhone == candidate.phoneNumber,
-                                onClick = { selectedPhone = candidate.phoneNumber }
-                            )
-                            Column {
-                                Text(
-                                    text = candidate.displayName,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = AuroraColors.TextPrimary
-                                )
-                                Text(
-                                    text = candidate.maskedNumber,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = AuroraColors.TextSecondary
-                                )
-                            }
-                        }
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    text = stringResource(R.string.safety_confirm_Countdown, remainingSeconds),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = AuroraColors.CoralDanger
-                )
-            }
-        },
-        confirmButton = {
-            Button(
-                onClick = { onApprove(selectedPhone) },
-                colors = ButtonDefaults.buttonColors(containerColor = AuroraColors.EmeraldSuccess),
-                modifier = Modifier.testTag("safety_approve_button")
-            ) {
-                Text(
-                    text = stringResource(R.string.safety_confirm_approve),
-                    color = AuroraColors.BackgroundDeep,
-                    fontWeight = FontWeight.Bold
-                )
-            }
-        },
-        dismissButton = {
-            OutlinedButton(
-                onClick = onDeny,
-                modifier = Modifier.testTag("safety_deny_button")
-            ) {
-                Text(
-                    text = stringResource(R.string.safety_confirm_deny),
-                    color = AuroraColors.TextPrimary
-                )
-            }
-        },
-        modifier = Modifier.testTag("safety_confirmation_dialog")
-    )
 }

@@ -1,13 +1,14 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "module": "CommonJS",
-    "rootDir": ".",
-    "outDir": "./dist",
+    "module": "ES2022",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022", "WebWorker"],
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "forceConsistentCasingInFileNames": true
+    "forceConsistentCasingInFileNames": true,
+    "noEmit": true
   },
-  "include": ["src/**/*", "test/**/*"]
+  "include": ["src/**/*.ts", "test/**/*.ts"]
 }

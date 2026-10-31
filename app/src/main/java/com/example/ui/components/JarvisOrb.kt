@@ -56,17 +56,19 @@ fun JarvisOrb(
     )
 
     val primaryColor = when (state) {
-        AssistantOrbState.IDLE -> AuroraColors.ElectricViolet
-        AssistantOrbState.LISTENING -> AuroraColors.CyanGlow
-        AssistantOrbState.THINKING -> AuroraColors.ElectricViolet
+        AssistantOrbState.IDLE -> AuroraColors.Violet500
+        AssistantOrbState.LISTENING -> AuroraColors.Aqua
+        AssistantOrbState.THINKING -> AuroraColors.Lavender
         AssistantOrbState.SPEAKING -> AuroraColors.EmeraldSuccess
         AssistantOrbState.PAUSED_KILLSWITCH -> AuroraColors.CoralDanger
     }
 
     val secondaryColor = when (state) {
-        AssistantOrbState.LISTENING -> AuroraColors.ElectricViolet
-        AssistantOrbState.SPEAKING -> AuroraColors.CyanGlow
-        else -> primaryColor.copy(alpha = 0.55f)
+        AssistantOrbState.IDLE -> AuroraColors.Violet700
+        AssistantOrbState.LISTENING -> AuroraColors.ElectricBlue
+        AssistantOrbState.THINKING -> AuroraColors.Violet600
+        AssistantOrbState.SPEAKING -> AuroraColors.Aqua
+        AssistantOrbState.PAUSED_KILLSWITCH -> AuroraColors.CoralDanger.copy(alpha = 0.65f)
     }
 
     val icon = when (state) {
@@ -101,8 +103,8 @@ fun JarvisOrb(
             drawCircle(
                 brush = Brush.radialGradient(
                     colors = listOf(
-                        primaryColor.copy(alpha = 0.28f),
-                        secondaryColor.copy(alpha = 0.08f),
+                        primaryColor.copy(alpha = 0.32f),
+                        secondaryColor.copy(alpha = 0.10f),
                         Color.Transparent
                     ),
                     center = center,
@@ -113,10 +115,10 @@ fun JarvisOrb(
             )
 
             drawCircle(
-                color = primaryColor.copy(alpha = 0.36f),
+                color = AuroraColors.GlassBorderStrong,
                 radius = midHaloRadius,
                 center = center,
-                style = Stroke(width = 2.dp.toPx())
+                style = Stroke(width = 1.5.dp.toPx())
             )
 
             drawCircle(

@@ -8,7 +8,6 @@ import android.provider.Settings
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -53,6 +52,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.R
 import com.example.domain.model.OemBatteryGuide
 import com.example.domain.model.PermissionItemStatus
+import com.example.ui.components.AuroraBackground
 import com.example.ui.components.AuroraGlassCard
 import com.example.ui.components.AuroraStatusPill
 import com.example.ui.theme.AuroraColors
@@ -85,17 +85,13 @@ fun PermissionsScreen(
         viewModel.refreshStatuses()
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(AuroraColors.BackgroundDeep)
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
+    AuroraBackground {
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .widthIn(max = 640.dp)
+                .align(Alignment.TopCenter)
+                .padding(horizontal = 16.dp, vertical = 12.dp)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -279,7 +275,7 @@ private fun PermissionCard(
             } else {
                 Button(
                     onClick = onGrantClick,
-                    colors = ButtonDefaults.buttonColors(containerColor = AuroraColors.ElectricViolet),
+                    colors = ButtonDefaults.buttonColors(containerColor = AuroraColors.Violet500),
                     contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
                     modifier = Modifier
                         .height(48.dp)
@@ -319,13 +315,13 @@ private fun OemBatteryCard(
                 Icon(
                     imageVector = Icons.Default.Security,
                     contentDescription = guide.oemName,
-                    tint = AuroraColors.CyanGlow,
+                    tint = AuroraColors.Aqua,
                     modifier = Modifier.size(18.dp)
                 )
                 Text(
                     text = guide.oemName,
                     style = MaterialTheme.typography.bodyMedium,
-                    color = AuroraColors.CyanGlow,
+                    color = AuroraColors.Aqua,
                     fontWeight = FontWeight.Bold
                 )
             }

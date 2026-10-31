@@ -1,6 +1,7 @@
 package com.example.ui.screens
 
-import androidx.compose.foundation.background
+import android.content.Intent
+import android.provider.Settings
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -17,6 +18,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.BugReport
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Hearing
 import androidx.compose.material.icons.filled.Language
@@ -42,6 +44,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -52,6 +55,7 @@ import com.example.R
 import com.example.domain.model.AppLanguage
 import com.example.domain.model.ConfirmationLevel
 import com.example.domain.model.VoiceProfile
+import com.example.ui.components.AuroraBackground
 import com.example.ui.components.AuroraGlassCard
 import com.example.ui.components.AuroraSectionHeader
 import com.example.ui.components.AuroraStatusPill
@@ -65,23 +69,20 @@ fun SettingsScreen(
     onOpenPermissionsScreen: () -> Unit = {},
     onSignOut: () -> Unit = {}
 ) {
+    val context = LocalContext.current
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val isOfflineVoiceActive by viewModel.isOfflineVoiceActive.collectAsStateWithLifecycle()
     val diagnostics by viewModel.voiceDiagnostics.collectAsStateWithLifecycle()
     val isWakeConfigured = viewModel.isWakeWordConfigured
     val previewPhrase = stringResource(R.string.settings_voice_preview_phrase)
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(AuroraColors.BackgroundDeep)
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
+    AuroraBackground {
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .widthIn(max = 640.dp)
+                .align(Alignment.TopCenter)
+                .padding(horizontal = 16.dp, vertical = 12.dp)
         ) {
             AuroraSectionHeader(
                 title = stringResource(R.string.settings_title),
@@ -89,7 +90,7 @@ fun SettingsScreen(
                 trailing = {
                     Button(
                         onClick = onOpenPermissionsScreen,
-                        colors = ButtonDefaults.buttonColors(containerColor = AuroraColors.ElectricViolet),
+                        colors = ButtonDefaults.buttonColors(containerColor = AuroraColors.Violet500),
                         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
                         modifier = Modifier
                             .height(48.dp)
@@ -127,7 +128,7 @@ fun SettingsScreen(
                             Icon(
                                 imageVector = Icons.Default.Language,
                                 contentDescription = stringResource(R.string.settings_language_title),
-                                tint = AuroraColors.CyanGlow
+                                tint = AuroraColors.Aqua
                             )
                             Text(
                                 text = stringResource(R.string.settings_language_title),
@@ -152,7 +153,7 @@ fun SettingsScreen(
                                         )
                                     },
                                     colors = FilterChipDefaults.filterChipColors(
-                                        selectedContainerColor = AuroraColors.ElectricViolet.copy(alpha = 0.25f),
+                                        selectedContainerColor = AuroraColors.Violet500.copy(alpha = 0.25f),
                                         selectedLabelColor = AuroraColors.TextPrimary
                                     ),
                                     modifier = Modifier
@@ -165,7 +166,7 @@ fun SettingsScreen(
                     }
                 }
 
-                // 2. Assistant Voice Profile, Speed (0.8x..1.2x), Offline Chip & Preview Button
+                // 2. Assistant Voice Profile, Speed (0.8x..1.2x), Device/Cloud Chip, Preview & Install Better Voice
                 item {
                     AuroraGlassCard {
                         Row(
@@ -180,7 +181,7 @@ fun SettingsScreen(
                                 Icon(
                                     imageVector = Icons.Default.RecordVoiceOver,
                                     contentDescription = stringResource(R.string.settings_voice_title),
-                                    tint = AuroraColors.ElectricViolet
+                                    tint = AuroraColors.Violet500
                                 )
                                 Text(
                                     text = stringResource(R.string.settings_voice_title),
@@ -191,14 +192,14 @@ fun SettingsScreen(
                             if (isOfflineVoiceActive) {
                                 AuroraStatusPill(
                                     text = stringResource(R.string.home_offline_voice_chip),
-                                    color = AuroraColors.AmberWarning,
+                                    color = AuroraColors.Lavender,
                                     icon = Icons.Default.VolumeUp,
                                     modifier = Modifier.testTag("settings_offline_voice_chip")
                                 )
                             } else {
                                 AuroraStatusPill(
                                     text = stringResource(R.string.home_neural_voice_chip),
-                                    color = AuroraColors.ElectricViolet,
+                                    color = AuroraColors.Violet500,
                                     icon = Icons.Default.GraphicEq
                                 )
                             }
@@ -221,7 +222,7 @@ fun SettingsScreen(
                                     )
                                 },
                                 colors = FilterChipDefaults.filterChipColors(
-                                    selectedContainerColor = AuroraColors.CyanGlow.copy(alpha = 0.22f),
+                                    selectedContainerColor = AuroraColors.Aqua.copy(alpha = 0.22f),
                                     selectedLabelColor = AuroraColors.TextPrimary
                                 ),
                                 modifier = Modifier
@@ -243,34 +244,74 @@ fun SettingsScreen(
                             onValueChange = { viewModel.setSpeechSpeed(it) },
                             valueRange = 0.8f..1.2f,
                             colors = SliderDefaults.colors(
-                                thumbColor = AuroraColors.CyanGlow,
-                                activeTrackColor = AuroraColors.CyanGlow
+                                thumbColor = AuroraColors.Aqua,
+                                activeTrackColor = AuroraColors.Aqua
                             ),
                             modifier = Modifier.testTag("voice_speed_slider")
                         )
 
-                        OutlinedButton(
-                            onClick = { viewModel.previewVoice(previewPhrase) },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(48.dp)
-                                .testTag("settings_voice_preview_button")
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Icon(
-                                imageVector = Icons.Default.PlayArrow,
-                                contentDescription = stringResource(R.string.settings_voice_preview),
-                                tint = AuroraColors.CyanGlow
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = stringResource(R.string.settings_voice_preview),
-                                color = AuroraColors.TextPrimary
-                            )
+                            OutlinedButton(
+                                onClick = { viewModel.previewVoice(previewPhrase) },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(48.dp)
+                                    .testTag("settings_voice_preview_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.PlayArrow,
+                                    contentDescription = stringResource(R.string.settings_voice_preview),
+                                    tint = AuroraColors.Aqua
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = stringResource(R.string.settings_voice_preview),
+                                    color = AuroraColors.TextPrimary
+                                )
+                            }
+
+                            OutlinedButton(
+                                onClick = {
+                                    runCatching {
+                                        context.startActivity(
+                                            Intent("com.android.settings.TTS_SETTINGS").apply {
+                                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                            }
+                                        )
+                                    }.onFailure {
+                                        runCatching {
+                                            context.startActivity(
+                                                Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
+                                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                                }
+                                            )
+                                        }
+                                    }
+                                },
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(48.dp)
+                                    .testTag("settings_install_voice_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Download,
+                                    contentDescription = stringResource(R.string.settings_voice_install_better),
+                                    tint = AuroraColors.Lavender
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = stringResource(R.string.settings_voice_install_better),
+                                    color = AuroraColors.TextPrimary
+                                )
+                            }
                         }
                     }
                 }
 
-                // 3. Wake Word ("Hey Jarvis") + Clear "Wake word not set up" state when key/model missing
+                // 3. Wake Word ("Hey Jarvis") + Clear "Wake word not configured" state
                 item {
                     AuroraGlassCard {
                         Row(
@@ -435,7 +476,7 @@ fun SettingsScreen(
                                 Icon(
                                     imageVector = Icons.Default.BugReport,
                                     contentDescription = stringResource(R.string.settings_diagnostics_title),
-                                    tint = AuroraColors.CyanGlow
+                                    tint = AuroraColors.Aqua
                                 )
                                 Text(
                                     text = stringResource(R.string.settings_diagnostics_title),
@@ -449,7 +490,7 @@ fun SettingsScreen(
                                     diagnostics.sessionState.name
                                 ),
                                 style = MaterialTheme.typography.bodySmall,
-                                color = AuroraColors.CyanGlow
+                                color = AuroraColors.Aqua
                             )
                             Text(
                                 text = stringResource(

@@ -1,14 +1,13 @@
 package com.example.ui.screens
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -42,7 +41,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -57,6 +55,7 @@ import androidx.credentials.GetCredentialRequest
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.BuildConfig
 import com.example.R
+import com.example.ui.components.AuroraBackground
 import com.example.ui.components.AuroraGlassCard
 import com.example.ui.components.AuroraStatusPill
 import com.example.ui.theme.AuroraColors
@@ -80,26 +79,20 @@ fun LoginScreen(
     var password by remember { mutableStateOf("") }
     var googleError by remember { mutableStateOf<String?>(null) }
 
-    Box(
+    val googleNotConfiguredMsg = stringResource(R.string.login_google_not_configured)
+    val googleUnsupportedMsg = stringResource(R.string.login_google_unsupported)
+
+    AuroraBackground(
         modifier = Modifier
             .fillMaxSize()
-            .background(
-                Brush.verticalGradient(
-                    colors = listOf(
-                        AuroraColors.BackgroundDeep,
-                        AuroraColors.SurfacePrimary,
-                        AuroraColors.BackgroundDeep
-                    )
-                )
-            )
             .imePadding()
-            .padding(horizontal = 20.dp, vertical = 16.dp),
-        contentAlignment = Alignment.Center
+            .padding(horizontal = 20.dp, vertical = 16.dp)
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .widthIn(max = 460.dp)
+                .align(Alignment.Center)
                 .verticalScroll(rememberScrollState()),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(16.dp)
@@ -107,7 +100,7 @@ fun LoginScreen(
             Icon(
                 imageVector = Icons.Default.VerifiedUser,
                 contentDescription = stringResource(R.string.login_title),
-                tint = AuroraColors.ElectricViolet,
+                tint = AuroraColors.Violet500,
                 modifier = Modifier.size(52.dp)
             )
 
@@ -128,11 +121,15 @@ fun LoginScreen(
             if (!viewModel.isFirebaseConfigured) {
                 AuroraStatusPill(
                     text = stringResource(R.string.login_firebase_not_configured),
-                    color = AuroraColors.AmberWarning
+                    color = AuroraColors.AmberWarning,
+                    modifier = Modifier.testTag("login_not_configured_pill")
                 )
             }
 
-            AuroraGlassCard(modifier = Modifier.fillMaxWidth()) {
+            AuroraGlassCard(
+                elevated = true,
+                modifier = Modifier.fillMaxWidth()
+            ) {
                 OutlinedTextField(
                     value = email,
                     onValueChange = { email = it },
@@ -141,13 +138,13 @@ fun LoginScreen(
                         Icon(
                             imageVector = Icons.Default.Email,
                             contentDescription = stringResource(R.string.login_email_label),
-                            tint = AuroraColors.CyanGlow
+                            tint = AuroraColors.Lavender
                         )
                     },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = AuroraColors.ElectricViolet,
+                        focusedBorderColor = AuroraColors.Violet500,
                         unfocusedBorderColor = AuroraColors.GlassBorder,
                         focusedTextColor = AuroraColors.TextPrimary,
                         unfocusedTextColor = AuroraColors.TextPrimary
@@ -165,14 +162,14 @@ fun LoginScreen(
                         Icon(
                             imageVector = Icons.Default.Lock,
                             contentDescription = stringResource(R.string.login_password_label),
-                            tint = AuroraColors.CyanGlow
+                            tint = AuroraColors.Lavender
                         )
                     },
                     singleLine = true,
                     visualTransformation = PasswordVisualTransformation(),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                     colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = AuroraColors.ElectricViolet,
+                        focusedBorderColor = AuroraColors.Violet500,
                         unfocusedBorderColor = AuroraColors.GlassBorder,
                         focusedTextColor = AuroraColors.TextPrimary,
                         unfocusedTextColor = AuroraColors.TextPrimary
@@ -186,7 +183,7 @@ fun LoginScreen(
                     Text(
                         text = googleError ?: statusMessage.orEmpty(),
                         style = MaterialTheme.typography.bodySmall,
-                        color = AuroraColors.CyanGlow,
+                        color = AuroraColors.Aqua,
                         modifier = Modifier.testTag("login_status_text")
                     )
                 }
@@ -198,11 +195,11 @@ fun LoginScreen(
                     Button(
                         onClick = { viewModel.signInWithEmail(email, password) },
                         enabled = !isLoading,
-                        colors = ButtonDefaults.buttonColors(containerColor = AuroraColors.ElectricViolet),
+                        colors = ButtonDefaults.buttonColors(containerColor = AuroraColors.Violet500),
                         shape = RoundedCornerShape(14.dp),
                         modifier = Modifier
                             .weight(1f)
-                            .height(48.dp)
+                            .heightIn(min = 48.dp)
                             .testTag("login_signin_button")
                     ) {
                         if (isLoading) {
@@ -225,7 +222,7 @@ fun LoginScreen(
                         shape = RoundedCornerShape(14.dp),
                         modifier = Modifier
                             .weight(1f)
-                            .height(48.dp)
+                            .heightIn(min = 48.dp)
                             .testTag("login_register_button")
                     ) {
                         Text(
@@ -243,7 +240,7 @@ fun LoginScreen(
                 ) {
                     Text(
                         text = stringResource(R.string.login_forgot_password),
-                        color = AuroraColors.CyanGlow
+                        color = AuroraColors.Lavender
                     )
                 }
 
@@ -253,7 +250,7 @@ fun LoginScreen(
                     onClick = {
                         val webClientId = BuildConfig.GOOGLE_WEB_CLIENT_ID.trim()
                         if (webClientId.isEmpty() || webClientId.startsWith("YOUR_")) {
-                            googleError = "GOOGLE_WEB_CLIENT_ID is not configured in Secrets."
+                            googleError = googleNotConfiguredMsg
                             return@OutlinedButton
                         }
                         googleError = null
@@ -275,23 +272,23 @@ fun LoginScreen(
                                     val googleIdTokenCred = GoogleIdTokenCredential.createFrom(cred.data)
                                     viewModel.signInWithGoogleIdToken(googleIdTokenCred.idToken)
                                 } else {
-                                    googleError = "Unsupported credential returned."
+                                    googleError = googleUnsupportedMsg
                                 }
                             } catch (e: Exception) {
-                                googleError = "Google Sign-In cancelled or unavailable: ${e.localizedMessage ?: "error"}"
+                                googleError = e.localizedMessage ?: googleNotConfiguredMsg
                             }
                         }
                     },
                     shape = RoundedCornerShape(14.dp),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(48.dp)
+                        .heightIn(min = 48.dp)
                         .testTag("login_google_button")
                 ) {
                     Icon(
                         imageVector = Icons.Default.AccountCircle,
                         contentDescription = stringResource(R.string.login_google_button),
-                        tint = AuroraColors.CyanGlow
+                        tint = AuroraColors.Aqua
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
@@ -318,7 +315,6 @@ fun LoginScreen(
                 }
             }
 
-            // Guest / Offline bypass button is strictly hidden in release builds
             if (BuildConfig.IS_DEV_FLAVOR) {
                 TextButton(
                     onClick = onContinueToAssistant,

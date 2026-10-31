@@ -1,0 +1,52 @@
+name: Android CI (Free Mode)
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Set up Node 22 for Cloudflare Worker contract tests
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Run Cloudflare Worker unit & contract tests
+        run: node --experimental-strip-types --test backend-proxy/test/backend.test.ts
+
+      - name: Setup Gradle cache
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Prepare .env from template if absent
+        run: |
+          if [ ! -f .env ]; then
+            cp .env.example .env
+          fi
+
+      - name: Run Android unit tests and assemble Debug APK
+        run: gradle :app:testDebugUnitTest :app:assembleDebug
+
+      - name: Assemble signed Release APK (when RELEASE_KEYSTORE_BASE64 secret is configured)
+        if: ${{ secrets.RELEASE_KEYSTORE_BASE64 != '' }}
+        env:
+          RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+          RELEASE_KEYSTORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          RELEASE_KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+        run: |
+          echo "$RELEASE_KEYSTORE_BASE64" | base64 -d > release.keystore
+          gradle :app:assembleRelease

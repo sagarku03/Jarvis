@@ -1,5 +1,4 @@
 import java.util.Base64
-import java.io.File
 import java.util.Properties
 
 plugins {
@@ -7,6 +6,10 @@ plugins {
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.google.devtools.ksp)
     alias(libs.plugins.secrets)
+}
+
+if (file("google-services.json").exists()) {
+    apply(plugin = "com.google.gms.google-services")
 }
 
 val localProps = Properties().apply {
@@ -27,12 +30,13 @@ val fullControlProp = !storeSafeProp
 val backendBaseUrlProp = (project.findProperty("JARVIS_BACKEND_BASE_URL")?.toString()
     ?: localProps.getProperty("JARVIS_BACKEND_BASE_URL")
     ?: "https://jarvis-proxy.example.com/")
-val backendCertPinProp = (project.findProperty("JARVIS_BACKEND_CERT_SHA256")?.toString()
-    ?: localProps.getProperty("JARVIS_BACKEND_CERT_SHA256")
-    ?: "")
 val googleWebClientIdProp = (project.findProperty("GOOGLE_WEB_CLIENT_ID")?.toString()
     ?: localProps.getProperty("GOOGLE_WEB_CLIENT_ID")
     ?: "")
+
+ksp {
+    arg("room.schemaLocation", "$projectDir/schemas")
+}
 
 android {
     namespace = "com.example"
@@ -49,9 +53,8 @@ android {
 
         buildConfigField("boolean", "FULL_CONTROL_MODE", fullControlProp.toString())
         buildConfigField("boolean", "STORE_SAFE_MODE", storeSafeProp.toString())
-        buildConfigField("boolean", "AI_VOICE", "true")
+        buildConfigField("boolean", "AI_VOICE", "false")
         buildConfigField("String", "JARVIS_BACKEND_BASE_URL", "\"$backendBaseUrlProp\"")
-        buildConfigField("String", "JARVIS_BACKEND_CERT_SHA256", "\"$backendCertPinProp\"")
         buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", "\"$googleWebClientIdProp\"")
 
         resValue("bool", "enable_accessibility_automation", fullControlProp.toString())
@@ -170,13 +173,9 @@ dependencies {
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.kotlinx.coroutines.android)
 
-    // On-device Wake Word Engine ("Hey Jarvis")
-    implementation("ai.picovoice:porcupine-android:3.0.2")
-
-    // Firebase Auth + App Check + Credential Manager Google Sign-In
+    // Firebase Auth + Credential Manager Google Sign-In (Free Mode: no App Check or Porcupine)
     implementation(platform(libs.firebase.bom))
     implementation(libs.firebase.auth)
-    implementation("com.google.firebase:firebase-appcheck-playintegrity")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.10.2")
     implementation(libs.androidx.credentials)
     implementation(libs.androidx.credentials.play.services)

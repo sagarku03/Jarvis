@@ -1,6 +1,5 @@
 package com.example.ui.screens
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -47,6 +46,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.R
 import com.example.domain.model.RoutineItem
 import com.example.domain.model.RoutineTriggerType
+import com.example.ui.components.AuroraBackground
 import com.example.ui.components.AuroraGlassCard
 import com.example.ui.components.AuroraSectionHeader
 import com.example.ui.components.AuroraStatusPill
@@ -62,17 +62,13 @@ fun RoutinesScreen(viewModel: RoutinesViewModel) {
     var triggerValueDraft by remember { mutableStateOf("") }
     var actionsDraft by remember { mutableStateOf("") }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(AuroraColors.BackgroundDeep)
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
+    AuroraBackground {
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .widthIn(max = 640.dp)
+                .align(Alignment.TopCenter)
+                .padding(horizontal = 16.dp, vertical = 12.dp)
         ) {
             AuroraSectionHeader(
                 title = stringResource(R.string.routines_title),
@@ -90,7 +86,7 @@ fun RoutinesScreen(viewModel: RoutinesViewModel) {
             ) {
                 // Create Routine Card
                 item {
-                    AuroraGlassCard {
+                    AuroraGlassCard(elevated = true) {
                         Text(
                             text = stringResource(R.string.routines_create_title),
                             style = MaterialTheme.typography.titleMedium,
@@ -112,7 +108,7 @@ fun RoutinesScreen(viewModel: RoutinesViewModel) {
                             },
                             singleLine = true,
                             colors = OutlinedTextFieldDefaults.colors(
-                                focusedBorderColor = AuroraColors.ElectricViolet,
+                                focusedBorderColor = AuroraColors.Violet500,
                                 unfocusedBorderColor = AuroraColors.GlassBorder,
                                 focusedTextColor = AuroraColors.TextPrimary,
                                 unfocusedTextColor = AuroraColors.TextPrimary
@@ -126,7 +122,7 @@ fun RoutinesScreen(viewModel: RoutinesViewModel) {
                                     onClick = { selectedTrigger = trigger },
                                     label = { Text(trigger.labelEn) },
                                     colors = FilterChipDefaults.filterChipColors(
-                                        selectedContainerColor = AuroraColors.ElectricViolet.copy(alpha = 0.25f),
+                                        selectedContainerColor = AuroraColors.Violet500.copy(alpha = 0.25f),
                                         selectedLabelColor = AuroraColors.TextPrimary
                                     ),
                                     modifier = Modifier
@@ -152,7 +148,7 @@ fun RoutinesScreen(viewModel: RoutinesViewModel) {
                             },
                             singleLine = true,
                             colors = OutlinedTextFieldDefaults.colors(
-                                focusedBorderColor = AuroraColors.ElectricViolet,
+                                focusedBorderColor = AuroraColors.Violet500,
                                 unfocusedBorderColor = AuroraColors.GlassBorder,
                                 focusedTextColor = AuroraColors.TextPrimary,
                                 unfocusedTextColor = AuroraColors.TextPrimary
@@ -173,7 +169,7 @@ fun RoutinesScreen(viewModel: RoutinesViewModel) {
                                 )
                             },
                             colors = OutlinedTextFieldDefaults.colors(
-                                focusedBorderColor = AuroraColors.ElectricViolet,
+                                focusedBorderColor = AuroraColors.Violet500,
                                 unfocusedBorderColor = AuroraColors.GlassBorder,
                                 focusedTextColor = AuroraColors.TextPrimary,
                                 unfocusedTextColor = AuroraColors.TextPrimary
@@ -195,7 +191,7 @@ fun RoutinesScreen(viewModel: RoutinesViewModel) {
                             enabled = titleDraft.isNotBlank() &&
                                 triggerValueDraft.isNotBlank() &&
                                 actionsDraft.isNotBlank(),
-                            colors = ButtonDefaults.buttonColors(containerColor = AuroraColors.ElectricViolet),
+                            colors = ButtonDefaults.buttonColors(containerColor = AuroraColors.Violet500),
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(48.dp)
@@ -252,7 +248,7 @@ private fun RoutineItemCard(
                 Spacer(modifier = Modifier.height(4.dp))
                 AuroraStatusPill(
                     text = "${item.triggerType.labelEn}: ${item.triggerValue}",
-                    color = AuroraColors.CyanGlow
+                    color = AuroraColors.Lavender
                 )
             }
 
@@ -291,7 +287,7 @@ private fun RoutineItemCard(
                 Icon(
                     imageVector = Icons.Default.PlayArrow,
                     contentDescription = stringResource(R.string.routines_run_now),
-                    tint = AuroraColors.CyanGlow,
+                    tint = AuroraColors.Aqua,
                     modifier = Modifier.size(18.dp)
                 )
                 Spacer(modifier = Modifier.width(6.dp))

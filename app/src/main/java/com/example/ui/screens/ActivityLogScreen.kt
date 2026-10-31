@@ -1,6 +1,5 @@
 package com.example.ui.screens
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -36,6 +35,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.R
 import com.example.domain.model.ActivityLogEntry
+import com.example.ui.components.AuroraBackground
 import com.example.ui.components.AuroraGlassCard
 import com.example.ui.components.AuroraSectionHeader
 import com.example.ui.components.AuroraStatusPill
@@ -51,17 +51,13 @@ import java.util.Locale
 fun ActivityLogScreen(viewModel: ActivityLogViewModel) {
     val logs by viewModel.logs.collectAsStateWithLifecycle()
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(AuroraColors.BackgroundDeep)
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
+    AuroraBackground {
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .widthIn(max = 640.dp)
+                .align(Alignment.TopCenter)
+                .padding(horizontal = 16.dp, vertical = 12.dp)
         ) {
             AuroraSectionHeader(
                 title = stringResource(R.string.activity_title),
@@ -149,9 +145,9 @@ private fun ActivityLogCard(entry: ActivityLogEntry) {
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                text = entry.toolName,
+                text = entry.toolName.replace('_', ' ').replaceFirstChar { it.uppercase() },
                 style = MaterialTheme.typography.titleMedium,
-                color = AuroraColors.CyanGlow,
+                color = AuroraColors.Aqua,
                 fontWeight = FontWeight.Bold
             )
 
@@ -161,7 +157,7 @@ private fun ActivityLogCard(entry: ActivityLogEntry) {
             ) {
                 if (entry.userConfirmed) {
                     AuroraStatusPill(
-                        text = "USER APPROVED",
+                        text = stringResource(R.string.activity_user_approved),
                         color = AuroraColors.EmeraldSuccess,
                         icon = Icons.Default.CheckCircle
                     )
@@ -195,7 +191,7 @@ private fun ActivityLogCard(entry: ActivityLogEntry) {
             Text(
                 text = "${entry.durationMs} ms",
                 style = JarvisTimestampMonoStyle,
-                color = AuroraColors.ElectricViolet
+                color = AuroraColors.Lavender
             )
         }
     }

@@ -1,9 +1,11 @@
 package com.example.ui.screens
 
-import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -46,12 +48,14 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.R
 import com.example.domain.model.MemoryFact
+import com.example.ui.components.AuroraBackground
 import com.example.ui.components.AuroraGlassCard
 import com.example.ui.components.AuroraSectionHeader
 import com.example.ui.components.AuroraStatusPill
 import com.example.ui.theme.AuroraColors
 import com.example.ui.viewmodel.MemoryViewModel
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun MemoryScreen(viewModel: MemoryViewModel) {
     val searchQuery by viewModel.searchQuery.collectAsStateWithLifecycle()
@@ -61,17 +65,19 @@ fun MemoryScreen(viewModel: MemoryViewModel) {
     var valueDraft by remember { mutableStateOf("") }
     var categoryDraft by remember { mutableStateOf("CONTACT") }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(AuroraColors.BackgroundDeep)
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
+    val categories = listOf(
+        "CONTACT" to R.string.memory_cat_contact,
+        "PREFERENCE" to R.string.memory_cat_preference,
+        "NOTE" to R.string.memory_cat_note
+    )
+
+    AuroraBackground {
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .widthIn(max = 640.dp)
+                .align(Alignment.TopCenter)
+                .padding(horizontal = 16.dp, vertical = 12.dp)
         ) {
             AuroraSectionHeader(
                 title = stringResource(R.string.memory_title),
@@ -121,13 +127,13 @@ fun MemoryScreen(viewModel: MemoryViewModel) {
                     Icon(
                         imageVector = Icons.Default.Search,
                         contentDescription = stringResource(R.string.memory_search_hint),
-                        tint = AuroraColors.CyanGlow
+                        tint = AuroraColors.Aqua
                     )
                 },
                 singleLine = true,
                 shape = RoundedCornerShape(16.dp),
                 colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = AuroraColors.ElectricViolet,
+                    focusedBorderColor = AuroraColors.Violet500,
                     unfocusedBorderColor = AuroraColors.GlassBorder,
                     focusedContainerColor = AuroraColors.SurfacePrimary,
                     unfocusedContainerColor = AuroraColors.SurfacePrimary,
@@ -139,7 +145,7 @@ fun MemoryScreen(viewModel: MemoryViewModel) {
             Spacer(modifier = Modifier.height(12.dp))
 
             // Add New Fact Card
-            AuroraGlassCard {
+            AuroraGlassCard(elevated = true) {
                 Text(
                     text = stringResource(R.string.memory_add_title),
                     style = MaterialTheme.typography.titleMedium,
@@ -162,7 +168,7 @@ fun MemoryScreen(viewModel: MemoryViewModel) {
                         },
                         singleLine = true,
                         colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = AuroraColors.ElectricViolet,
+                            focusedBorderColor = AuroraColors.Violet500,
                             unfocusedBorderColor = AuroraColors.GlassBorder,
                             focusedTextColor = AuroraColors.TextPrimary,
                             unfocusedTextColor = AuroraColors.TextPrimary
@@ -184,7 +190,7 @@ fun MemoryScreen(viewModel: MemoryViewModel) {
                         },
                         singleLine = true,
                         colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = AuroraColors.ElectricViolet,
+                            focusedBorderColor = AuroraColors.Violet500,
                             unfocusedBorderColor = AuroraColors.GlassBorder,
                             focusedTextColor = AuroraColors.TextPrimary,
                             unfocusedTextColor = AuroraColors.TextPrimary
@@ -192,19 +198,20 @@ fun MemoryScreen(viewModel: MemoryViewModel) {
                     )
                 }
 
-                Row(
+                FlowRow(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        listOf("CONTACT", "PREFERENCE", "NOTE").forEach { cat ->
+                        categories.forEach { (catKey, labelRes) ->
                             AuroraStatusPill(
-                                text = cat,
-                                color = if (categoryDraft == cat) AuroraColors.ElectricViolet else AuroraColors.TextMuted,
+                                text = stringResource(labelRes),
+                                color = if (categoryDraft == catKey) AuroraColors.Violet500 else AuroraColors.TextMuted,
                                 modifier = Modifier
+                                    .clickable { categoryDraft = catKey }
                                     .padding(vertical = 4.dp)
-                                    .testTag("memory_cat_$cat")
+                                    .testTag("memory_cat_$catKey")
                             )
                         }
                     }
@@ -216,7 +223,7 @@ fun MemoryScreen(viewModel: MemoryViewModel) {
                             valueDraft = ""
                         },
                         enabled = keyDraft.isNotBlank() && valueDraft.isNotBlank(),
-                        colors = ButtonDefaults.buttonColors(containerColor = AuroraColors.ElectricViolet),
+                        colors = ButtonDefaults.buttonColors(containerColor = AuroraColors.Violet500),
                         modifier = Modifier
                             .height(48.dp)
                             .testTag("memory_save_button")
@@ -292,8 +299,8 @@ private fun MemoryFactCard(
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 AuroraStatusPill(
-                    text = fact.category,
-                    color = AuroraColors.CyanGlow
+                    text = fact.category.lowercase().replaceFirstChar { it.uppercase() },
+                    color = AuroraColors.Lavender
                 )
                 Spacer(modifier = Modifier.height(6.dp))
                 Text(

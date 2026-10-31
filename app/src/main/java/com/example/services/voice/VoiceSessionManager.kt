@@ -33,7 +33,7 @@ import kotlin.math.max
 class VoiceSessionManager @Inject constructor(
     private val speechRecognizer: SpeechRecognizerWrapper,
     private val ttsEngine: TtsEngineWrapper,
-    private val audioRecorder: PcmAudioRecorder,
+    private val audioRecorder: PcmAudioRecorder? = null,
     private val wakeWordEngine: WakeWordEngine
 ) {
     companion object {
@@ -180,7 +180,7 @@ class VoiceSessionManager @Inject constructor(
         tailTransitionJob?.cancel()
         // Release speaker & wake word mic before opening SpeechRecognizer
         ttsEngine.stop()
-        audioRecorder.stopRecording()
+        audioRecorder?.stopRecording()
         wakeWordEngine.stopMonitoring()
 
         _state.value = VoiceSessionState.LISTENING
@@ -299,7 +299,7 @@ class VoiceSessionManager @Inject constructor(
     private fun closeMicrophoneImmediately() {
         speechRecognizer.stopListening()
         speechRecognizer.cancel()
-        audioRecorder.stopRecording()
+        audioRecorder?.stopRecording()
         wakeWordEngine.stopMonitoring()
     }
 

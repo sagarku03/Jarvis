@@ -303,16 +303,8 @@ class FakeBackend @Inject constructor() : ApiService {
         )
     }
 
-    override suspend fun speechToText(request: SttRequestDto): SttResponseDto {
-        return SttResponseDto(
-            transcript = "Open YouTube",
-            confidence = 0.96f,
-            isFinal = true
-        )
-    }
-
     override suspend fun synthesizeSpeech(request: TtsRequestDto): ResponseBody {
-        // Return empty body so AndroidTtsEngineWrapper cleanly uses high-quality local TTS and shows "Offline voice" chip
+        // Return empty body so AndroidTtsEngineWrapper cleanly uses high-quality local TTS and shows "Device voice" chip
         return ByteArray(0).toResponseBody("audio/mpeg".toMediaType())
     }
 
