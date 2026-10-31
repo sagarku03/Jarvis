@@ -464,7 +464,7 @@ fun SettingsScreen(
                 }
 
                 // 5. Dev-only Voice Diagnostics Section (hidden in release builds)
-                if (BuildConfig.IS_DEV_FLAVOR) {
+                if (BuildConfig.DEBUG) {
                     item {
                         AuroraGlassCard(
                             modifier = Modifier.testTag("settings_voice_diagnostics_card")
@@ -523,30 +523,6 @@ fun SettingsScreen(
                                 color = AuroraColors.TextSecondary
                             )
                         }
-                    }
-                }
-
-                // 6. Sign Out Action
-                item {
-                    OutlinedButton(
-                        onClick = onSignOut,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(48.dp)
-                            .testTag("settings_sign_out_button")
-                    ) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.Logout,
-                            contentDescription = stringResource(R.string.settings_sign_out),
-                            tint = AuroraColors.CoralDanger,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = stringResource(R.string.settings_sign_out),
-                            color = AuroraColors.CoralDanger,
-                            fontWeight = FontWeight.SemiBold
-                        )
                     }
                 }
             }

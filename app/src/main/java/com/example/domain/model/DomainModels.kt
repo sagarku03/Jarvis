@@ -285,19 +285,6 @@ data class NotificationItemSnapshot(
     val postedAtMs: Long
 )
 
-data class AuthUserSession(
-    val uid: String,
-    val email: String?,
-    val displayName: String?,
-    val isEmailVerified: Boolean,
-    val idToken: String?
-)
-
-sealed class AuthResult {
-    data class Success(val session: AuthUserSession) : AuthResult()
-    data class Error(val messageEn: String) : AuthResult()
-}
-
 data class PermissionItemStatus(
     val id: String,
     val titleEn: String,
@@ -305,3 +292,4 @@ data class PermissionItemStatus(
     val isGranted: Boolean,
     val isOptionalInStoreSafeMode: Boolean = false
 )
+

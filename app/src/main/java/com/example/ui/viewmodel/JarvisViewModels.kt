@@ -16,8 +16,6 @@ import com.example.domain.agent.AgentOrchestrator
 import com.example.domain.model.ActivityLogEntry
 import com.example.domain.model.AppLanguage
 import com.example.domain.model.AssistantOrbState
-import com.example.domain.model.AuthResult
-import com.example.domain.model.AuthUserSession
 import com.example.domain.model.ChatMessage
 import com.example.domain.model.ConfirmationLevel
 import com.example.domain.model.ConfirmationRequest
@@ -32,7 +30,6 @@ import com.example.domain.model.VoiceDiagnosticsSnapshot
 import com.example.domain.model.VoiceProfile
 import com.example.domain.model.VoiceSessionState
 import com.example.domain.repository.ActivityLogRepository
-import com.example.domain.repository.AuthRepository
 import com.example.domain.repository.ChatRepository
 import com.example.domain.repository.MemoryRepository
 import com.example.domain.repository.RoutineRepository
@@ -501,87 +498,6 @@ class PermissionsViewModel(
     }
 }
 
-class AuthViewModel(
-    private val authRepository: AuthRepository
-) : ViewModel() {
-
-    val isFirebaseConfigured: Boolean = authRepository.isFirebaseConfigured
-
-    val currentSession: StateFlow<AuthUserSession?> = authRepository.currentSessionFlow
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
-
-    private val _isLoading = MutableStateFlow(false)
-    val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
-
-    private val _statusMessage = MutableStateFlow<String?>(null)
-    val statusMessage: StateFlow<String?> = _statusMessage.asStateFlow()
-
-    fun signInWithEmail(email: String, password: String) {
-        if (email.isBlank() || password.isBlank()) {
-            _statusMessage.value = "Please enter both email and password."
-            return
-        }
-        viewModelScope.launch {
-            _isLoading.value = true
-            _statusMessage.value = null
-            when (val res = authRepository.signInWithEmail(email, password)) {
-                is AuthResult.Success -> _statusMessage.value = "Signed in as ${res.session.email ?: res.session.uid}"
-                is AuthResult.Error -> _statusMessage.value = res.messageEn
-            }
-            _isLoading.value = false
-        }
-    }
-
-    fun registerWithEmail(email: String, password: String) {
-        if (email.isBlank() || password.length < 6) {
-            _statusMessage.value = "Enter a valid email and at least 6 characters for password."
-            return
-        }
-        viewModelScope.launch {
-            _isLoading.value = true
-            _statusMessage.value = null
-            when (val res = authRepository.registerWithEmail(email, password)) {
-                is AuthResult.Success -> _statusMessage.value = "Account created for ${res.session.email}"
-                is AuthResult.Error -> _statusMessage.value = res.messageEn
-            }
-            _isLoading.value = false
-        }
-    }
-
-    fun sendPasswordReset(email: String) {
-        if (email.isBlank()) {
-            _statusMessage.value = "Enter your email address first to receive a reset link."
-            return
-        }
-        viewModelScope.launch {
-            _isLoading.value = true
-            when (val res = authRepository.sendPasswordResetEmail(email)) {
-                is AuthResult.Success -> _statusMessage.value = "Password reset link sent to $email"
-                is AuthResult.Error -> _statusMessage.value = res.messageEn
-            }
-            _isLoading.value = false
-        }
-    }
-
-    fun signInWithGoogleIdToken(idToken: String) {
-        viewModelScope.launch {
-            _isLoading.value = true
-            when (val res = authRepository.signInWithGoogleIdToken(idToken)) {
-                is AuthResult.Success -> _statusMessage.value = "Signed in with Google (${res.session.email})"
-                is AuthResult.Error -> _statusMessage.value = res.messageEn
-            }
-            _isLoading.value = false
-        }
-    }
-
-    fun signOut() {
-        viewModelScope.launch {
-            authRepository.signOut()
-            _statusMessage.value = "Signed out."
-        }
-    }
-}
-
 class SettingsViewModel(
     private val appContext: Context,
     private val settingsRepository: SettingsRepository,
@@ -760,10 +676,6 @@ class JarvisViewModelFactory(
 
             modelClass.isAssignableFrom(PermissionsViewModel::class.java) -> PermissionsViewModel(
                 appContext = appContext
-            ) as T
-
-            modelClass.isAssignableFrom(AuthViewModel::class.java) -> AuthViewModel(
-                authRepository = container.authRepository
             ) as T
 
             modelClass.isAssignableFrom(SettingsViewModel::class.java) -> SettingsViewModel(

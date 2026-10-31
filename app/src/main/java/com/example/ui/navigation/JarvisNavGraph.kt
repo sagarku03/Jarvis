@@ -25,13 +25,11 @@ import com.example.ui.components.AuroraBackground
 import com.example.ui.components.AuroraFloatingPillNav
 import com.example.ui.screens.ActivityLogScreen
 import com.example.ui.screens.HomeScreen
-import com.example.ui.screens.LoginScreen
 import com.example.ui.screens.MemoryScreen
 import com.example.ui.screens.PermissionsScreen
 import com.example.ui.screens.RoutinesScreen
 import com.example.ui.screens.SettingsScreen
 import com.example.ui.viewmodel.ActivityLogViewModel
-import com.example.ui.viewmodel.AuthViewModel
 import com.example.ui.viewmodel.HomeViewModel
 import com.example.ui.viewmodel.JarvisViewModelFactory
 import com.example.ui.viewmodel.MemoryViewModel
@@ -61,27 +59,16 @@ fun JarvisRootApp(
     val memoryViewModel: MemoryViewModel = viewModel(factory = factory)
     val routinesViewModel: RoutinesViewModel = viewModel(factory = factory)
     val permissionsViewModel: PermissionsViewModel = viewModel(factory = factory)
-    val authViewModel: AuthViewModel = viewModel(factory = factory)
     val settingsViewModel: SettingsViewModel = viewModel(factory = factory)
 
     var currentTab by rememberSaveable { mutableStateOf(JarvisDestination.HOME) }
     var showPermissionsScreen by rememberSaveable { mutableStateOf(false) }
-    var showLoginScreen by rememberSaveable { mutableStateOf(false) }
 
     if (showPermissionsScreen) {
         BackHandler { showPermissionsScreen = false }
         PermissionsScreen(
             viewModel = permissionsViewModel,
             onNavigateBack = { showPermissionsScreen = false }
-        )
-        return
-    }
-
-    if (showLoginScreen) {
-        BackHandler { showLoginScreen = false }
-        LoginScreen(
-            viewModel = authViewModel,
-            onContinueToAssistant = { showLoginScreen = false }
         )
         return
     }
@@ -125,11 +112,7 @@ fun JarvisRootApp(
 
                     JarvisDestination.SETTINGS -> SettingsScreen(
                         viewModel = settingsViewModel,
-                        onOpenPermissionsScreen = { showPermissionsScreen = true },
-                        onSignOut = {
-                            authViewModel.signOut()
-                            showLoginScreen = true
-                        }
+                        onOpenPermissionsScreen = { showPermissionsScreen = true }
                     )
                 }
             }

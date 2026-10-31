@@ -25,13 +25,6 @@
 # Keep Android Services & BroadcastReceivers
 -keep class com.example.services.** { *; }
 
-# Keep Firebase Auth & Jetpack Credential Manager classes
--keep class com.google.firebase.auth.** { *; }
--keep class com.google.firebase.FirebaseApp { *; }
--keep class androidx.credentials.** { *; }
--keep class com.google.android.libraries.identity.googleid.** { *; }
--dontwarn com.google.firebase.**
-
 # Strip verbose debug logs in release builds while preserving warn/error logs
 -assumenosideeffects class android.util.Log {
     public static boolean isLoggable(java.lang.String, int);

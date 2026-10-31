@@ -1,6 +1,6 @@
 {
   "name": "JARVIS",
-  "description": "Personal voice AI assistant for Android with bilingual Hindi/English support, tool-calling agent orchestrator, 3-tier safety gate, kill switch, and local memory.",
+  "description": "Personal Android voice assistant with Bring-Your-Own Gemini API key, encrypted on-device memory, tool-calling agent orchestrator, safety gate, and kill switch.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

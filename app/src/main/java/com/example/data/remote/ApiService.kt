@@ -1,8 +1,5 @@
 package com.example.data.remote
 
-import com.example.BuildConfig
-import okhttp3.Interceptor
-import okhttp3.Response
 import okhttp3.ResponseBody
 import retrofit2.http.Body
 import retrofit2.http.POST
@@ -58,28 +55,4 @@ interface ApiService {
 
     @POST("v1/tts")
     suspend fun synthesizeSpeech(@Body request: TtsRequestDto): ResponseBody
-}
-
-interface TokenProvider {
-    fun getFirebaseIdToken(): String?
-}
-
-class AuthHeaderInterceptor(
-    private val tokenProvider: TokenProvider
-) : Interceptor {
-    override fun intercept(chain: Interceptor.Chain): Response {
-        val original = chain.request()
-        val idToken = tokenProvider.getFirebaseIdToken()
-
-        val builder = original.newBuilder()
-            .header("X-Jarvis-Mode", if (BuildConfig.STORE_SAFE_MODE) "STORE_SAFE" else "FULL_CONTROL")
-
-        if (!idToken.isNullOrBlank()) {
-            builder.header("Authorization", "Bearer $idToken")
-        } else if (BuildConfig.IS_DEV_FLAVOR) {
-            builder.header("Authorization", "Bearer dev-local-unauthenticated")
-        }
-
-        return chain.proceed(builder.build())
-    }
 }

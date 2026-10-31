@@ -319,25 +319,6 @@ class MemoryRepositoryImpl @Inject constructor(
     private val memoryDao: MemoryDao
 ) : MemoryRepository {
 
-    private val seedScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-
-    init {
-        seedScope.launch {
-            if (memoryDao.getAllMemoriesSnapshot().isEmpty()) {
-                runCatching {
-                    memoryDao.insertMemory(
-                        MemoryFactEntity(
-                            category = "PREFERENCE",
-                            key = "Preferred Speech Locale",
-                            value = com.example.data.local.FieldCipher.encrypt("English (India) en-IN"),
-                            updatedAtMs = System.currentTimeMillis()
-                        )
-                    )
-                }
-            }
-        }
-    }
-
     override val memoriesFlow: Flow<List<MemoryFact>> =
         memoryDao.observeMemories().map { list -> list.mapNotNull { runCatching { it.toDomain() }.getOrNull() } }
 

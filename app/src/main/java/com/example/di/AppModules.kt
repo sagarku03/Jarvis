@@ -11,13 +11,9 @@ import com.example.data.local.JarvisDatabase
 import com.example.data.remote.AgentStepRequestDto
 import com.example.data.remote.AgentStepResponseDto
 import com.example.data.remote.ApiService
-import com.example.data.remote.AuthHeaderInterceptor
-import com.example.data.remote.FakeBackend
-import com.example.data.remote.TokenProvider
 import com.example.data.remote.TtsRequestDto
 import com.example.data.repository.ActivityLogRepositoryImpl
 import com.example.data.repository.AgentBackendRepositoryImpl
-import com.example.data.repository.AuthRepositoryImpl
 import com.example.data.repository.ChatRepositoryImpl
 import com.example.data.repository.MemoryRepositoryImpl
 import com.example.data.repository.RoutineRepositoryImpl
@@ -26,7 +22,6 @@ import com.example.domain.agent.AgentOrchestrator
 import com.example.domain.contacts.ContactsResolver
 import com.example.domain.repository.ActivityLogRepository
 import com.example.domain.repository.AgentBackendRepository
-import com.example.domain.repository.AuthRepository
 import com.example.domain.repository.ChatRepository
 import com.example.domain.repository.MemoryRepository
 import com.example.domain.repository.RoutineRepository
@@ -62,17 +57,11 @@ import com.example.tools.VolumeTool
 import com.example.tools.WaitForElementTool
 import com.example.tools.WebSearchTool
 import com.example.tools.WhatsAppTelegramTool
-import com.google.firebase.FirebaseApp
-import com.google.firebase.auth.FirebaseAuth
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
-import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.tasks.await
 import okhttp3.OkHttpClient
 import okhttp3.ResponseBody
 import okhttp3.logging.HttpLoggingInterceptor
-import retrofit2.Retrofit
-import retrofit2.converter.moshi.MoshiConverterFactory
 import java.util.concurrent.TimeUnit
 
 @Target(AnnotationTarget.CONSTRUCTOR, AnnotationTarget.FIELD, AnnotationTarget.FUNCTION)
@@ -93,6 +82,7 @@ annotation class AndroidEntryPoint
 
 /**
  * Application dependency container providing constructor-injected singletons across all layers.
+ * Bring-Your-Own-Key edition: no Firebase Auth, no backend proxy, and no scripted FakeBackend.
  */
 class AppContainer(context: Context) {
 
@@ -116,39 +106,6 @@ class AppContainer(context: Context) {
             .build()
     }
 
-    val firebaseAuth: FirebaseAuth? by lazy {
-        try {
-            val apps = FirebaseApp.getApps(appContext)
-            val app = if (apps.isNotEmpty()) {
-                FirebaseApp.getInstance()
-            } else {
-                FirebaseApp.initializeApp(appContext)
-            }
-            if (app != null) {
-                FirebaseAuth.getInstance(app)
-            } else {
-                null
-            }
-        } catch (_: Exception) {
-            null
-        }
-    }
-
-    val authRepository: AuthRepository by lazy {
-        AuthRepositoryImpl(firebaseAuth)
-    }
-
-    val tokenProvider: TokenProvider by lazy {
-        object : TokenProvider {
-            override fun getFirebaseIdToken(): String? {
-                val user = firebaseAuth?.currentUser ?: return null
-                return runCatching {
-                    runBlocking { user.getIdToken(false).await().token }
-                }.getOrNull()
-            }
-        }
-    }
-
     val moshi: Moshi by lazy {
         Moshi.Builder()
             .addLast(KotlinJsonAdapterFactory())
@@ -157,6 +114,7 @@ class AppContainer(context: Context) {
 
     val okHttpClient: OkHttpClient by lazy {
         val logging = HttpLoggingInterceptor().apply {
+            redactHeader("x-goog-api-key")
             level = if (BuildConfig.DEBUG) {
                 HttpLoggingInterceptor.Level.BASIC
             } else {
@@ -165,7 +123,6 @@ class AppContainer(context: Context) {
         }
 
         OkHttpClient.Builder()
-            .addInterceptor(AuthHeaderInterceptor(tokenProvider))
             .addInterceptor(logging)
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(25, TimeUnit.SECONDS)
@@ -173,67 +130,23 @@ class AppContainer(context: Context) {
             .build()
     }
 
-    val retrofit: Retrofit by lazy {
-        val baseUrl = sanitizeBaseUrl(BuildConfig.JARVIS_BACKEND_BASE_URL)
-        Retrofit.Builder()
-            .baseUrl(baseUrl)
-            .client(okHttpClient)
-            .addConverterFactory(MoshiConverterFactory.create(moshi))
-            .build()
-    }
-
-    private val networkApiService: ApiService by lazy {
-        retrofit.create(ApiService::class.java)
-    }
-
-    private val fakeBackend: FakeBackend by lazy {
-        FakeBackend()
-    }
-
+    /**
+     * Unconfigured fail-closed ApiService until GeminiClient replaces AgentBackendRepositoryImpl in Phase 3.
+     * Never returns scripted or fake AI replies.
+     */
     val apiService: ApiService by lazy {
-        if (!BuildConfig.USE_FAKE_BACKEND) {
-            networkApiService
-        } else {
-            object : ApiService {
-                private val hasConfiguredBackend: Boolean
-                    get() {
-                        val url = BuildConfig.JARVIS_BACKEND_BASE_URL.trim()
-                        return url.startsWith("http") && !url.contains("jarvis-proxy.example.com")
-                    }
+        object : ApiService {
+            override suspend fun agentStep(request: AgentStepRequestDto): AgentStepResponseDto {
+                return AgentStepResponseDto(
+                    assistantText = "Gemini API key is not configured yet. Please add your Gemini API key in Setup.",
+                    toolCalls = emptyList()
+                )
+            }
 
-                override suspend fun agentStep(request: AgentStepRequestDto): AgentStepResponseDto {
-                    if (hasConfiguredBackend) {
-                        return try {
-                            networkApiService.agentStep(request)
-                        } catch (_: Exception) {
-                            fakeBackend.agentStep(request)
-                        }
-                    }
-                    return fakeBackend.agentStep(request)
-                }
-
-                override suspend fun synthesizeSpeech(request: TtsRequestDto): ResponseBody {
-                    if (BuildConfig.AI_VOICE && hasConfiguredBackend) {
-                        return try {
-                            networkApiService.synthesizeSpeech(request)
-                        } catch (_: Exception) {
-                            fakeBackend.synthesizeSpeech(request)
-                        }
-                    }
-                    return fakeBackend.synthesizeSpeech(request)
-                }
+            override suspend fun synthesizeSpeech(request: TtsRequestDto): ResponseBody {
+                throw IllegalStateException("Cloud TTS is not configured.")
             }
         }
-    }
-
-    private fun sanitizeBaseUrl(raw: String): String {
-        val trimmed = raw.trim()
-        val withScheme = if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
-            trimmed
-        } else {
-            "https://jarvis-proxy.example.com/"
-        }
-        return if (withScheme.endsWith("/")) withScheme else "$withScheme/"
     }
 
     val chatRepository: ChatRepository by lazy {
@@ -310,7 +223,7 @@ class AppContainer(context: Context) {
     }
 
     val ttsEngineWrapper: TtsEngineWrapper by lazy {
-        AndroidTtsEngineWrapper(appContext, apiService)
+        AndroidTtsEngineWrapper(appContext)
     }
 
     val wakeWordEngine: WakeWordEngine by lazy {

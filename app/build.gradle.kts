@@ -8,10 +8,6 @@ plugins {
     alias(libs.plugins.secrets)
 }
 
-if (file("google-services.json").exists()) {
-    apply(plugin = "com.google.gms.google-services")
-}
-
 val localProps = Properties().apply {
     val file = rootProject.file("local.properties")
     if (file.exists()) {
@@ -27,12 +23,6 @@ val storeSafeProp = (project.findProperty("STORE_SAFE_MODE")?.toString()
     ?: localProps.getProperty("STORE_SAFE_MODE")
     ?: "false").toBoolean()
 val fullControlProp = !storeSafeProp
-val backendBaseUrlProp = (project.findProperty("JARVIS_BACKEND_BASE_URL")?.toString()
-    ?: localProps.getProperty("JARVIS_BACKEND_BASE_URL")
-    ?: "https://jarvis-proxy.example.com/")
-val googleWebClientIdProp = (project.findProperty("GOOGLE_WEB_CLIENT_ID")?.toString()
-    ?: localProps.getProperty("GOOGLE_WEB_CLIENT_ID")
-    ?: "")
 
 ksp {
     arg("room.schemaLocation", "$projectDir/schemas")
@@ -54,8 +44,6 @@ android {
         buildConfigField("boolean", "FULL_CONTROL_MODE", fullControlProp.toString())
         buildConfigField("boolean", "STORE_SAFE_MODE", storeSafeProp.toString())
         buildConfigField("boolean", "AI_VOICE", "false")
-        buildConfigField("String", "JARVIS_BACKEND_BASE_URL", "\"$backendBaseUrlProp\"")
-        buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", "\"$googleWebClientIdProp\"")
 
         resValue("bool", "enable_accessibility_automation", fullControlProp.toString())
     }
@@ -100,17 +88,9 @@ android {
                 "proguard-rules.pro"
             )
             signingConfig = signingConfigs.getByName("release")
-            buildConfigField("boolean", "USE_FAKE_BACKEND", "false")
-            buildConfigField("boolean", "IS_DEV_FLAVOR", "false")
-            buildConfigField("boolean", "SUPPORTS_SIMULATED_FEATURES", "false")
-            buildConfigField("boolean", "SUPPORTS_LATENCY_DEBUG_PANEL", "false")
         }
         debug {
             signingConfig = signingConfigs.getByName("debug")
-            buildConfigField("boolean", "USE_FAKE_BACKEND", "true")
-            buildConfigField("boolean", "IS_DEV_FLAVOR", "true")
-            buildConfigField("boolean", "SUPPORTS_SIMULATED_FEATURES", "false")
-            buildConfigField("boolean", "SUPPORTS_LATENCY_DEBUG_PANEL", "true")
         }
     }
     compileOptions {
@@ -134,6 +114,7 @@ secrets {
     defaultPropertiesFileName = ".env.example"
     ignoreList.add("keyToIgnore")
     ignoreList.add("sdk.*")
+    ignoreList.add("STORE_SAFE_MODE")
 }
 
 dependencies {
@@ -161,7 +142,7 @@ dependencies {
     // DataStore Preferences (settings, language, voice speed, safety level)
     implementation(libs.androidx.datastore.preferences)
 
-    // Networking & Backend Proxy (Retrofit + OkHttp + Moshi)
+    // Networking & JSON (OkHttp + Moshi + Retrofit)
     implementation(libs.retrofit)
     implementation(libs.converter.moshi)
     implementation(libs.okhttp)
@@ -172,14 +153,6 @@ dependencies {
     // Coroutines
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.kotlinx.coroutines.android)
-
-    // Firebase Auth + Credential Manager Google Sign-In (Free Mode: no App Check or Porcupine)
-    implementation(platform(libs.firebase.bom))
-    implementation(libs.firebase.auth)
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.10.2")
-    implementation(libs.androidx.credentials)
-    implementation(libs.androidx.credentials.play.services)
-    implementation(libs.googleid)
 
     testImplementation(libs.junit)
     testImplementation(libs.robolectric)
