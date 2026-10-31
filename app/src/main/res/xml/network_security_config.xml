@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+
+    <!-- Stage 8: Certificate Pinning for Production JARVIS Backend Proxy -->
+    <domain-config cleartextTrafficPermitted="false">
+        <domain includeSubdomains="true">jarvis-proxy.example.com</domain>
+        <pin-set expiration="2028-01-01">
+            <!-- Primary SPKI SHA-256 Pin (Google Trust Services GTS Root R1) -->
+            <pin digest="SHA-256">hxqRlPTu1bMS/0DITB1SSu0vd4u/8l8TjPgfaAp63Gc=</pin>
+            <!-- Backup SPKI SHA-256 Pin (GTS Root R2) -->
+            <pin digest="SHA-256">Vfd95BwDeSQo+NUYxVEEIlvkOlWY2SalKK1lPhzOx78=</pin>
+        </pin-set>
+    </domain-config>
+</network-security-config>

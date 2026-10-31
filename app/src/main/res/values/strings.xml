@@ -1,0 +1,61 @@
+<resources>
+    <string name="app_name">JARVIS</string>
+    <string name="app_tagline">Personal Voice Assistant</string>
+
+    <!-- Navigation -->
+    <string name="nav_home">Home</string>
+    <string name="nav_routines">Routines</string>
+    <string name="nav_permissions">Permissions</string>
+    <string name="nav_memory">Memory</string>
+    <string name="nav_activity">Audit log</string>
+    <string name="nav_settings">Settings</string>
+
+    <!-- Accessibility & Services -->
+    <string name="accessibility_service_label">JARVIS Screen Control</string>
+    <string name="accessibility_service_description">Allows JARVIS to read screen elements and execute user-authorized taps and scrolls. Skips password fields and banking apps.</string>
+    <string name="notification_listener_label">JARVIS Notification Reader</string>
+    <string name="voice_service_notification_title">JARVIS Voice Active</string>
+    <string name="voice_service_notification_text">Listening for \"Hey Jarvis\" · Tap Stop to halt</string>
+    <string name="overlay_service_notification_title">JARVIS Floating Orb</string>
+    <string name="overlay_service_notification_text">Quick status &amp; emergency stop overlay active</string>
+
+    <!-- Orb States -->
+    <string name="orb_state_idle">Tap the mic to talk</string>
+    <string name="orb_state_listening">Listening…</string>
+    <string name="orb_state_thinking">Thinking…</string>
+    <string name="orb_state_speaking">Speaking – tap to interrupt</string>
+
+    <!-- Actions & Home -->
+    <string name="btn_push_to_talk">Tap the mic to talk</string>
+    <string name="btn_stop_listening">Stop listening</string>
+    <string name="btn_barge_in">Interrupt</string>
+    <string name="btn_kill_switch">STOP</string>
+    <string name="btn_launch_overlay">Floating orb</string>
+    <string name="label_live_transcript">YOU SAID</string>
+    <string name="label_last_response">Assistant reply</string>
+    <string name="label_quick_prompts">Quick actions</string>
+    <string name="placeholder_command_input">Ask anything in Hindi, Hinglish, or English…</string>
+
+    <!-- Safety Gate Dialog -->
+    <string name="safety_gate_medium_title">Confirm action</string>
+    <string name="safety_gate_high_title">Confirm high-risk action</string>
+    <string name="safety_gate_approve">Approve</string>
+    <string name="safety_gate_deny">Cancel</string>
+
+    <!-- Permissions & Onboarding -->
+    <string name="permissions_header">Permissions</string>
+    <string name="permissions_subheader">Clear rationale in English &amp; हिन्दी</string>
+    <string name="perm_granted">Granted</string>
+    <string name="perm_missing">Needed</string>
+
+    <!-- Memory, Routines & Activity Log -->
+    <string name="memory_title">Memory vault</string>
+    <string name="memory_add_button">Save memory</string>
+    <string name="routines_title">Routines</string>
+    <string name="activity_log_title">Audit log</string>
+    <string name="activity_log_clear">Clear</string>
+
+    <!-- Settings -->
+    <string name="settings_title">Settings</string>
+    <string name="settings_delete_all">Delete all local data</string>
+</resources>

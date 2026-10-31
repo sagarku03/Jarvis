@@ -1,0 +1,184 @@
+<project_state>
+Existing project: JARVIS (package com.example). Layers: ui/, domain/ (agent, safety, tool, model, repository, voice), data/ (local Room, remote Retrofit + FakeBackend, repository, security), services/ (VoiceForegroundService, OverlayService, JarvisAccessibilityService, JarvisNotificationListener, BootCompletedReceiver, RoutineTriggerReceiver, voice/*), tools/ (20 tools), di/ (custom annotations + manual AppContainer), backend-proxy/ (Express + Vertex AI).
+A code review found the problems listed in each phase below. Treat each as confirmed. Fix them in order, phase by phase.
+</project_state>
+
+<execution_rules>
+- Work through PHASES 0 to 9 strictly in order. Finish and self-verify a phase before starting the next.
+- At the end of each phase print a block:  "PHASE N DONE | changed files | real vs not-possible | manual steps | verify steps".
+- If you reach your output limit, STOP at a phase boundary and print "CONTINUE FROM PHASE N".
+- Never delete a feature to make a problem disappear; fix it or make it fail honestly.
+</execution_rules>
+
+=====================================================================
+PHASE 0 — Honest-by-default build (flavors, remove fakes from prod)
+=====================================================================
+Problems: FakeBackend is used even when USE_FAKE_BACKEND=false (AndroidTtsEngineWrapper builds its own FakeBackend); "neural TTS" is a 120ms 440Hz beep (FakeBackend.textToSpeech); fake STT returns "Turn on flashlight"; latency metrics hard-coded (sttEndpointLatencyMs=135, coerceIn(180,1150)); demo contacts/routines/memories seeded in JarvisApplication; 2 hard-coded sample notifications in JarvisNotificationListener; "TOOL SIMULATIONS", "simulate secure screen", latency panel (default ON), FULL_CONTROL tag visible in UI; proactiveSuggestions default ON.
+Do:
+1. Add product flavors `dev` and `prod`. FakeBackend, scripted responses, simulation quick-prompts, simulate-secure-screen toggle, latency debug panel, seeded demo data live ONLY in `src/dev`. `prod` must not contain or reference them (use a small interface + DI so prod compiles without them).
+2. Remove `FakeBackend()` construction from AndroidTtsEngineWrapper; inject ApiService/TtsProvider interface.
+3. JarvisApplication.seedDefaultDataIfEmpty and sample notifications -> dev only. Prod starts empty.
+4. Metrics: measure real timestamps (speech-end, request-sent, first-audio-byte). Remove every constant/coerce. Latency panel default OFF and only in dev/debug.
+5. proactiveSuggestionsEnabled default = false (opt-in). Remove user-visible strings like "Stages 1–8 Complete", "FULL_CONTROL_MODE • N Tools", "TOOL SIMULATIONS".
+6. BuildConfig per flavor: dev -> USE_FAKE_BACKEND=true; prod -> false and real base URL from secrets (no example.com).
+Acceptance: prod build has zero references to FakeBackend/seed/simulate; dev build still runs end-to-end.
+
+=====================================================================
+PHASE 1 — Safety-critical tool bugs
+=====================================================================
+Problems: (a) CallContactTool.kt: no contact lookup; names with no digits fall back to hard-coded "9876543210" and ACTION_CALL dials directly. WhatsAppTelegramTool fallback "919876543210". (b) JarvisAccessibilityService.executeTap/executeTypeText/executeScroll/executeSystemGlobalAction/waitForElement return success=true "Simulated…" when service is not connected. (c) JarvisNotificationListener.sendConfirmedQuickReply returns success even when nothing was sent. (d) tools report success when resolveActivity()==null (nothing launched). (e) Notification OTP filter only matches English "OTP"/"verification code".
+Do:
+1. Create ContactsResolver (ContactsContract): name/nickname -> number; fuzzy match + MemoryRepository nicknames. Runtime READ_CONTACTS request flow with rationale. Multiple matches -> ask user (voice + UI list). No match -> tool returns success=false "contact not found". REMOVE every hard-coded fallback number from CallContactTool, WhatsAppTelegramTool, SendSmsTool. A raw number is allowed only if the user said digits explicitly.
+2. SafetyGate confirmation for call/sms/whatsapp must show resolved contact name + masked number (e.g. +91 98••• ••210).
+3. Accessibility tools: if service not connected -> success=false, message "Accessibility service is not enabled. Open Settings to enable." (Hindi + English). Never "Simulated".
+4. Quick-reply: success only if PendingIntent.send() succeeded; otherwise false with reason.
+5. Every intent-launching tool: success=false when nothing could handle the intent or startActivity threw.
+6. Notification filter: skip OTP/PIN/CVV/password patterns in English + Hindi (ओटीपी, पिन, कोड), bank debit/credit alert amounts, and all notifications from SafetyGate-blocked banking packages.
+7. Unit tests for: no fallback number, contact ambiguity, accessibility-disabled failure, quick-reply failure, OTP filter (Hindi+English).
+Acceptance: "Call Mom" with no matching contact => no call is placed and the assistant says contact not found.
+
+=====================================================================
+PHASE 2 — UI REDESIGN: "Aurora Violet Glass" (match the approved mock exactly)
+=====================================================================
+Only ui/ and res/ change in this phase. Keep all ViewModels, state flows, testTags and navigation routes working.
+
+2.1 DESIGN TOKENS (replace ui/theme/Color.kt; rename all old Jarvis* colors to the semantic names below and refactor every usage; no cyan #00E5FF or navy #070C17 may remain)
+Bg0 #07050F | Bg1 #0E0A1F | GlassFill white 8% (#14FFFFFF) | GlassFillElevated white 12% (#1FFFFFFF) | GlassStroke white 14% (#24FFFFFF) | GlassStrokeStrong white 30% (#4DFFFFFF)
+Violet500 #8B5CF6 | Violet600 #6D3AF0 | Indigo600 #5B3DF5 | Lavender #B388FF (glows/icons/links only, never under white text) | ElectricBlue #4C8DFF | Aqua #2DE2E6 | Lime #C8F53C (live/on/success only)
+Success #3DDC97 | Warning #FFB547 | Danger #FF6B87 | TextPrimary #F5F3FF | TextSecondary #C4BEE6 | TextMuted #9A94C0
+Material3 darkColorScheme: primary=Violet500, primaryContainer=Violet600, secondary=ElectricBlue, tertiary=Aqua, background=Bg0, surface=Bg1, surfaceVariant=#1A1533, onSurfaceVariant=TextSecondary, outline=GlassStroke, error=Danger.
+Typography: headings Space Grotesk (already bundled), body system default + Noto Sans Devanagari fallback for Hindi, JetBrains Mono ONLY for Activity Log timestamps/args. Sizes: Display 32, Title 22, Body 15, Caption 12. Sentence case; ALL-CAPS only for tiny chips ("HIGH RISK").
+
+2.2 COMPONENTS (ui/components/AuroraComponents.kt)
+- AuroraBackground: vertical gradient #0B0718 -> Bg0 plus two radial glows drawn with drawBehind: violet (#7C4DFF @60%) centered top-right (85% width, y=0, radius 0.9*width) and blue (#4C8DFF @38%) bottom-left (0,height). Used behind every screen.
+- GlassCard: radius 24dp, fill GlassFill, 1dp gradient border (white 30% -> white 6%), padding 16dp.
+- GradientButton: height 52dp, radius 18dp, linear gradient Violet500->Violet600->Indigo600, 1dp GlassStrokeStrong border, soft violet shadow, white bold label. GhostButton: GlassFill + GlassStroke.
+- GlassTextField: label above field, height 52dp, radius 16dp, dark translucent fill, 1dp white-30% border.
+- StatusChip: pill, GlassFill + GlassStroke, 7dp status dot (Lime = on, Warning, Danger), 12sp label, no wrapping.
+- SectionHeader, GlassListRow (Apple-Library-style grouped rows with chevron).
+- FloatingGlassNavBar: pill, height 70dp, horizontal margin 18dp, bottom margin 18dp, fill #B8140E2A, 1dp GlassStrokeStrong border, glow shadow (violet 25%). 4 tabs (Home, Routines, Memory, Settings) with icon above 10.5sp label (selected = Lavender icon + white label; unselected = TextMuted) and a CENTER gradient mic FAB (60dp circle, gradient Lavender->Violet600->ElectricBlue, white 45% border, raised 26dp above the bar, 6dp translucent halo). FAB tap = push-to-talk (same as orb).
+- Compose has no backdrop blur: glass = translucent fill + gradient border + glow background. Optional Modifier.blur only on the background glow layer for API 31+.
+
+2.3 NAVIGATION (JarvisNavGraph.kt)
+Remove old 6-tab NavigationBar. Use FloatingGlassNavBar. Move Permissions and Audit Log into Settings as rows (routes stay valid, back navigation works). Content must not hide behind the nav bar (bottom padding), IME and edge-to-edge insets correct.
+
+2.4 HOME SCREEN (match mock "2 · Home / Command")
+Over AuroraBackground, top to bottom:
+- Header row: left = "Namaste" caption (TextMuted 13sp) + title "Ready when you are" (Display, bold). Right = compact STOP pill (kill switch): height 42dp, red glass (Danger 16% fill, Danger 55% border), stop-square icon + "STOP" 12sp bold letter-spaced. Always visible; replaces the old full-width red KILL SWITCH button; same callback + testTag("kill_switch_button").
+- Orb hero (height ~270dp): soft radial glow behind (360dp, violet 50% -> blue 20% -> transparent), two thin rings (250dp lavender 30%, 210dp blue 28%), 156dp gradient sphere (radial: #EADFFF at 34%/28% -> #A57BFF -> #6D3AF0 -> #2A1B8F), violet glow shadow, inner shade. Aqua 1.5dp ring (+14dp) with aqua glow when LISTENING. Centered live waveform bars (7 bars, white gradient, heights driven by rmsDbLevel) while listening/speaking.
+  States: Idle = violet->blue sphere slow breathing; Listening = aqua ring + waveform; Thinking = violet->magenta (#E879F9) slow rotation; Speaking = lavender pulse + lime mic dot; Halted (kill) = Danger ring. Respect reduce-motion (no infinite animations then).
+- State label under orb, sentence case with letter-spacing, Aqua when listening: "Listening…", "Thinking…", "Speaking – tap to interrupt", "Tap the mic to talk".
+- GlassCard "You said": caption "YOU SAID" (11sp, TextMuted, spaced) + live/partial transcript 17sp semibold.
+- GlassCard "steps": rows with 24dp rounded icon (✓ green tint = done, [x]  lavender = running/waiting) + 13.5sp text from currentStepInfo / tool results.
+- Assistant reply GlassCard (lastResponseText).
+- Horizontal LazyRow of chips (no wrap): "Mic on" (lime dot, only when mic active), Flashlight, Alarm, Read screen, Notifications, Morning briefing (vector icons, not emoji). Tapping a chip submits the same command as the old quick prompts (prod only has safe real commands).
+- Memory-candidate approval as a GlassCard with "Save" (gradient) / "Dismiss" (ghost).
+- Text input as GlassTextField with send icon button.
+Remove from prod UI: "FULL_CONTROL_MODE • N Tools" tag, latency panel, "TOOL SIMULATIONS", old emoji prompt list, JetBrains-Mono labels.
+
+2.5 SAFETY SHEET (match mock "3 · Safety confirmation sheet")
+Replace SafetyGateConfirmationModal with a bottom glass sheet: radius 32dp, fill rgba(24,17,50,86%), 1dp strong border, violet top glow, grab handle (40x4dp). Header: 52dp rounded shield icon tile (Danger tint for HIGH, Warning for MEDIUM) + title "Confirm action" + risk chip (LOW green / MEDIUM amber / HIGH red, ALL-CAPS 11sp). Body: key-value card (Action, Contact/target with masked number, Mode). Row: warning dot + "Auto-cancels in 30 s if you don't respond" with live countdown; timeout = deny via SafetyGate. Buttons: Cancel (GhostButton, weight 1) + "Approve & <action>" (GradientButton, weight 1.4). HIGH risk requires an explicit checkbox before Approve is enabled. Background dims (#A004020C).
+
+2.6 LOGIN / WELCOME (match mock "1 · Login / Welcome") — UI + validation + loading/error states now; real auth wired in Phase 4
+JARVIS mark (64dp gradient rounded square with white ring) + wordmark "JARVIS" letter-spaced + "Welcome back" (30sp, extra-bold) + sub "Sign in to continue · आपका स्वागत है" + GlassCard containing: Email (GlassTextField), Password (with show/hide), "Forgot password?" (Lavender), GradientButton "Login", divider "or", GhostButton "Continue with Google"; footer "New here? Create account". Inline errors in Danger color; disable button + progress while loading. Put behind an AuthRepository interface (Phase 4 implements it).
+
+2.7 OTHER SCREENS (same system)
+Settings = grouped GlassListRow sections (Voice, Wake word, Safety, Permissions >, Audit log >, Privacy & data, About; "Developer" only in dev flavor), gradient Switch track. Permissions = row + StatusChip (Granted = Lime, Needed = Warning) + single CTA per row. Memory = glass search bar, category SectionHeaders, swipe-to-delete, export. Routines = GlassCard with enable switch + next-run chip. Activity Log = timeline, risk chips, mono font for timestamps/args only. OverlayService floating orb: same gradient + STOP pill styling.
+
+2.8 UI ACCEPTANCE
+No cyan/navy leftovers; muted text never lighter-than-spec; one strong CTA per screen; STOP always visible on Home; prod shows no debug text; screenshots/Compose previews for Login, Home (all 4 orb states), Safety sheet (LOW/MEDIUM/HIGH), Settings, Permissions.
+
+=====================================================================
+PHASE 3 — Privacy & storage
+=====================================================================
+Problems: screen text/tree is sent on EVERY agent step, even for secure/banking apps (nodes are collected before the secure flag; RepositoriesImpl always builds toPromptInjectionSafePayload); DB named "encrypted_vault" is not encrypted (only MemoryItem values are); VaultCipherManager falls back to plaintext on failure and to a per-process random key; fallbackToDestructiveMigration(dropAllTables=true); the vault unit test passes vacuously (plain JVM, no @RunWith, Base64 "not mocked" is swallowed).
+Do:
+1. Screen context is attached ONLY when the current step needs it (read_screen / UI-automation tools, or the model explicitly asks via a `request_screen` tool). If isSecureScreen or package is blocked or a password node exists: collect/send NO node text, only {package, secure:true}. Collect the secure flag BEFORE reading texts.
+2. Encrypt the whole Room DB with SQLCipher (key wrapped by Android Keystore) — or, if not feasible, rename DB and docs so they do not claim encryption AND encrypt chat/log text fields with VaultCipher. Chat + audit log: redact sensitive args (message bodies, numbers masked), retention 30 days with auto-delete (WorkManager), "Delete all data" wipes DB, DataStore, caches.
+3. VaultCipherManager: fail closed (never store plaintext; throw/report), remove in-memory fallback key; if the Keystore key is invalidated, reset vault safely and tell the user.
+4. Replace fallbackToDestructiveMigration with real Migrations; add Room schema export + migration test.
+5. Replace the vacuous test with an instrumented (androidTest) Keystore encrypt/decrypt test; add a JVM test with an injected fake cipher that proves failure => no plaintext write.
+6. Privacy screen: explains exactly what leaves the device (text of commands, screen text only when needed), toggle to disable screen-context sharing, "Export my data", "Delete all".
+Acceptance: opening a banking app and giving any command sends no screen text; DB file is unreadable without the key.
+
+=====================================================================
+PHASE 4 — Real auth + API contract + backend security (app + backend-proxy)
+=====================================================================
+Problems: backend security.ts accepts any "Bearer debug-…" token and NODE_ENV=test => auth + App Check bypass; app sends FirebaseAuth uid as "token" and hard-coded "stage1-appcheck-verified-token"; no sign-in, no App Check init; app/backend contract mismatches: tools field `jsonSchema` vs `parametersJsonSchema` (schema parse fails => tools without params), screenContext string vs object (TypeError => 502), `languageCode` vs `language`, memories sent as system message vs `memoryContext[]`, tool-result turns mapped to user role and wrapped as trusted <user_input>, `memoryCandidates` vs `extractedMemories`, STT/TTS payloads differ; in-memory quotas, checked after the model call.
+Do (APP):
+1. Implement AuthRepository (Firebase Auth: email+password and Google via Credential Manager) behind the Login screen from Phase 2. Persist session; sign-out in Settings.
+2. OkHttp interceptor: `Authorization: Bearer <FirebaseUser.getIdToken(false)>` (refresh on 401 once) and `X-Firebase-AppCheck: <real App Check token>` (Play Integrity provider in prod, debug provider in dev). Delete all "stage1-*" strings.
+3. If not signed in, app shows Login; offline/local tools still work.
+Do (BACKEND):
+4. Remove the `debug-` and NODE_ENV bypass completely. Inject the verifier so tests use a fake verifier from test code only. Server must refuse to start if NODE_ENV=test on Cloud Run.
+5. Quotas/rate limits in Firestore (or Redis): shared across instances; reserve estimated tokens BEFORE the model call and reconcile after; cap in-memory structures.
+6. Write docs/api-contract.md and make BOTH sides match it exactly:
+   POST /v1/agent/step  request { messages[{role,content,toolCallId?,toolName?}], tools[{name,description,parametersJsonSchema,riskLevel}], screenContext?{packageName,activityName,screenHash,nodes[]}, memoryContext?[string], language }  response { assistantText?, toolCalls[{id,name,args}], memoryCandidates[{id,category,keyLabel,contentValue,sourceUtterance}] }.
+   Gemini function-calling done properly: tool outputs go back as functionResponse parts (never as user text). Only the owner's spoken text is <user_input>; screen text, notification text and tool outputs are <untrusted_data> and can never trigger HIGH-risk tools by themselves. Memories/system rules go in systemInstruction or a separate block. Full conversation history is sent (not only the last turn).
+7. Contract tests: app DTO JSON -> backend validator, backend response -> app parser. Endpoint tests with supertest-style requests (auth required, 401/403/429 paths).
+Acceptance: request with "Bearer debug-x" gets 401/403; app works end to end with USE_FAKE_BACKEND=false.
+
+=====================================================================
+PHASE 5 — Agent loop correctness
+=====================================================================
+Problems (AgentOrchestrator.kt): failed tools retried twice even for send_sms/whatsapp/call/quick-reply; runCatching around tool.execute swallows CancellationException (KillSwitch); the 60s withTimeout also counts the time the user takes to confirm; confirmation is on-screen only; one stale screen context is reused for several tool calls in a step; routines run unattended but confirmation UI is invisible.
+Do:
+1. Add `idempotent: Boolean` to Tool. Retry only idempotent/read-only tools. Non-idempotent: single attempt, failure reported.
+2. Re-throw CancellationException inside tool execution wrappers; KillSwitch must stop mid-tool.
+3. Pause the loop timeout while waiting for user confirmation; confirmation has its own 30s timeout (deny on expire) shown in the sheet.
+4. MEDIUM risk: voice confirmation ("haan/yes/नहीं/no") in addition to the sheet; if the app is in background show a heads-up notification with Approve/Deny actions.
+5. Fetch a fresh screen context before EACH tool call that depends on it.
+6. Unattended runs (routines): only LOW-risk tools execute; MEDIUM/HIGH => notification "Approval needed" and the run waits/aborts.
+7. Add `request_screen` and `ask_user` tools (clarifying questions) so the model can disambiguate instead of guessing.
+8. Unit tests with fake backend/tools/TTS: retry policy, cancellation, timeout pause, unattended policy, stuck detection.
+
+=====================================================================
+PHASE 6 — Real natural voice
+=====================================================================
+Problems: no real TTS anywhere; backend /v1/tts returns silence; /v1/stt is an empty stub; Android robotic TTS speaks after a beep.
+Do:
+1. Backend: implement real neural TTS for Hindi/Hinglish/English behind a TtsProvider interface (choose by env: Google Cloud TTS Chirp 3 HD / Neural2 hi-IN, Gemini native audio, or ElevenLabs — pick the best Hindi quality and cost, verify language/voice availability, document the choice). Stream sentence-chunked audio (Opus or 24kHz PCM). Map the app's VoiceProfile entries to real provider voice IDs. Per-user TTS char budget stays.
+2. App: stream chunks into AudioTrack (MODE_STREAM) and start playing at the first chunk; Android TextToSpeech is ONLY an error/offline fallback and must never speak at the same time. Barge-in cancels the stream instantly; audio focus handled; pause on phone call.
+3. STT: keep Android SpeechRecognizer as default (hi-IN / en-IN) and add backend streaming STT (Gemini/Google STT) behind SpeechRecognizerWrapper as an option; fix the stub endpoint or remove it. Handle Hinglish by auto language detection where the provider supports it.
+4. Real latency measurement (speech-end -> first audio byte), logged to dev panel only. Warm-up/pre-connect to reduce first-chunk time.
+5. Conversational tone: system instruction asks for short, warm, natural replies (max 2 sentences), no markdown/emoji in spoken text; strip symbols before TTS.
+Acceptance: no beep, no double voice, noticeably human voice, interruptible.
+
+=====================================================================
+PHASE 7 — Real wake word
+=====================================================================
+Problems: PorcupineWakeWordEngineImpl is a stub in AndroidTtsEngineWrapper.kt (only flips a flag; no AudioRecord, no SDK dependency); BootCompletedReceiver tries to start a microphone FGS from BOOT_COMPLETED (not allowed on Android 15).
+Do:
+1. Move the engine to services/voice/PorcupineWakeWordEngine.kt. Add Picovoice Porcupine dependency (or openWakeWord), AccessKey from local secrets/BuildConfig (never committed), custom "Hey Jarvis" keyword file in assets (README: how to train/download in Picovoice Console).
+2. VoiceForegroundService runs a real AudioRecord loop (16kHz, Porcupine frame length), fires callback on detection, hands the mic to SpeechRecognizer, then resumes listening. Pause = release AudioRecord (mic really off). Sensitivity setting wired for real. Persistent "mic active" indicator.
+3. Boot: do NOT start the microphone FGS from BOOT_COMPLETED on Android 15+. Show a notification "Tap to enable Hey Jarvis" instead.
+4. If the key/keyword is missing, hide the wake-word toggle and show "Not configured" — never a fake toggle.
+5. OEM battery guide screens kept; watchdog restarts only when truly dead.
+
+=====================================================================
+PHASE 8 — Routines & triggers
+=====================================================================
+Problems: new routines are scheduled with id=0 so the receiver finds nothing; alarm is one-shot setWindow, never rescheduled, not restored after reboot, not cancelled on disable/delete; seeded routines never scheduled; no canScheduleExactAlarms check; HEADSET_PLUG cannot be received from the manifest.
+Do:
+1. Use the real id returned by Room insert. Schedule with setExactAndAllowWhileIdle when canScheduleExactAlarms() (else inexact + explain), reschedule next day inside the receiver after firing, reschedule all enabled routines on BOOT_COMPLETED/MY_PACKAGE_REPLACED, cancel on disable/delete.
+2. Charging / headset / Bluetooth-car triggers: runtime-registered receivers owned by a foreground service (or JobScheduler/WorkManager where possible); remove HEADSET_PLUG from the manifest.
+3. Respect quiet hours and the unattended policy from Phase 5.
+4. Remove GEOFENCE trigger from UI unless implemented with the location permission flow.
+5. Tests for next-run calculation (DST/timezone), reboot restore, cancel.
+
+=====================================================================
+PHASE 9 — Release hardening & tests
+=====================================================================
+Do:
+1. R8: isMinifyEnabled=true + shrinkResources for release; verify keep rules (Moshi, Retrofit, Room, Firebase) by running a release build.
+2. Real applicationId/namespace, versionName, signing via env; minSdk 29 (PRD); add gradlew + wrapper jar; README with exact setup (Firebase google-services.json, App Check, Picovoice, TTS provider, backend deploy, secrets).
+3. Real Hilt (add dependencies) OR delete the fake annotations and document manual DI. No misleading annotations.
+4. Network security config: real backend domain + pins (with backup pin + expiry note).
+5. Manifest: STORE_SAFE flavor removes AccessibilityService, QUERY_ALL_PACKAGES, SYSTEM_ALERT_WINDOW and adds proper <queries>. Replace sample backup rules with real ones (exclude DB/DataStore).
+6. Crashlytics + opt-in analytics (no PII); privacy policy screen; data export/delete verified.
+7. Tests: AgentOrchestrator, SafetyGate (all risk/policy combos), every tool, repositories, ContactsResolver, Migrations, backend endpoints; Compose UI tests for Login, Home, Safety sheet, Permissions; TalkBack labels for all icon buttons.
+8. Final release checklist file: real-phone test matrix (Samsung, Xiaomi, Realme, Pixel), battery 1-hour test, Android 13/14/15.
+
+<final_output>
+After Phase 9 print: a table of every review finding (C1–C8, H1–H3, M1–M3) with status FIXED / PARTIAL / NEEDS USER ACTION, and the list of manual steps still required from the user.
+</final_output>
