@@ -1,388 +1,335 @@
 package com.example.ui.screens
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountCircle
-import androidx.compose.material.icons.filled.Visibility
-import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material.icons.filled.Email
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.VerifiedUser
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
-import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import com.example.ui.components.AuroraBackground
-import com.example.ui.components.GhostButton
-import com.example.ui.components.GlassCard
-import com.example.ui.components.GlassTextField
-import com.example.ui.components.GradientButton
-import com.example.ui.theme.Danger
-import com.example.ui.theme.ElectricBlue
-import com.example.ui.theme.GlassStroke
-import com.example.ui.theme.GlassStrokeStrong
-import com.example.ui.theme.Indigo600
-import com.example.ui.theme.Lavender
-import com.example.ui.theme.Success
-import com.example.ui.theme.TextMuted
-import com.example.ui.theme.TextPrimary
-import com.example.ui.theme.TextSecondary
-import com.example.ui.theme.Violet500
-import com.example.ui.theme.Violet600
+import androidx.credentials.CredentialManager
+import androidx.credentials.CustomCredential
+import androidx.credentials.GetCredentialRequest
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.BuildConfig
+import com.example.R
+import com.example.ui.components.AuroraGlassCard
+import com.example.ui.components.AuroraStatusPill
+import com.example.ui.theme.AuroraColors
+import com.example.ui.viewmodel.AuthViewModel
+import com.google.android.libraries.identity.googleid.GetGoogleIdOption
+import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
+import kotlinx.coroutines.launch
 
-/**
- * 2.6 Login / Welcome Screen (match mock "1 · Login / Welcome"):
- * JARVIS mark (64dp gradient rounded square with white ring) + wordmark "JARVIS" letter-spaced +
- * "Welcome back" (30sp, extra-bold) + sub "Sign in to continue · आपका स्वागत है" +
- * GlassCard containing: Email (GlassTextField), Password (with show/hide),
- * "Forgot password?" (Lavender), GradientButton "Login", divider "or",
- * GhostButton "Continue with Google"; footer "New here? Create account".
- * Inline errors in Danger color; disable button + progress while loading.
- */
 @Composable
 fun LoginScreen(
-    isLoading: Boolean = false,
-    errorMessage: String? = null,
-    statusMessage: String? = null,
-    onLoginWithEmail: (email: String, password: String) -> Unit,
-    onCreateAccountWithEmail: (email: String, password: String) -> Unit,
-    onForgotPassword: (email: String) -> Unit,
-    onContinueWithGoogle: () -> Unit,
-    onContinueOffline: (() -> Unit)? = null
+    viewModel: AuthViewModel,
+    onContinueToAssistant: () -> Unit
 ) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val session by viewModel.currentSession.collectAsStateWithLifecycle()
+    val isLoading by viewModel.isLoading.collectAsStateWithLifecycle()
+    val statusMessage by viewModel.statusMessage.collectAsStateWithLifecycle()
+
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
-    var showPassword by remember { mutableStateOf(false) }
-    var isCreateAccountMode by remember { mutableStateOf(false) }
-    var localValidationError by remember { mutableStateOf<String?>(null) }
+    var googleError by remember { mutableStateOf<String?>(null) }
 
-    val displayedError = localValidationError ?: errorMessage
-
-    fun validateInputs(requirePassword: Boolean = true): Boolean {
-        val trimmedEmail = email.trim()
-        if (trimmedEmail.isEmpty() || !trimmedEmail.contains("@") || !trimmedEmail.contains(".")) {
-            localValidationError = "Please enter a valid email address."
-            return false
-        }
-        if (requirePassword && password.length < 6) {
-            localValidationError = "Password must be at least 6 characters."
-            return false
-        }
-        localValidationError = null
-        return true
-    }
-
-    AuroraBackground {
-        LazyColumn(
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(
+                Brush.verticalGradient(
+                    colors = listOf(
+                        AuroraColors.BackgroundDeep,
+                        AuroraColors.SurfacePrimary,
+                        AuroraColors.BackgroundDeep
+                    )
+                )
+            )
+            .imePadding()
+            .padding(horizontal = 20.dp, vertical = 16.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
             modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = 22.dp),
-            contentPadding = PaddingValues(top = 36.dp, bottom = 36.dp),
+                .fillMaxWidth()
+                .widthIn(max = 460.dp)
+                .verticalScroll(rememberScrollState()),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(18.dp)
+            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            item {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    // JARVIS mark (64dp gradient rounded square with white ring)
-                    val markShape = RoundedCornerShape(20.dp)
-                    Box(
-                        modifier = Modifier
-                            .size(64.dp)
-                            .shadow(
-                                elevation = 16.dp,
-                                shape = markShape,
-                                ambientColor = Violet500.copy(alpha = 0.55f),
-                                spotColor = ElectricBlue.copy(alpha = 0.55f)
-                            )
-                            .clip(markShape)
-                            .background(
-                                Brush.linearGradient(listOf(Violet500, Violet600, ElectricBlue)),
-                                markShape
-                            )
-                            .border(1.dp, GlassStrokeStrong, markShape),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(28.dp)
-                                .border(2.5.dp, Color.White, CircleShape)
-                        )
-                    }
+            Icon(
+                imageVector = Icons.Default.VerifiedUser,
+                contentDescription = stringResource(R.string.login_title),
+                tint = AuroraColors.ElectricViolet,
+                modifier = Modifier.size(52.dp)
+            )
 
-                    Text(
-                        text = "JARVIS",
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Bold,
-                        letterSpacing = 3.2.sp,
-                        color = Lavender
-                    )
+            Text(
+                text = stringResource(R.string.login_title),
+                style = MaterialTheme.typography.headlineMedium,
+                color = AuroraColors.TextPrimary,
+                textAlign = TextAlign.Center
+            )
 
-                    Text(
-                        text = if (isCreateAccountMode) "Create account" else "Welcome back",
-                        style = MaterialTheme.typography.headlineLarge,
-                        color = TextPrimary
-                    )
+            Text(
+                text = stringResource(R.string.login_subtitle),
+                style = MaterialTheme.typography.bodyMedium,
+                color = AuroraColors.TextSecondary,
+                textAlign = TextAlign.Center
+            )
 
-                    Text(
-                        text = "Sign in to continue · आपका स्वागत है",
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = TextSecondary
-                    )
-                }
+            if (!viewModel.isFirebaseConfigured) {
+                AuroraStatusPill(
+                    text = stringResource(R.string.login_firebase_not_configured),
+                    color = AuroraColors.AmberWarning
+                )
             }
 
-            item {
-                GlassCard(
+            AuroraGlassCard(modifier = Modifier.fillMaxWidth()) {
+                OutlinedTextField(
+                    value = email,
+                    onValueChange = { email = it },
+                    label = { Text(stringResource(R.string.login_email_label)) },
+                    leadingIcon = {
+                        Icon(
+                            imageVector = Icons.Default.Email,
+                            contentDescription = stringResource(R.string.login_email_label),
+                            tint = AuroraColors.CyanGlow
+                        )
+                    },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = AuroraColors.ElectricViolet,
+                        unfocusedBorderColor = AuroraColors.GlassBorder,
+                        focusedTextColor = AuroraColors.TextPrimary,
+                        unfocusedTextColor = AuroraColors.TextPrimary
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("login_email_input")
+                )
+
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = { password = it },
+                    label = { Text(stringResource(R.string.login_password_label)) },
+                    leadingIcon = {
+                        Icon(
+                            imageVector = Icons.Default.Lock,
+                            contentDescription = stringResource(R.string.login_password_label),
+                            tint = AuroraColors.CyanGlow
+                        )
+                    },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = AuroraColors.ElectricViolet,
+                        unfocusedBorderColor = AuroraColors.GlassBorder,
+                        focusedTextColor = AuroraColors.TextPrimary,
+                        unfocusedTextColor = AuroraColors.TextPrimary
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("login_password_input")
+                )
+
+                if (statusMessage != null || googleError != null) {
+                    Text(
+                        text = googleError ?: statusMessage.orEmpty(),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = AuroraColors.CyanGlow,
+                        modifier = Modifier.testTag("login_status_text")
+                    )
+                }
+
+                Row(
                     modifier = Modifier.fillMaxWidth(),
-                    contentPadding = 20.dp
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                        GlassTextField(
-                            value = email,
-                            onValueChange = {
-                                email = it
-                                localValidationError = null
-                            },
-                            label = "Email",
-                            placeholder = "you@example.com",
-                            keyboardOptions = KeyboardOptions(
-                                keyboardType = KeyboardType.Email,
-                                imeAction = ImeAction.Next
-                            ),
-                            testTag = "login_email_field"
-                        )
-
-                        GlassTextField(
-                            value = password,
-                            onValueChange = {
-                                password = it
-                                localValidationError = null
-                            },
-                            label = "Password",
-                            placeholder = "••••••••",
-                            visualTransformation = if (showPassword) {
-                                VisualTransformation.None
-                            } else {
-                                PasswordVisualTransformation()
-                            },
-                            keyboardOptions = KeyboardOptions(
-                                keyboardType = KeyboardType.Password,
-                                imeAction = ImeAction.Done
-                            ),
-                            trailingIcon = {
-                                IconButton(
-                                    onClick = { showPassword = !showPassword },
-                                    modifier = Modifier.testTag("login_password_toggle")
-                                ) {
-                                    Icon(
-                                        imageVector = if (showPassword) {
-                                            Icons.Default.VisibilityOff
-                                        } else {
-                                            Icons.Default.Visibility
-                                        },
-                                        contentDescription = if (showPassword) "Hide password" else "Show password",
-                                        tint = TextSecondary
-                                    )
-                                }
-                            },
-                            testTag = "login_password_field"
-                        )
-
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.End
-                        ) {
-                            Text(
-                                text = "Forgot password?",
-                                style = MaterialTheme.typography.labelLarge,
-                                color = Lavender,
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .clickable(enabled = !isLoading) {
-                                        if (validateInputs(requirePassword = false)) {
-                                            onForgotPassword(email.trim())
-                                        }
-                                    }
-                                    .padding(horizontal = 4.dp, vertical = 2.dp)
-                                    .testTag("forgot_password_button")
-                            )
-                        }
-
-                        if (!displayedError.isNullOrBlank()) {
-                            Text(
-                                text = displayedError,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = Danger,
-                                modifier = Modifier.testTag("login_error_text")
-                            )
-                        }
-
-                        if (!statusMessage.isNullOrBlank()) {
-                            Text(
-                                text = statusMessage,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = Success,
-                                modifier = Modifier.testTag("login_status_text")
-                            )
-                        }
-
+                    Button(
+                        onClick = { viewModel.signInWithEmail(email, password) },
+                        enabled = !isLoading,
+                        colors = ButtonDefaults.buttonColors(containerColor = AuroraColors.ElectricViolet),
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(48.dp)
+                            .testTag("login_signin_button")
+                    ) {
                         if (isLoading) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.Center,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                CircularProgressIndicator(
-                                    color = Lavender,
-                                    strokeWidth = 2.5.dp,
-                                    modifier = Modifier
-                                        .size(22.dp)
-                                        .testTag("login_loading_indicator")
-                                )
-                                Spacer(modifier = Modifier.width(10.dp))
-                                Text(
-                                    text = "Signing in…",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = TextSecondary
-                                )
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                color = AuroraColors.TextPrimary,
+                                strokeWidth = 2.dp
+                            )
+                        } else {
+                            Text(
+                                text = stringResource(R.string.login_sign_in_button),
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    }
+
+                    OutlinedButton(
+                        onClick = { viewModel.registerWithEmail(email, password) },
+                        enabled = !isLoading,
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(48.dp)
+                            .testTag("login_register_button")
+                    ) {
+                        Text(
+                            text = stringResource(R.string.login_create_account_button),
+                            color = AuroraColors.TextPrimary
+                        )
+                    }
+                }
+
+                TextButton(
+                    onClick = { viewModel.sendPasswordReset(email) },
+                    modifier = Modifier
+                        .align(Alignment.End)
+                        .testTag("login_reset_password_button")
+                ) {
+                    Text(
+                        text = stringResource(R.string.login_forgot_password),
+                        color = AuroraColors.CyanGlow
+                    )
+                }
+
+                HorizontalDivider(color = AuroraColors.GlassBorder)
+
+                OutlinedButton(
+                    onClick = {
+                        val webClientId = BuildConfig.GOOGLE_WEB_CLIENT_ID.trim()
+                        if (webClientId.isEmpty() || webClientId.startsWith("YOUR_")) {
+                            googleError = "GOOGLE_WEB_CLIENT_ID is not configured in Secrets."
+                            return@OutlinedButton
+                        }
+                        googleError = null
+                        scope.launch {
+                            try {
+                                val credentialManager = CredentialManager.create(context)
+                                val googleIdOption = GetGoogleIdOption.Builder()
+                                    .setFilterByAuthorizedAccounts(false)
+                                    .setServerClientId(webClientId)
+                                    .build()
+                                val request = GetCredentialRequest.Builder()
+                                    .addCredentialOption(googleIdOption)
+                                    .build()
+                                val result = credentialManager.getCredential(context, request)
+                                val cred = result.credential
+                                if (cred is CustomCredential &&
+                                    cred.type == GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL
+                                ) {
+                                    val googleIdTokenCred = GoogleIdTokenCredential.createFrom(cred.data)
+                                    viewModel.signInWithGoogleIdToken(googleIdTokenCred.idToken)
+                                } else {
+                                    googleError = "Unsupported credential returned."
+                                }
+                            } catch (e: Exception) {
+                                googleError = "Google Sign-In cancelled or unavailable: ${e.localizedMessage ?: "error"}"
                             }
                         }
-
-                        GradientButton(
-                            text = if (isCreateAccountMode) "Create account" else "Login",
-                            enabled = !isLoading,
-                            onClick = {
-                                if (validateInputs(requirePassword = true)) {
-                                    if (isCreateAccountMode) {
-                                        onCreateAccountWithEmail(email.trim(), password)
-                                    } else {
-                                        onLoginWithEmail(email.trim(), password)
-                                    }
-                                }
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                            testTag = "login_submit_button"
-                        )
-
-                        // Divider "or"
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 2.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            HorizontalDivider(
-                                modifier = Modifier.weight(1f),
-                                color = GlassStroke
-                            )
-                            Text(
-                                text = "or",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = TextMuted,
-                                modifier = Modifier.padding(horizontal = 12.dp)
-                            )
-                            HorizontalDivider(
-                                modifier = Modifier.weight(1f),
-                                color = GlassStroke
-                            )
-                        }
-
-                        GhostButton(
-                            text = "Continue with Google",
-                            enabled = !isLoading,
-                            leadingIcon = Icons.Default.AccountCircle,
-                            onClick = {
-                                localValidationError = null
-                                onContinueWithGoogle()
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                            testTag = "google_sign_in_button"
-                        )
-                    }
+                    },
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp)
+                        .testTag("login_google_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.AccountCircle,
+                        contentDescription = stringResource(R.string.login_google_button),
+                        tint = AuroraColors.CyanGlow
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = stringResource(R.string.login_google_button),
+                        color = AuroraColors.TextPrimary
+                    )
                 }
             }
 
-            item {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
+            if (session != null) {
+                Button(
+                    onClick = onContinueToAssistant,
+                    colors = ButtonDefaults.buttonColors(containerColor = AuroraColors.EmeraldSuccess),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp)
+                        .testTag("login_continue_authenticated_button")
                 ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.Center
-                    ) {
-                        Text(
-                            text = if (isCreateAccountMode) "Already have an account? " else "New here? ",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = TextSecondary
-                        )
-                        Text(
-                            text = if (isCreateAccountMode) "Login" else "Create account",
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = Lavender,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(8.dp))
-                                .clickable(enabled = !isLoading) {
-                                    isCreateAccountMode = !isCreateAccountMode
-                                    localValidationError = null
-                                }
-                                .padding(horizontal = 6.dp, vertical = 4.dp)
-                                .testTag("toggle_auth_mode_button")
-                        )
-                    }
+                    Text(
+                        text = stringResource(R.string.app_name),
+                        color = AuroraColors.BackgroundDeep,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
 
-                    if (onContinueOffline != null) {
-                        Text(
-                            text = "Continue with offline phone tools",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = TextMuted,
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(8.dp))
-                                .clickable(enabled = !isLoading, onClick = onContinueOffline)
-                                .padding(horizontal = 8.dp, vertical = 4.dp)
-                                .testTag("continue_offline_button")
-                        )
-                    }
+            // Guest / Offline bypass button is strictly hidden in release builds
+            if (BuildConfig.IS_DEV_FLAVOR) {
+                TextButton(
+                    onClick = onContinueToAssistant,
+                    modifier = Modifier
+                        .height(48.dp)
+                        .testTag("login_continue_offline_button")
+                ) {
+                    Text(
+                        text = stringResource(R.string.login_dev_offline_mode),
+                        color = AuroraColors.TextSecondary
+                    )
                 }
             }
         }

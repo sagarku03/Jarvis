@@ -1,31 +1,31 @@
 package com.example
 
 import android.app.Application
+import android.content.Intent
+import android.content.IntentFilter
 import com.example.di.AppContainer
-import com.example.di.HiltAndroidApp
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.launch
+import com.example.services.RoutineTriggerReceiver
 
-@HiltAndroidApp
 class JarvisApplication : Application() {
 
-    lateinit var container: AppContainer
+    lateinit var appContainer: AppContainer
         private set
 
-    private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    val container: AppContainer
+        get() = appContainer
+
+    private val headsetReceiver = RoutineTriggerReceiver()
 
     override fun onCreate() {
         super.onCreate()
-        container = AppContainer(this)
-        appScope.launch {
-            runCatching {
-                container.flavorEnvironment.seedDemoDataIfDev(
-                    memoryRepository = container.memoryRepository,
-                    routineRepository = container.routineRepository
-                )
-            }
+        appContainer = AppContainer(this)
+
+        // HEADSET_PLUG is a sticky runtime-only broadcast and must be registered dynamically
+        runCatching {
+            registerReceiver(
+                headsetReceiver,
+                IntentFilter(Intent.ACTION_HEADSET_PLUG)
+            )
         }
     }
 }

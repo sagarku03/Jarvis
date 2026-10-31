@@ -2,32 +2,36 @@ package com.example.services.voice
 
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
-import androidx.core.content.ContextCompat
+import com.example.R
 import com.example.di.Inject
 import com.example.di.Singleton
 import com.example.domain.model.AppLanguage
-import com.example.domain.safety.KillSwitch
-import com.example.domain.voice.SpeechRecognizerWrapper
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
+/**
+ * Single-instance Android SpeechRecognizer wrapper.
+ * - Reuses a single SpeechRecognizer on the main thread and destroys it only in shutdown().
+ * - Emits live normalized RMS level from onRmsChanged(rmsdB) for orb animations.
+ * - Explicitly handles every SpeechRecognizer.ERROR_* code with strings.xml resources.
+ * - Retries ERROR_RECOGNIZER_BUSY once after 300ms after cancelling.
+ * - Measures real end-of-speech to final-result latency.
+ */
 @Singleton
 class AndroidSpeechRecognizerWrapper @Inject constructor(
-    private val context: Context,
-    killSwitch: KillSwitch
+    private val context: Context
 ) : SpeechRecognizerWrapper {
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private var recognizer: SpeechRecognizer? = null
-    private var speechEndTimestampMs: Long = 0L
 
     private val _isListening = MutableStateFlow(false)
     override val isListening: StateFlow<Boolean> = _isListening.asStateFlow()
@@ -35,166 +39,234 @@ class AndroidSpeechRecognizerWrapper @Inject constructor(
     private val _partialTranscript = MutableStateFlow("")
     override val partialTranscript: StateFlow<String> = _partialTranscript.asStateFlow()
 
-    private val _finalTranscript = MutableStateFlow("")
-    override val finalTranscript: StateFlow<String> = _finalTranscript.asStateFlow()
+    private val _rmsDbLevel = MutableStateFlow(0f)
+    override val rmsDbLevel: StateFlow<Float> = _rmsDbLevel.asStateFlow()
 
-    private val _errorState = MutableStateFlow<String?>(null)
-    override val errorState: StateFlow<String?> = _errorState.asStateFlow()
+    private val _lastErrorCode = MutableStateFlow<Int?>(null)
+    override val lastErrorCode: StateFlow<Int?> = _lastErrorCode.asStateFlow()
 
-    private val _lastSttLatencyMs = MutableStateFlow(135L)
+    private val _lastErrorMessage = MutableStateFlow("None")
+    override val lastErrorMessage: StateFlow<String> = _lastErrorMessage.asStateFlow()
+
+    private val _lastSttLatencyMs = MutableStateFlow(0L)
     override val lastSttLatencyMs: StateFlow<Long> = _lastSttLatencyMs.asStateFlow()
 
-    init {
-        killSwitch.registerCancelCallback {
-            stopListening()
+    private var speechEndTimestampMs: Long = 0L
+    private var listenStartTimestampMs: Long = 0L
+    private var retriedBusyInCurrentTurn: Boolean = false
+
+    private var activeLanguage: AppLanguage = AppLanguage.EN_IN
+    private var activeOnFinal: ((String) -> Unit)? = null
+    private var activeOnError: ((String) -> Unit)? = null
+
+    private fun getOrCreateRecognizer(): SpeechRecognizer {
+        val existing = recognizer
+        if (existing != null) return existing
+        val created = SpeechRecognizer.createSpeechRecognizer(context.applicationContext)
+        created.setRecognitionListener(recognitionListener)
+        recognizer = created
+        return created
+    }
+
+    private val recognitionListener = object : RecognitionListener {
+        override fun onReadyForSpeech(params: Bundle?) {
+            _isListening.value = true
+            _lastErrorCode.value = null
+            _lastErrorMessage.value = "Listening"
         }
+
+        override fun onBeginningOfSpeech() {
+            _isListening.value = true
+            speechEndTimestampMs = 0L
+        }
+
+        override fun onRmsChanged(rmsdB: Float) {
+            // Map typical SpeechRecognizer RMS range (-2 dB .. +10 dB) into 0f..1f
+            val normalized = ((rmsdB + 2f) / 12f).coerceIn(0f, 1f)
+            _rmsDbLevel.value = normalized
+        }
+
+        override fun onBufferReceived(buffer: ByteArray?) = Unit
+
+        override fun onEndOfSpeech() {
+            speechEndTimestampMs = SystemClock.elapsedRealtime()
+            _isListening.value = false
+            _rmsDbLevel.value = 0f
+        }
+
+        override fun onError(error: Int) {
+            _isListening.value = false
+            _rmsDbLevel.value = 0f
+            _lastErrorCode.value = error
+
+            if (error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY && !retriedBusyInCurrentTurn) {
+                retriedBusyInCurrentTurn = true
+                _lastErrorMessage.value = context.getString(R.string.stt_error_busy)
+                runCatching { recognizer?.cancel() }
+                mainHandler.postDelayed({
+                    startListeningInternal()
+                }, 300L)
+                return
+            }
+
+            // Ignore benign ERROR_CLIENT when we explicitly cancelled listening
+            if (error == SpeechRecognizer.ERROR_CLIENT && activeOnFinal == null) {
+                return
+            }
+
+            val message = mapErrorCodeToMessage(error)
+            _lastErrorMessage.value = "$message (code $error)"
+            val errorCallback = activeOnError
+            clearCallbacks()
+            errorCallback?.invoke(message)
+        }
+
+        override fun onResults(results: Bundle?) {
+            _isListening.value = false
+            _rmsDbLevel.value = 0f
+            val now = SystemClock.elapsedRealtime()
+            _lastSttLatencyMs.value = if (speechEndTimestampMs > 0L) {
+                (now - speechEndTimestampMs).coerceAtLeast(1L)
+            } else if (listenStartTimestampMs > 0L) {
+                (now - listenStartTimestampMs).coerceAtLeast(1L)
+            } else {
+                0L
+            }
+
+            val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+            val best = matches?.firstOrNull()?.trim().orEmpty()
+            _partialTranscript.value = best
+            val finalCallback = activeOnFinal
+            val errorCallback = activeOnError
+            clearCallbacks()
+
+            if (best.isNotEmpty()) {
+                _lastErrorCode.value = null
+                _lastErrorMessage.value = "OK"
+                finalCallback?.invoke(best)
+            } else {
+                val msg = context.getString(R.string.stt_error_no_match)
+                _lastErrorMessage.value = msg
+                errorCallback?.invoke(msg)
+            }
+        }
+
+        override fun onPartialResults(partialResults: Bundle?) {
+            val partial = partialResults
+                ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                ?.firstOrNull()
+                ?.trim()
+                .orEmpty()
+            if (partial.isNotEmpty()) {
+                _partialTranscript.value = partial
+            }
+        }
+
+        override fun onEvent(eventType: Int, params: Bundle?) = Unit
     }
 
     override fun startListening(
         language: AppLanguage,
-        onFinalResult: (String) -> Unit,
+        onFinalTranscript: (String) -> Unit,
         onError: (String) -> Unit
     ) {
-        val hasPerm = ContextCompat.checkSelfPermission(
-            context,
-            android.Manifest.permission.RECORD_AUDIO
-        ) == PackageManager.PERMISSION_GRANTED
-
-        if (!hasPerm) {
-            val msg = if (language == AppLanguage.HI_IN) {
-                "माइक्रोफ़ोन अनुमति आवश्यक है। कृपया Access टैब से अनुमति दें।"
-            } else {
-                "Microphone permission is required. Please grant RECORD_AUDIO in the Access tab."
-            }
-            _errorState.value = msg
-            onError(msg)
-            return
-        }
-
         mainHandler.post {
             if (!SpeechRecognizer.isRecognitionAvailable(context)) {
-                val msg = if (language == AppLanguage.HI_IN) {
-                    "इस डिवाइस/एम्यूलेटर पर लाइव स्पीच इंजन उपलब्ध नहीं है। आप नीचे दिए गए कमांड बॉक्स या Quick Prompts का उपयोग कर सकते हैं।"
-                } else {
-                    "Speech recognition service is unavailable on this emulator/device. Use the text/voice command bar or Quick Prompts below."
-                }
-                _errorState.value = msg
                 _isListening.value = false
+                _rmsDbLevel.value = 0f
+                val msg = context.getString(R.string.stt_error_unavailable)
+                _lastErrorMessage.value = msg
                 onError(msg)
                 return@post
             }
 
-            runCatching {
-                recognizer?.destroy()
-                val speechRecognizer = SpeechRecognizer.createSpeechRecognizer(context)
-                recognizer = speechRecognizer
+            activeLanguage = language
+            activeOnFinal = onFinalTranscript
+            activeOnError = onError
+            retriedBusyInCurrentTurn = false
+            startListeningInternal()
+        }
+    }
 
-                speechRecognizer.setRecognitionListener(object : RecognitionListener {
-                    override fun onReadyForSpeech(params: Bundle?) {
-                        _errorState.value = null
-                        _isListening.value = true
-                    }
+    private fun startListeningInternal() {
+        try {
+            val sr = getOrCreateRecognizer()
+            runCatching { sr.cancel() }
 
-                    override fun onBeginningOfSpeech() {
-                        _isListening.value = true
-                    }
-
-                    override fun onRmsChanged(rmsdB: Float) = Unit
-                    override fun onBufferReceived(buffer: ByteArray?) = Unit
-
-                    override fun onEndOfSpeech() {
-                        speechEndTimestampMs = System.currentTimeMillis()
-                        _isListening.value = false
-                    }
-
-                    override fun onError(error: Int) {
-                        _isListening.value = false
-                        val friendlyMsg = mapSpeechError(error, language)
-                        _errorState.value = friendlyMsg
-                        onError(friendlyMsg)
-                    }
-
-                    override fun onResults(results: Bundle?) {
-                        _isListening.value = false
-                        val now = System.currentTimeMillis()
-                        if (speechEndTimestampMs > 0L) {
-                            _lastSttLatencyMs.value = (now - speechEndTimestampMs).coerceIn(40L, 900L)
-                        }
-                        val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                        val text = matches?.firstOrNull()?.trim().orEmpty()
-                        if (text.isNotEmpty()) {
-                            _partialTranscript.value = text
-                            _finalTranscript.value = text
-                            onFinalResult(text)
-                        }
-                    }
-
-                    override fun onPartialResults(partialResults: Bundle?) {
-                        val matches = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                        val partial = matches?.firstOrNull()?.trim().orEmpty()
-                        if (partial.isNotEmpty()) {
-                            _partialTranscript.value = partial
-                        }
-                    }
-
-                    override fun onEvent(eventType: Int, params: Bundle?) = Unit
-                })
-
-                val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-                    putExtra(
-                        RecognizerIntent.EXTRA_LANGUAGE_MODEL,
-                        RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
-                    )
-                    putExtra(RecognizerIntent.EXTRA_LANGUAGE, language.speechLocaleTag)
-                    putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-                    putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
-                    // Stage 2: Silence endpointing hints (1.1s silence)
-                    putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1100L)
-                    putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 900L)
-                }
-
-                _partialTranscript.value = ""
-                speechEndTimestampMs = System.currentTimeMillis()
-                _isListening.value = true
-                speechRecognizer.startListening(intent)
-            }.onFailure { e ->
-                _isListening.value = false
-                val msg = e.localizedMessage ?: "SpeechRecognizer failed to start"
-                _errorState.value = msg
-                onError(msg)
+            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                putExtra(
+                    RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                    RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
+                )
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE, activeLanguage.speechLocale)
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, activeLanguage.speechLocale)
+                putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+                putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
             }
+
+            _partialTranscript.value = ""
+            _rmsDbLevel.value = 0f
+            speechEndTimestampMs = 0L
+            listenStartTimestampMs = SystemClock.elapsedRealtime()
+            _isListening.value = true
+            sr.startListening(intent)
+        } catch (e: Exception) {
+            _isListening.value = false
+            _rmsDbLevel.value = 0f
+            val msg = context.getString(R.string.stt_error_client)
+            _lastErrorMessage.value = msg
+            val errorCallback = activeOnError
+            clearCallbacks()
+            errorCallback?.invoke(msg)
         }
     }
 
     override fun stopListening() {
         mainHandler.post {
-            _isListening.value = false
             runCatching { recognizer?.stopListening() }
+            _isListening.value = false
+            _rmsDbLevel.value = 0f
+        }
+    }
+
+    override fun cancel() {
+        mainHandler.post {
+            clearCallbacks()
             runCatching { recognizer?.cancel() }
+            _isListening.value = false
+            _rmsDbLevel.value = 0f
+            _partialTranscript.value = ""
         }
     }
 
-    override fun clearTranscript() {
-        _partialTranscript.value = ""
-        _finalTranscript.value = ""
-        _errorState.value = null
+    override fun shutdown() {
+        mainHandler.post {
+            clearCallbacks()
+            runCatching {
+                recognizer?.cancel()
+                recognizer?.destroy()
+            }
+            recognizer = null
+            _isListening.value = false
+            _rmsDbLevel.value = 0f
+        }
     }
 
-    private fun mapSpeechError(errorCode: Int, language: AppLanguage): String {
-        val isHi = language == AppLanguage.HI_IN
-        return when (errorCode) {
-            SpeechRecognizer.ERROR_NO_MATCH, SpeechRecognizer.ERROR_SPEECH_TIMEOUT ->
-                if (isHi) "कोई स्पष्ट आवाज़ नहीं सुनाई दी। कृपया फिर से बोलें या नीचे कमांड चुनें।"
-                else "No speech detected on microphone. Speak again or tap a Quick Command chip below."
-            SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS ->
-                if (isHi) "माइक्रोफ़ोन की अनुमति नहीं मिली।"
-                else "Microphone permission denied."
-            SpeechRecognizer.ERROR_NETWORK, SpeechRecognizer.ERROR_NETWORK_TIMEOUT ->
-                if (isHi) "स्पीच नेटवर्क त्रुटि। लोकल ऑफ़लाइन मोड तैयार है।"
-                else "Speech network error. Offline fallback ready."
-            else ->
-                if (isHi) "माइक्रोफ़ोन इनपुट उपलब्ध नहीं है (कोड $errorCode)। आप नीचे टेक्स्ट/त्वरित कमांड का उपयोग कर सकते हैं।"
-                else "Mic input unavailable on emulator (code $errorCode). You can type or tap any Quick Command below."
-        }
+    private fun clearCallbacks() {
+        activeOnFinal = null
+        activeOnError = null
+    }
+
+    private fun mapErrorCodeToMessage(error: Int): String = when (error) {
+        SpeechRecognizer.ERROR_NO_MATCH -> context.getString(R.string.stt_error_no_match)
+        SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> context.getString(R.string.stt_error_speech_timeout)
+        SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> context.getString(R.string.stt_error_busy)
+        SpeechRecognizer.ERROR_NETWORK -> context.getString(R.string.stt_error_network)
+        SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> context.getString(R.string.stt_error_network_timeout)
+        SpeechRecognizer.ERROR_SERVER -> context.getString(R.string.stt_error_server)
+        SpeechRecognizer.ERROR_AUDIO -> context.getString(R.string.stt_error_audio)
+        SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> context.getString(R.string.stt_error_permissions)
+        SpeechRecognizer.ERROR_CLIENT -> context.getString(R.string.stt_error_client)
+        else -> context.getString(R.string.stt_error_no_match)
     }
 }

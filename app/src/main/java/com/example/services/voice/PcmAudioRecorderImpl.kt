@@ -2,15 +2,12 @@ package com.example.services.voice
 
 import android.annotation.SuppressLint
 import android.content.Context
-import android.content.pm.PackageManager
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
-import androidx.core.content.ContextCompat
 import com.example.di.Inject
 import com.example.di.Singleton
-import com.example.domain.safety.KillSwitch
-import com.example.domain.voice.AudioRecorder
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -20,165 +17,96 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlin.math.log10
 import kotlin.math.sqrt
 
-/**
- * Stage 2: 16kHz Mono 16-bit PCM AudioRecorder with adaptive Noise Gate and Silence Endpointing.
- * Strict privacy policy: Raw PCM frames are processed strictly in-memory and never logged or stored.
- */
 @Singleton
 class PcmAudioRecorderImpl @Inject constructor(
-    private val context: Context,
-    killSwitch: KillSwitch
-) : AudioRecorder {
+    @Suppress("unused") private val context: Context
+) : PcmAudioRecorder {
 
-    companion object {
-        const val SAMPLE_RATE_HZ = 16000
-        private const val CHANNEL_CONFIG = AudioFormat.CHANNEL_IN_MONO
-        private const val AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT
-        private const val SPEECH_THRESHOLD_DB = -36f
-    }
-
-    private val recorderScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var recordingJob: Job? = null
     private var audioRecord: AudioRecord? = null
 
     private val _isRecording = MutableStateFlow(false)
     override val isRecording: StateFlow<Boolean> = _isRecording.asStateFlow()
 
-    private val _rmsDbLevel = MutableStateFlow(0f)
-    override val rmsDbLevel: StateFlow<Float> = _rmsDbLevel.asStateFlow()
-
-    private val _noiseFloorDb = MutableStateFlow(-48f)
-    override val noiseFloorDb: StateFlow<Float> = _noiseFloorDb.asStateFlow()
-
-    private val _silenceEndpointTriggered = MutableStateFlow(false)
-    override val silenceEndpointTriggered: StateFlow<Boolean> = _silenceEndpointTriggered.asStateFlow()
-
-    init {
-        killSwitch.registerCancelCallback {
-            stopRecording()
-        }
-    }
+    private val _rmsEnergyLevel = MutableStateFlow(0f)
+    override val rmsEnergyLevel: StateFlow<Float> = _rmsEnergyLevel.asStateFlow()
 
     @SuppressLint("MissingPermission")
     override fun startRecording(
-        enableSilenceEndpointing: Boolean,
-        silenceDurationMs: Long,
-        onSilenceEndpoint: (() -> Unit)?,
-        onPcmFrame: (ShortArray) -> Unit
+        onPcmFrame: (ShortArray) -> Unit,
+        onSilenceEndpointDetected: () -> Unit
     ): Boolean {
-        val hasMicPerm = ContextCompat.checkSelfPermission(
-            context,
-            android.Manifest.permission.RECORD_AUDIO
-        ) == PackageManager.PERMISSION_GRANTED
+        stopRecording()
+        val sampleRate = 16000
+        val channelConfig = AudioFormat.CHANNEL_IN_MONO
+        val audioFormat = AudioFormat.ENCODING_PCM_16BIT
+        val minBufSize = AudioRecord.getMinBufferSize(sampleRate, channelConfig, audioFormat)
+            .coerceAtLeast(1024)
 
-        if (!hasMicPerm) {
+        val record = try {
+            AudioRecord(
+                MediaRecorder.AudioSource.VOICE_RECOGNITION,
+                sampleRate,
+                channelConfig,
+                audioFormat,
+                minBufSize * 2
+            )
+        } catch (_: Exception) {
             return false
         }
 
-        stopRecording()
-        _silenceEndpointTriggered.value = false
+        if (record.state != AudioRecord.STATE_INITIALIZED) {
+            runCatching { record.release() }
+            return false
+        }
 
-        val minBufferBytes = AudioRecord.getMinBufferSize(
-            SAMPLE_RATE_HZ,
-            CHANNEL_CONFIG,
-            AUDIO_FORMAT
-        ).coerceAtLeast(3200)
+        audioRecord = record
+        _isRecording.value = true
 
-        return try {
-            val record = AudioRecord(
-                MediaRecorder.AudioSource.VOICE_RECOGNITION,
-                SAMPLE_RATE_HZ,
-                CHANNEL_CONFIG,
-                AUDIO_FORMAT,
-                minBufferBytes * 2
-            )
-
-            if (record.state != AudioRecord.STATE_INITIALIZED) {
-                record.release()
-                return false
-            }
-
-            audioRecord = record
-            record.startRecording()
-            _isRecording.value = true
-
-            recordingJob = recorderScope.launch {
-                val frameBuffer = ShortArray(minBufferBytes / 2)
-                var hasDetectedSpeech = false
-                var silenceStartMs = 0L
-
+        recordingJob = scope.launch {
+            val frameBuffer = ShortArray(512)
+            try {
+                record.startRecording()
                 while (isActive && _isRecording.value) {
                     val readCount = record.read(frameBuffer, 0, frameBuffer.size)
                     if (readCount > 0) {
-                        val slice = frameBuffer.copyOf(readCount)
-                        val rawDb = computeRawDb(slice)
-                        val normalized = ((rawDb + 60f) / 60f).coerceIn(0f, 1f)
-                        _rmsDbLevel.value = normalized
-
-                        // Adaptive noise floor tracking during quiet frames
-                        if (rawDb < SPEECH_THRESHOLD_DB) {
-                            _noiseFloorDb.value = (_noiseFloorDb.value * 0.92f) + (rawDb * 0.08f)
+                        val copy = frameBuffer.copyOf(readCount)
+                        onPcmFrame(copy)
+                        var sumSquares = 0.0
+                        for (i in 0 until readCount) {
+                            val norm = copy[i] / 32768.0
+                            sumSquares += norm * norm
                         }
-
-                        // Noise Gate: suppress low-energy background hum
-                        val denoisedSlice = if (rawDb < _noiseFloorDb.value + 4f) {
-                            ShortArray(slice.size)
-                        } else {
-                            slice
-                        }
-                        onPcmFrame(denoisedSlice)
-
-                        // Silence Endpointing (end-of-speech detection)
-                        if (enableSilenceEndpointing) {
-                            val now = System.currentTimeMillis()
-                            if (rawDb >= SPEECH_THRESHOLD_DB) {
-                                hasDetectedSpeech = true
-                                silenceStartMs = 0L
-                            } else if (hasDetectedSpeech) {
-                                if (silenceStartMs == 0L) {
-                                    silenceStartMs = now
-                                } else if (now - silenceStartMs >= silenceDurationMs) {
-                                    _silenceEndpointTriggered.value = true
-                                    onSilenceEndpoint?.invoke()
-                                    break
-                                }
-                            }
-                        }
+                        val rms = sqrt(sumSquares / readCount).toFloat().coerceIn(0f, 1f)
+                        _rmsEnergyLevel.value = (rms * 4f).coerceIn(0f, 1f)
                     }
                 }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // Ignore hardware stop errors
+            } finally {
+                runCatching {
+                    if (record.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
+                        record.stop()
+                    }
+                    record.release()
+                }
+                _isRecording.value = false
+                _rmsEnergyLevel.value = 0f
             }
-            true
-        } catch (_: Exception) {
-            stopRecording()
-            false
         }
+        return true
     }
 
     override fun stopRecording() {
         _isRecording.value = false
-        _rmsDbLevel.value = 0f
+        _rmsEnergyLevel.value = 0f
         recordingJob?.cancel()
         recordingJob = null
-        runCatching {
-            audioRecord?.stop()
-        }
-        runCatching {
-            audioRecord?.release()
-        }
         audioRecord = null
-    }
-
-    private fun computeRawDb(samples: ShortArray): Float {
-        if (samples.isEmpty()) return -60f
-        var sumSquares = 0.0
-        for (sample in samples) {
-            val normalized = sample / 32768.0
-            sumSquares += normalized * normalized
-        }
-        val rms = sqrt(sumSquares / samples.size)
-        return (20 * log10(rms.coerceAtLeast(1e-5))).toFloat().coerceIn(-60f, 0f)
     }
 }

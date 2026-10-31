@@ -1,5 +1,6 @@
 package com.example.tools
 
+import android.content.Context
 import com.example.di.Inject
 import com.example.di.Singleton
 import com.example.domain.model.RiskLevel
@@ -8,44 +9,53 @@ import com.example.domain.tool.Tool
 import com.example.services.JarvisNotificationListener
 
 @Singleton
-class NotificationActionTool @Inject constructor() : Tool {
-    override val name: String = "read_or_reply_notifications"
-    override val description: String = "Summarizes recent notifications or sends a quick-reply after user confirmation."
-    override val jsonSchema: String = """{"type":"object","properties":{"mode":{"type":"string","description":"summarize or reply"},"notification_key":{"type":"string"},"reply_text":{"type":"string"}},"required":["mode"]}"""
+class NotificationActionTool @Inject constructor(
+    @Suppress("unused") private val context: Context
+) : Tool {
+
+    override val name: String = "notification_action"
+    override val description: String = "Read recent notifications, send an inline reply, or dismiss a notification."
+    override val jsonSchema: String = """{"type":"object","properties":{"action":{"type":"string","enum":["list","reply","dismiss"]},"senderOrApp":{"type":"string"},"replyText":{"type":"string"}},"required":["action"]}"""
     override val riskLevel: RiskLevel = RiskLevel.MEDIUM
 
     override suspend fun execute(args: Map<String, String>): ToolExecutionResult {
-        val mode = args["mode"]?.trim()?.lowercase() ?: "summarize"
-        if (mode == "reply") {
-            val replyText = args["reply_text"]?.trim().orEmpty()
-            if (replyText.isEmpty()) {
-                return ToolExecutionResult(
-                    toolName = name,
-                    success = false,
-                    outputEn = "Quick-reply failed: reply_text is empty.",
-                    outputHi = "त्वरित जवाब विफल: संदेश खाली है।"
-                )
-            }
-            val key = args["notification_key"]
-            val (ok, msg) = JarvisNotificationListener.sendConfirmedQuickReply(key, replyText)
-            return ToolExecutionResult(
-                toolName = name,
-                success = ok,
-                outputEn = msg,
-                outputHi = if (ok) {
-                    "नोटिफिकेशन का त्वरित जवाब भेजा गया: \"$replyText\""
-                } else {
-                    "नोटिफिकेशन का जवाब नहीं भेजा जा सका: $msg"
-                }
-            )
-        }
+        val action = args["action"]?.lowercase()?.trim() ?: "list"
+        val items = JarvisNotificationListener.recentNotifications.value
 
-        val summary = JarvisNotificationListener.summarizeNotifications()
-        return ToolExecutionResult(
-            toolName = name,
-            success = true,
-            outputEn = "Unread notifications: $summary",
-            outputHi = "प्रमुख नोटिफिकेशन सारांश: $summary"
-        )
+        return when (action) {
+            "list" -> {
+                if (items.isEmpty()) {
+                    ToolExecutionResult(
+                        toolName = name,
+                        success = true,
+                        outputEn = "No active notifications found."
+                    )
+                } else {
+                    val summary = items.take(5).joinToString("; ") { item ->
+                        "${item.packageName} (${item.title}): ${item.text}"
+                    }
+                    ToolExecutionResult(
+                        toolName = name,
+                        success = true,
+                        outputEn = "Recent notifications: $summary"
+                    )
+                }
+            }
+            "reply" -> {
+                val query = (args["senderOrApp"] ?: args["sender"] ?: args["app"]).orEmpty().trim()
+                val replyText = (args["replyText"] ?: args["reply_text"] ?: args["message"]).orEmpty().trim()
+                if (replyText.isBlank()) {
+                    return ToolExecutionResult(name, false, "Reply text cannot be empty.")
+                }
+                val (sent, msg) = JarvisNotificationListener.sendInlineReply(query, replyText)
+                ToolExecutionResult(name, sent, msg)
+            }
+            "dismiss" -> {
+                val query = (args["senderOrApp"] ?: args["sender"] ?: args["app"]).orEmpty().trim()
+                val (dismissed, msg) = JarvisNotificationListener.dismissNotification(query)
+                ToolExecutionResult(name, dismissed, msg)
+            }
+            else -> ToolExecutionResult(name, false, "Unsupported notification action '$action'.")
+        }
     }
 }

@@ -1,19 +1,17 @@
 package com.example.domain.repository
 
-import com.example.domain.model.AppResult
-import kotlinx.coroutines.flow.StateFlow
-
-data class AuthUserSession(
-    val uid: String,
-    val email: String?,
-    val displayName: String?
-)
+import com.example.domain.model.AuthResult
+import com.example.domain.model.AuthUserSession
+import kotlinx.coroutines.flow.Flow
 
 interface AuthRepository {
-    val currentUser: StateFlow<AuthUserSession?>
-    suspend fun signInWithEmail(email: String, password: String): AppResult<AuthUserSession>
-    suspend fun signUpWithEmail(email: String, password: String): AppResult<AuthUserSession>
-    suspend fun sendPasswordReset(email: String): AppResult<Unit>
-    suspend fun signInWithGoogleIdToken(idToken: String): AppResult<AuthUserSession>
+    val isFirebaseConfigured: Boolean
+    val currentSessionFlow: Flow<AuthUserSession?>
+
+    suspend fun signInWithEmail(email: String, password: String): AuthResult
+    suspend fun registerWithEmail(email: String, password: String): AuthResult
+    suspend fun sendPasswordResetEmail(email: String): AuthResult
+    suspend fun signInWithGoogleIdToken(idToken: String): AuthResult
+    suspend fun getValidIdToken(forceRefresh: Boolean = false): String?
     suspend fun signOut()
 }

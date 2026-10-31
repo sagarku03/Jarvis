@@ -1,7 +1,8 @@
 package com.example.ui.screens
 
-import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -10,28 +11,29 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.FileDownload
+import androidx.compose.material.icons.filled.DeleteSweep
+import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.SwipeToDismissBox
-import androidx.compose.material3.SwipeToDismissBoxValue
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
-import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -43,290 +45,229 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.R
-import com.example.domain.repository.MemoryRecord
-import com.example.ui.components.AuroraBackground
-import com.example.ui.components.GhostButton
-import com.example.ui.components.GlassCard
-import com.example.ui.components.GlassTextField
-import com.example.ui.components.GradientButton
-import com.example.ui.components.SectionHeader
-import com.example.ui.theme.Bg1
-import com.example.ui.theme.Danger
-import com.example.ui.theme.Lavender
-import com.example.ui.theme.Success
-import com.example.ui.theme.TextMuted
-import com.example.ui.theme.TextPrimary
-import com.example.ui.theme.TextSecondary
+import com.example.domain.model.MemoryFact
+import com.example.ui.components.AuroraGlassCard
+import com.example.ui.components.AuroraSectionHeader
+import com.example.ui.components.AuroraStatusPill
+import com.example.ui.theme.AuroraColors
 import com.example.ui.viewmodel.MemoryViewModel
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MemoryScreen(
-    viewModel: MemoryViewModel,
-    onBackToHome: () -> Unit
-) {
-    BackHandler(onBack = onBackToHome)
-
-    val memories by viewModel.memories.collectAsStateWithLifecycle()
+fun MemoryScreen(viewModel: MemoryViewModel) {
     val searchQuery by viewModel.searchQuery.collectAsStateWithLifecycle()
-    val pendingCandidates by viewModel.pendingCandidates.collectAsStateWithLifecycle()
-    val exportedJson by viewModel.exportedJson.collectAsStateWithLifecycle()
+    val memories by viewModel.memories.collectAsStateWithLifecycle()
 
-    var showEditorDialog by remember { mutableStateOf(false) }
-    var editingId by remember { mutableLongStateOf(0L) }
-    var editorCategory by remember { mutableStateOf("Contact Nickname") }
-    var editorKey by remember { mutableStateOf("") }
-    var editorValue by remember { mutableStateOf("") }
+    var keyDraft by remember { mutableStateOf("") }
+    var valueDraft by remember { mutableStateOf("") }
+    var categoryDraft by remember { mutableStateOf("CONTACT") }
 
-    exportedJson?.let { jsonPayload ->
-        AlertDialog(
-            onDismissRequest = { viewModel.clearExportedJsonPreview() },
-            containerColor = Bg1,
-            title = {
-                Text(
-                    text = "Exported memory vault (JSON)",
-                    style = MaterialTheme.typography.titleLarge,
-                    color = TextPrimary
-                )
-            },
-            text = {
-                GlassTextField(
-                    value = jsonPayload,
-                    onValueChange = {},
-                    readOnly = true,
-                    singleLine = false,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(220.dp)
-                )
-            },
-            confirmButton = {
-                GradientButton(
-                    text = "Close",
-                    onClick = { viewModel.clearExportedJsonPreview() }
-                )
-            }
-        )
-    }
-
-    if (showEditorDialog) {
-        AlertDialog(
-            onDismissRequest = { showEditorDialog = false },
-            containerColor = Bg1,
-            title = {
-                Text(
-                    text = if (editingId == 0L) "Add memory" else "Edit memory",
-                    style = MaterialTheme.typography.titleLarge,
-                    color = TextPrimary
-                )
-            },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    GlassTextField(
-                        value = editorCategory,
-                        onValueChange = { editorCategory = it },
-                        label = "Category",
-                        placeholder = "Contact Nickname, Preference…",
-                        testTag = "memory_category_input"
-                    )
-                    GlassTextField(
-                        value = editorKey,
-                        onValueChange = { editorKey = it },
-                        label = "Title / key",
-                        placeholder = "Mom",
-                        testTag = "memory_key_input"
-                    )
-                    GlassTextField(
-                        value = editorValue,
-                        onValueChange = { editorValue = it },
-                        label = "Value (encrypted at rest)",
-                        placeholder = "+919876543210",
-                        singleLine = false,
-                        testTag = "memory_value_input"
-                    )
-                }
-            },
-            confirmButton = {
-                GradientButton(
-                    text = "Save",
-                    onClick = {
-                        viewModel.saveMemory(
-                            id = editingId,
-                            category = editorCategory,
-                            keyLabel = editorKey,
-                            contentValue = editorValue
-                        )
-                        showEditorDialog = false
-                    },
-                    testTag = "memory_save_confirm_button"
-                )
-            },
-            dismissButton = {
-                GhostButton(
-                    text = "Cancel",
-                    onClick = { showEditorDialog = false }
-                )
-            }
-        )
-    }
-
-    val groupedMemories = remember(memories) {
-        memories.groupBy { it.category.ifBlank { "General" } }
-    }
-
-    AuroraBackground {
-        LazyColumn(
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(AuroraColors.BackgroundDeep)
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 18.dp),
-            contentPadding = PaddingValues(top = 14.dp, bottom = 128.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
+                .widthIn(max = 640.dp)
         ) {
-            item {
+            AuroraSectionHeader(
+                title = stringResource(R.string.memory_title),
+                subtitle = stringResource(R.string.memory_subtitle),
+                trailing = {
+                    if (memories.isNotEmpty()) {
+                        OutlinedButton(
+                            onClick = viewModel::clearAllMemories,
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                            modifier = Modifier
+                                .height(48.dp)
+                                .testTag("clear_memories_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.DeleteSweep,
+                                contentDescription = stringResource(R.string.memory_clear_all),
+                                tint = AuroraColors.TextSecondary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = stringResource(R.string.memory_clear_all),
+                                style = MaterialTheme.typography.labelLarge,
+                                color = AuroraColors.TextPrimary
+                            )
+                        }
+                    }
+                }
+            )
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // Search Bar
+            OutlinedTextField(
+                value = searchQuery,
+                onValueChange = viewModel::updateSearchQuery,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("memory_search_input"),
+                placeholder = {
+                    Text(
+                        text = stringResource(R.string.memory_search_hint),
+                        color = AuroraColors.TextMuted
+                    )
+                },
+                leadingIcon = {
+                    Icon(
+                        imageVector = Icons.Default.Search,
+                        contentDescription = stringResource(R.string.memory_search_hint),
+                        tint = AuroraColors.CyanGlow
+                    )
+                },
+                singleLine = true,
+                shape = RoundedCornerShape(16.dp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = AuroraColors.ElectricViolet,
+                    unfocusedBorderColor = AuroraColors.GlassBorder,
+                    focusedContainerColor = AuroraColors.SurfacePrimary,
+                    unfocusedContainerColor = AuroraColors.SurfacePrimary,
+                    focusedTextColor = AuroraColors.TextPrimary,
+                    unfocusedTextColor = AuroraColors.TextPrimary
+                )
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Add New Fact Card
+            AuroraGlassCard {
+                Text(
+                    text = stringResource(R.string.memory_add_title),
+                    style = MaterialTheme.typography.titleMedium,
+                    color = AuroraColors.TextPrimary
+                )
+
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = keyDraft,
+                        onValueChange = { keyDraft = it },
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("memory_key_input"),
+                        placeholder = {
+                            Text(
+                                text = stringResource(R.string.memory_key_hint),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = AuroraColors.TextMuted
+                            )
+                        },
+                        singleLine = true,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = AuroraColors.ElectricViolet,
+                            unfocusedBorderColor = AuroraColors.GlassBorder,
+                            focusedTextColor = AuroraColors.TextPrimary,
+                            unfocusedTextColor = AuroraColors.TextPrimary
+                        )
+                    )
+
+                    OutlinedTextField(
+                        value = valueDraft,
+                        onValueChange = { valueDraft = it },
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("memory_value_input"),
+                        placeholder = {
+                            Text(
+                                text = stringResource(R.string.memory_value_hint),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = AuroraColors.TextMuted
+                            )
+                        },
+                        singleLine = true,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = AuroraColors.ElectricViolet,
+                            unfocusedBorderColor = AuroraColors.GlassBorder,
+                            focusedTextColor = AuroraColors.TextPrimary,
+                            unfocusedTextColor = AuroraColors.TextPrimary
+                        )
+                    )
+                }
+
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "AES-256-GCM encrypted",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = TextMuted
-                        )
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Text(
-                            text = stringResource(R.string.memory_title),
-                            style = MaterialTheme.typography.displayLarge,
-                            color = TextPrimary
-                        )
-                    }
-
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        GhostButton(
-                            text = "Export",
-                            leadingIcon = Icons.Default.FileDownload,
-                            onClick = { viewModel.exportVaultToJson() },
-                            testTag = "export_memories_button"
-                        )
-                        GradientButton(
-                            text = "Add",
-                            leadingIcon = Icons.Default.Add,
-                            onClick = {
-                                editingId = 0L
-                                editorCategory = "Contact Nickname"
-                                editorKey = ""
-                                editorValue = ""
-                                showEditorDialog = true
-                            },
-                            testTag = "add_memory_button"
-                        )
-                    }
-                }
-            }
-
-            item {
-                GlassTextField(
-                    value = searchQuery,
-                    onValueChange = { viewModel.updateSearchQuery(it) },
-                    placeholder = "Search memories, nicknames, or preferences…",
-                    leadingIcon = {
-                        Icon(
-                            imageVector = Icons.Default.Search,
-                            contentDescription = null,
-                            tint = Lavender
-                        )
-                    },
-                    testTag = "memory_search_field"
-                )
-            }
-
-            if (pendingCandidates.isNotEmpty()) {
-                item {
-                    SectionHeader(title = "Pending approval")
-                }
-                items(pendingCandidates, key = { it.id }) { cand ->
-                    GlassCard(modifier = Modifier.fillMaxWidth()) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = cand.category,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = Lavender
-                                )
-                                Text(
-                                    text = "${cand.keyLabel}: ${cand.contentValue}",
-                                    style = MaterialTheme.typography.bodyLarge,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = TextPrimary
-                                )
-                            }
-                            Row {
-                                IconButton(onClick = { viewModel.approveCandidate(cand.id) }) {
-                                    Icon(Icons.Default.Check, contentDescription = "Approve", tint = Success)
-                                }
-                                IconButton(onClick = { viewModel.dismissCandidate(cand.id) }) {
-                                    Icon(Icons.Default.Close, contentDescription = "Dismiss", tint = Danger)
-                                }
-                            }
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        listOf("CONTACT", "PREFERENCE", "NOTE").forEach { cat ->
+                            AuroraStatusPill(
+                                text = cat,
+                                color = if (categoryDraft == cat) AuroraColors.ElectricViolet else AuroraColors.TextMuted,
+                                modifier = Modifier
+                                    .padding(vertical = 4.dp)
+                                    .testTag("memory_cat_$cat")
+                            )
                         }
                     }
+
+                    Button(
+                        onClick = {
+                            viewModel.saveMemory(categoryDraft, keyDraft, valueDraft)
+                            keyDraft = ""
+                            valueDraft = ""
+                        },
+                        enabled = keyDraft.isNotBlank() && valueDraft.isNotBlank(),
+                        colors = ButtonDefaults.buttonColors(containerColor = AuroraColors.ElectricViolet),
+                        modifier = Modifier
+                            .height(48.dp)
+                            .testTag("memory_save_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Add,
+                            contentDescription = stringResource(R.string.memory_save_button)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(stringResource(R.string.memory_save_button))
+                    }
                 }
             }
 
+            Spacer(modifier = Modifier.height(12.dp))
+
             if (memories.isEmpty()) {
-                item {
-                    GlassCard(modifier = Modifier.fillMaxWidth()) {
-                        Text(
-                            text = "No memories saved yet",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = TextPrimary
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Memory,
+                            contentDescription = stringResource(R.string.memory_empty),
+                            tint = AuroraColors.TextMuted,
+                            modifier = Modifier.size(48.dp)
                         )
-                        Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = "Tap Add or say \"Remember that…\" / \"याद रखो कि…\" to store personal facts or contact nicknames.",
+                            text = stringResource(R.string.memory_empty),
                             style = MaterialTheme.typography.bodyMedium,
-                            color = TextSecondary
+                            color = AuroraColors.TextSecondary
                         )
                     }
                 }
             } else {
-                groupedMemories.forEach { (category, categoryItems) ->
-                    item(key = "header_$category") {
-                        SectionHeader(title = category)
-                    }
-                    items(categoryItems, key = { it.id }) { item ->
-                        val dismissState = rememberSwipeToDismissBoxState(
-                            confirmValueChange = { value ->
-                                if (value == SwipeToDismissBoxValue.EndToStart) {
-                                    viewModel.deleteMemory(item.id)
-                                    true
-                                } else {
-                                    false
-                                }
-                            }
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .testTag("memory_list"),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    contentPadding = PaddingValues(bottom = 24.dp)
+                ) {
+                    items(memories, key = { it.id }) { fact ->
+                        MemoryFactCard(
+                            fact = fact,
+                            onDelete = { viewModel.deleteMemory(fact.id) }
                         )
-                        SwipeToDismissBox(
-                            state = dismissState,
-                            enableDismissFromStartToEnd = false,
-                            backgroundContent = {}
-                        ) {
-                            MemoryItemCard(
-                                item = item,
-                                onEdit = {
-                                    editingId = item.id
-                                    editorCategory = item.category
-                                    editorKey = item.keyLabel
-                                    editorValue = item.contentValue
-                                    showEditorDialog = true
-                                },
-                                onDelete = { viewModel.deleteMemory(item.id) }
-                            )
-                        }
                     }
                 }
             }
@@ -335,53 +276,50 @@ fun MemoryScreen(
 }
 
 @Composable
-private fun MemoryItemCard(
-    item: MemoryRecord,
-    onEdit: () -> Unit,
+private fun MemoryFactCard(
+    fact: MemoryFact,
     onDelete: () -> Unit
 ) {
-    GlassCard(modifier = Modifier.fillMaxWidth()) {
+    AuroraGlassCard(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("memory_card_${fact.id}")
+    ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = item.keyLabel,
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = TextPrimary
+                AuroraStatusPill(
+                    text = fact.category,
+                    color = AuroraColors.CyanGlow
                 )
-                Spacer(modifier = Modifier.height(4.dp))
+                Spacer(modifier = Modifier.height(6.dp))
                 Text(
-                    text = item.contentValue,
+                    text = fact.key,
+                    style = MaterialTheme.typography.titleMedium,
+                    color = AuroraColors.TextPrimary,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    text = fact.value,
                     style = MaterialTheme.typography.bodyMedium,
-                    color = TextSecondary
+                    color = AuroraColors.TextSecondary
                 )
             }
 
-            Row {
-                IconButton(
-                    onClick = onEdit,
-                    modifier = Modifier.testTag("edit_memory_${item.id}")
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Edit,
-                        contentDescription = "Edit memory",
-                        tint = Lavender
-                    )
-                }
-                IconButton(
-                    onClick = onDelete,
-                    modifier = Modifier.testTag("delete_memory_${item.id}")
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Delete,
-                        contentDescription = "Delete memory",
-                        tint = Danger
-                    )
-                }
+            IconButton(
+                onClick = onDelete,
+                modifier = Modifier
+                    .size(48.dp)
+                    .testTag("delete_memory_${fact.id}")
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Delete,
+                    contentDescription = stringResource(R.string.routines_delete),
+                    tint = AuroraColors.CoralDanger
+                )
             }
         }
     }

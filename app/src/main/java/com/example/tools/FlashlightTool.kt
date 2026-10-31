@@ -12,41 +12,31 @@ import com.example.domain.tool.Tool
 class FlashlightTool @Inject constructor(
     private val context: Context
 ) : Tool {
-    override val name: String = "flashlight"
-    override val description: String = "Turns the device flashlight/torch ON or OFF."
-    override val jsonSchema: String = """{"type":"object","properties":{"state":{"type":"string","description":"'on' or 'off'"}},"required":["state"]}"""
+
+    override val name: String = "toggle_flashlight"
+    override val description: String = "Turn the device camera flashlight (torch) on or off."
+    override val jsonSchema: String = """{"type":"object","properties":{"enabled":{"type":"string","description":"true or false"},"state":{"type":"string","enum":["on","off"]}}}"""
     override val riskLevel: RiskLevel = RiskLevel.LOW
 
     override suspend fun execute(args: Map<String, String>): ToolExecutionResult {
-        val desiredState = args["state"]?.trim()?.lowercase() ?: "on"
-        val enable = desiredState != "off" && desiredState != "false" && desiredState != "0"
+        val rawState = args["enabled"] ?: args["state"] ?: "true"
+        val turnOn = rawState.equals("true", ignoreCase = true) || rawState.equals("on", ignoreCase = true)
 
         return try {
-            val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as? CameraManager
-            val cameraId = cameraManager?.cameraIdList?.firstOrNull()
-            if (cameraManager == null || cameraId == null) {
-                return ToolExecutionResult(
-                    toolName = name,
-                    success = false,
-                    outputEn = "Flashlight hardware is unavailable on this device.",
-                    outputHi = "इस डिवाइस पर टॉर्च हार्डवेयर उपलब्ध नहीं है।"
-                )
-            }
-            cameraManager.setTorchMode(cameraId, enable)
-            val statusWordEn = if (enable) "ON" else "OFF"
-            val statusWordHi = if (enable) "चालू (ON)" else "बंद (OFF)"
+            val cameraManager = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+            val cameraId = cameraManager.cameraIdList.firstOrNull()
+                ?: return ToolExecutionResult(name, false, "No camera with flashlight found on this device.")
+            cameraManager.setTorchMode(cameraId, turnOn)
             ToolExecutionResult(
                 toolName = name,
                 success = true,
-                outputEn = "Flashlight switched $statusWordEn.",
-                outputHi = "फ़ोन की टॉर्च $statusWordHi कर दी गई है।"
+                outputEn = if (turnOn) "Flashlight turned on." else "Flashlight turned off."
             )
         } catch (e: Exception) {
             ToolExecutionResult(
                 toolName = name,
                 success = false,
-                outputEn = "Flashlight hardware unavailable: ${e.localizedMessage}",
-                outputHi = "टॉर्च हार्डवेयर उपलब्ध नहीं है: ${e.localizedMessage}"
+                outputEn = "Could not toggle flashlight: ${e.message ?: "hardware unavailable"}."
             )
         }
     }

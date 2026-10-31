@@ -2,147 +2,186 @@ package com.example.data.repository
 
 import com.example.di.Inject
 import com.example.di.Singleton
-import com.example.domain.model.AppResult
+import com.example.domain.model.AuthResult
+import com.example.domain.model.AuthUserSession
 import com.example.domain.repository.AuthRepository
-import com.example.domain.repository.AuthUserSession
-import com.google.android.gms.tasks.Tasks
 import com.google.firebase.auth.FirebaseAuth
-import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.auth.GoogleAuthProvider
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.withContext
-import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.tasks.await
 
 @Singleton
-class FirebaseAuthRepositoryImpl @Inject constructor() : AuthRepository {
+class AuthRepositoryImpl @Inject constructor(
+    private val firebaseAuth: FirebaseAuth?
+) : AuthRepository {
 
-    private val firebaseAuth: FirebaseAuth? = runCatching {
-        FirebaseAuth.getInstance()
-    }.getOrNull()
+    override val isFirebaseConfigured: Boolean
+        get() = firebaseAuth != null
 
-    private val _currentUser = MutableStateFlow(firebaseAuth?.currentUser?.toSession())
-    override val currentUser: StateFlow<AuthUserSession?> = _currentUser.asStateFlow()
+    override val currentSessionFlow: Flow<AuthUserSession?> = callbackFlow {
+        val auth = firebaseAuth
+        if (auth == null) {
+            trySend(null)
+            awaitClose { }
+            return@callbackFlow
+        }
 
-    init {
-        runCatching {
-            firebaseAuth?.addAuthStateListener { auth ->
-                _currentUser.value = auth.currentUser?.toSession()
+        val listener = FirebaseAuth.AuthStateListener { fa ->
+            val user = fa.currentUser
+            if (user == null) {
+                trySend(null)
+            } else {
+                trySend(
+                    AuthUserSession(
+                        uid = user.uid,
+                        email = user.email,
+                        displayName = user.displayName,
+                        isEmailVerified = user.isEmailVerified,
+                        idToken = null
+                    )
+                )
             }
+        }
+        auth.addAuthStateListener(listener)
+        awaitClose { auth.removeAuthStateListener(listener) }
+    }
+
+    override suspend fun signInWithEmail(email: String, password: String): AuthResult {
+        val auth = firebaseAuth ?: return AuthResult.Error(
+            messageEn = "Firebase Auth is not configured on this device."
+        )
+        return try {
+            val res = auth.signInWithEmailAndPassword(email.trim(), password).await()
+            val user = res.user
+            if (user != null) {
+                val token = runCatching { user.getIdToken(false).await().token }.getOrNull()
+                AuthResult.Success(
+                    AuthUserSession(
+                        uid = user.uid,
+                        email = user.email,
+                        displayName = user.displayName,
+                        isEmailVerified = user.isEmailVerified,
+                        idToken = token
+                    )
+                )
+            } else {
+                AuthResult.Error(
+                    messageEn = "Sign-in succeeded but user session was empty."
+                )
+            }
+        } catch (ce: CancellationException) {
+            throw ce
+        } catch (e: Exception) {
+            AuthResult.Error(
+                messageEn = "Sign-in failed: ${e.localizedMessage ?: "Invalid credentials"}"
+            )
         }
     }
 
-    override suspend fun signInWithEmail(email: String, password: String): AppResult<AuthUserSession> =
-        withContext(Dispatchers.IO) {
-            val auth = firebaseAuth ?: return@withContext AppResult.Error(
-                messageEn = "Firebase Auth is not initialized on this device.",
-                messageHi = "इस डिवाइस पर Firebase Auth कॉन्फ़िगर नहीं है।"
-            )
-            try {
-                val result = Tasks.await(
-                    auth.signInWithEmailAndPassword(email.trim(), password),
-                    15,
-                    TimeUnit.SECONDS
-                )
-                val session = result.user?.toSession()
-                    ?: return@withContext AppResult.Error(
-                        messageEn = "Sign-in succeeded but no user profile was returned.",
-                        messageHi = "साइन-इन हुआ लेकिन उपयोगकर्ता प्रोफ़ाइल प्राप्त नहीं हुई।"
+    override suspend fun registerWithEmail(email: String, password: String): AuthResult {
+        val auth = firebaseAuth ?: return AuthResult.Error(
+            messageEn = "Firebase Auth is not configured on this device."
+        )
+        return try {
+            val res = auth.createUserWithEmailAndPassword(email.trim(), password).await()
+            val user = res.user
+            if (user != null) {
+                val token = runCatching { user.getIdToken(false).await().token }.getOrNull()
+                AuthResult.Success(
+                    AuthUserSession(
+                        uid = user.uid,
+                        email = user.email,
+                        displayName = user.displayName,
+                        isEmailVerified = user.isEmailVerified,
+                        idToken = token
                     )
-                _currentUser.value = session
-                AppResult.Success(session)
-            } catch (e: Exception) {
-                AppResult.Error(
-                    messageEn = e.localizedMessage ?: "Email sign-in failed.",
-                    messageHi = "ईमेल साइन-इन विफल: ${e.localizedMessage ?: "अज्ञात त्रुटि"}",
-                    throwable = e
+                )
+            } else {
+                AuthResult.Error(
+                    messageEn = "Account created but session could not be loaded."
                 )
             }
-        }
-
-    override suspend fun signUpWithEmail(email: String, password: String): AppResult<AuthUserSession> =
-        withContext(Dispatchers.IO) {
-            val auth = firebaseAuth ?: return@withContext AppResult.Error(
-                messageEn = "Firebase Auth is not initialized on this device.",
-                messageHi = "इस डिवाइस पर Firebase Auth कॉन्फ़िगर नहीं है।"
+        } catch (ce: CancellationException) {
+            throw ce
+        } catch (e: Exception) {
+            AuthResult.Error(
+                messageEn = "Account registration failed: ${e.localizedMessage ?: "Unknown error"}"
             )
-            try {
-                val result = Tasks.await(
-                    auth.createUserWithEmailAndPassword(email.trim(), password),
-                    15,
-                    TimeUnit.SECONDS
+        }
+    }
+
+    override suspend fun sendPasswordResetEmail(email: String): AuthResult {
+        val auth = firebaseAuth ?: return AuthResult.Error(
+            messageEn = "Firebase Auth is not configured on this device."
+        )
+        return try {
+            auth.sendPasswordResetEmail(email.trim()).await()
+            AuthResult.Success(
+                AuthUserSession(
+                    uid = "password_reset_sent",
+                    email = email.trim(),
+                    displayName = "Password Reset Sent",
+                    isEmailVerified = false,
+                    idToken = null
                 )
-                val session = result.user?.toSession()
-                    ?: return@withContext AppResult.Error(
-                        messageEn = "Account created but no user session was returned.",
-                        messageHi = "खाता बन गया लेकिन सत्र प्राप्त नहीं हुआ।"
+            )
+        } catch (ce: CancellationException) {
+            throw ce
+        } catch (e: Exception) {
+            AuthResult.Error(
+                messageEn = "Password reset failed: ${e.localizedMessage ?: "Unknown error"}"
+            )
+        }
+    }
+
+    override suspend fun signInWithGoogleIdToken(idToken: String): AuthResult {
+        val auth = firebaseAuth ?: return AuthResult.Error(
+            messageEn = "Firebase Auth is not configured on this device."
+        )
+        return try {
+            val credential = GoogleAuthProvider.getCredential(idToken, null)
+            val res = auth.signInWithCredential(credential).await()
+            val user = res.user
+            if (user != null) {
+                val firebaseToken = runCatching { user.getIdToken(false).await().token }.getOrNull()
+                AuthResult.Success(
+                    AuthUserSession(
+                        uid = user.uid,
+                        email = user.email,
+                        displayName = user.displayName,
+                        isEmailVerified = user.isEmailVerified,
+                        idToken = firebaseToken
                     )
-                _currentUser.value = session
-                AppResult.Success(session)
-            } catch (e: Exception) {
-                AppResult.Error(
-                    messageEn = e.localizedMessage ?: "Sign-up failed.",
-                    messageHi = "खाता बनाने में त्रुटि: ${e.localizedMessage ?: "अज्ञात त्रुटि"}",
-                    throwable = e
+                )
+            } else {
+                AuthResult.Error(
+                    messageEn = "Google Sign-In succeeded but user profile was empty."
                 )
             }
-        }
-
-    override suspend fun sendPasswordReset(email: String): AppResult<Unit> =
-        withContext(Dispatchers.IO) {
-            val auth = firebaseAuth ?: return@withContext AppResult.Error(
-                messageEn = "Firebase Auth is not initialized on this device.",
-                messageHi = "इस डिवाइस पर Firebase Auth कॉन्फ़िगर नहीं है।"
+        } catch (ce: CancellationException) {
+            throw ce
+        } catch (e: Exception) {
+            AuthResult.Error(
+                messageEn = "Google Sign-In failed: ${e.localizedMessage ?: "Unknown error"}"
             )
-            try {
-                Tasks.await(auth.sendPasswordResetEmail(email.trim()), 15, TimeUnit.SECONDS)
-                AppResult.Success(Unit)
-            } catch (e: Exception) {
-                AppResult.Error(
-                    messageEn = e.localizedMessage ?: "Password reset email failed.",
-                    messageHi = "पासवर्ड रीसेट ईमेल भेजने में त्रुटि: ${e.localizedMessage ?: "अज्ञात त्रुटि"}",
-                    throwable = e
-                )
-            }
         }
+    }
 
-    override suspend fun signInWithGoogleIdToken(idToken: String): AppResult<AuthUserSession> =
-        withContext(Dispatchers.IO) {
-            val auth = firebaseAuth ?: return@withContext AppResult.Error(
-                messageEn = "Firebase Auth is not initialized on this device.",
-                messageHi = "इस डिवाइस पर Firebase Auth कॉन्फ़िगर नहीं है।"
-            )
-            try {
-                val credential = GoogleAuthProvider.getCredential(idToken, null)
-                val result = Tasks.await(auth.signInWithCredential(credential), 15, TimeUnit.SECONDS)
-                val session = result.user?.toSession()
-                    ?: return@withContext AppResult.Error(
-                        messageEn = "Google sign-in succeeded but no user profile was returned.",
-                        messageHi = "Google साइन-इन सफल रहा लेकिन प्रोफ़ाइल प्राप्त नहीं हुई।"
-                    )
-                _currentUser.value = session
-                AppResult.Success(session)
-            } catch (e: Exception) {
-                AppResult.Error(
-                    messageEn = e.localizedMessage ?: "Google sign-in failed.",
-                    messageHi = "Google साइन-इन विफल: ${e.localizedMessage ?: "अज्ञात त्रुटि"}",
-                    throwable = e
-                )
-            }
+    override suspend fun getValidIdToken(forceRefresh: Boolean): String? {
+        val user = firebaseAuth?.currentUser ?: return null
+        return try {
+            user.getIdToken(forceRefresh).await().token
+        } catch (ce: CancellationException) {
+            throw ce
+        } catch (_: Exception) {
+            null
         }
+    }
 
     override suspend fun signOut() {
-        runCatching {
-            firebaseAuth?.signOut()
-            _currentUser.value = null
-        }
+        runCatching { firebaseAuth?.signOut() }
     }
-
-    private fun FirebaseUser.toSession(): AuthUserSession = AuthUserSession(
-        uid = uid,
-        email = email,
-        displayName = displayName
-    )
 }

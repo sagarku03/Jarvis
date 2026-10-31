@@ -1,190 +1,231 @@
 package com.example.domain.safety
 
+import com.example.BuildConfig
 import com.example.di.Inject
 import com.example.di.Singleton
-import com.example.domain.model.AppLanguage
+import com.example.domain.contacts.ContactsResolver
+import com.example.domain.model.ConfirmationLevel
+import com.example.domain.model.ConfirmationRequest
 import com.example.domain.model.RiskLevel
-import com.example.domain.model.SafetyConfirmationRequest
-import com.example.domain.model.SafetyPolicyLevel
+import com.example.domain.model.ScreenContextSnapshot
+import com.example.domain.model.ToolCallSpec
 import com.example.domain.tool.Tool
-import com.example.domain.voice.TtsEngineWrapper
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import java.util.UUID
-import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.withTimeoutOrNull
 
-sealed class SafetyDecision {
-    data object Approved : SafetyDecision()
-    data class Denied(
-        val reasonEn: String,
-        val reasonHi: String
-    ) : SafetyDecision()
-}
+data class SafetyGateDecision(
+    val allowedImmediately: Boolean,
+    val requiresConfirmation: Boolean,
+    val reasonEn: String,
+    val reasonHi: String = reasonEn
+)
+
+data class UserApprovalOutcome(
+    val approved: Boolean,
+    val selectedPhoneOverride: String? = null
+)
 
 interface SafetyGate {
-    val activeConfirmationRequest: StateFlow<SafetyConfirmationRequest?>
+    val pendingConfirmation: StateFlow<ConfirmationRequest?>
 
-    fun isPackageBlocked(packageName: String?): Boolean
-
-    suspend fun evaluateBeforeExecution(
+    fun evaluate(
+        toolCall: ToolCallSpec,
         tool: Tool,
-        args: Map<String, String>,
-        policyLevel: SafetyPolicyLevel,
-        isSecureScreen: Boolean,
-        activePackageName: String? = null,
-        language: AppLanguage
-    ): SafetyDecision
+        confirmationLevel: ConfirmationLevel,
+        screenContext: ScreenContextSnapshot?
+    ): SafetyGateDecision
 
-    fun resolveConfirmation(requestId: String, approved: Boolean)
-    fun cancelPendingConfirmations()
+    suspend fun requestUserApproval(
+        toolCall: ToolCallSpec,
+        tool: Tool,
+        reasonEn: String,
+        reasonHi: String = reasonEn
+    ): UserApprovalOutcome
+
+    fun resolveUserApproval(
+        approved: Boolean,
+        selectedPhoneOverride: String? = null
+    )
+
+    fun cancelPendingConfirmation()
+
+    companion object {
+        val BLOCKED_SENSITIVE_PACKAGES = setOf(
+            "com.google.android.apps.nbu.paisa.user", // Google Pay
+            "com.phonepe.app",                        // PhonePe
+            "net.one97.paytm",                        // Paytm
+            "in.org.npci.upiapp",                     // BHIM UPI
+            "com.dreamplug.androidapp",               // CRED
+            "com.sbi.lotusintouch",                   // YONO SBI
+            "com.snapwork.hdfc",                      // HDFC Bank
+            "com.csam.icici.bank.imobile",            // iMobile ICICI
+            "com.axis.mobile",                        // Axis Mobile
+            "com.whatsapp.w4b.payments",              // Payments
+            "com.android.settings.password",          // System password prompt
+            "com.google.android.apps.authenticator2", // Google Authenticator
+            "com.azure.authenticator",                // Microsoft Authenticator
+            "com.agilebits.onepassword",              // 1Password
+            "com.x8bit.bitwarden"                     // Bitwarden
+        )
+
+        private val SENSITIVE_KEYWORDS = listOf(
+            "password", "passcode", "upi pin", "mpin", "cvv", "netbanking", "enter pin"
+        )
+
+        fun isSensitiveScreen(snapshot: ScreenContextSnapshot?): Boolean {
+            if (snapshot == null) return false
+            if (snapshot.isSensitiveAppBlocked) return true
+            val pkg = snapshot.packageName.lowercase()
+            if (BLOCKED_SENSITIVE_PACKAGES.any { pkg.contains(it) }) return true
+            val textLower = snapshot.summaryText.lowercase()
+            return SENSITIVE_KEYWORDS.any { textLower.contains(it) }
+        }
+
+        fun redactSensitiveArgs(args: Map<String, String>): String {
+            if (args.isEmpty()) return "{}"
+            return args.entries.joinToString(prefix = "{", postfix = "}") { (k, v) ->
+                val keyLower = k.lowercase()
+                val masked = when {
+                    keyLower.contains("password") || keyLower.contains("pin") || keyLower.contains("otp") -> "***REDACTED***"
+                    keyLower.contains("phone") || keyLower.contains("number") -> ContactsResolver.maskPhoneNumber(v)
+                    else -> v
+                }
+                "$k=\"$masked\""
+            }
+        }
+    }
 }
 
 @Singleton
 class SafetyGateImpl @Inject constructor(
-    private val ttsEngine: TtsEngineWrapper,
-    killSwitch: KillSwitch
+    private val contactsResolver: ContactsResolver? = null
 ) : SafetyGate {
 
-    companion object {
-        /**
-         * Stage 4 Hardened Package Blocklist:
-         * Automation and HIGH-risk tools are strictly prohibited when any of these
-         * banking, UPI, wallet, password-manager, or system-security packages are in foreground.
-         */
-        val BLOCKED_SENSITIVE_PACKAGES = setOf(
-            "com.google.android.apps.nbu.paisa.user", // Google Pay (GPay)
-            "com.phonepe.app",                        // PhonePe
-            "net.one97.paytm",                        // Paytm
-            "in.org.npci.upiapp",                     // BHIM UPI
-            "com.sbi.lotusintouch",                   // SBI YONO
-            "com.snapwork.hdfc",                      // HDFC Bank
-            "com.csam.icici.bank.imobile",            // ICICI iMobile
-            "com.axis.mobile",                        // Axis Mobile
-            "com.x8bit.bitwarden",                    // Bitwarden
-            "com.agilebits.onepassword",              // 1Password
-            "com.google.android.apps.authenticator2", // Google Authenticator
-            "com.google.android.permissioncontroller",// Android Permission Controller
-            "com.android.packageinstaller",           // Package Installer
-            "com.bank.upi.secure"                     // Simulated Secure Banking Screen
-        )
-    }
+    private val _pendingConfirmation = MutableStateFlow<ConfirmationRequest?>(null)
+    override val pendingConfirmation: StateFlow<ConfirmationRequest?> = _pendingConfirmation.asStateFlow()
 
-    private val _activeConfirmationRequest = MutableStateFlow<SafetyConfirmationRequest?>(null)
-    override val activeConfirmationRequest: StateFlow<SafetyConfirmationRequest?> =
-        _activeConfirmationRequest.asStateFlow()
+    private var activeDeferred: CompletableDeferred<UserApprovalOutcome>? = null
 
-    private val pendingDecisions = ConcurrentHashMap<String, CompletableDeferred<Boolean>>()
-
-    init {
-        killSwitch.registerCancelCallback {
-            cancelPendingConfirmations()
-        }
-    }
-
-    override fun isPackageBlocked(packageName: String?): Boolean {
-        if (packageName.isNullOrBlank()) return false
-        val normalized = packageName.trim().lowercase()
-        return BLOCKED_SENSITIVE_PACKAGES.any { normalized == it.lowercase() } ||
-            normalized.contains(".bank") ||
-            normalized.contains(".upi") ||
-            normalized.contains("passkey")
-    }
-
-    override suspend fun evaluateBeforeExecution(
+    override fun evaluate(
+        toolCall: ToolCallSpec,
         tool: Tool,
-        args: Map<String, String>,
-        policyLevel: SafetyPolicyLevel,
-        isSecureScreen: Boolean,
-        activePackageName: String?,
-        language: AppLanguage
-    ): SafetyDecision {
-        val effectiveRisk = when {
-            policyLevel == SafetyPolicyLevel.STRICT && tool.riskLevel == RiskLevel.LOW -> RiskLevel.MEDIUM
-            else -> tool.riskLevel
-        }
-
-        val packageBlocked = isPackageBlocked(activePackageName)
-
-        // Stage 4: Block any accessibility automation or HIGH-risk tool on secure/banking/UPI screens
-        if ((effectiveRisk == RiskLevel.HIGH || tool.requiresFullControlMode) && (isSecureScreen || packageBlocked)) {
-            val pkgLabel = activePackageName ?: "secure window"
-            return SafetyDecision.Denied(
-                reasonEn = "Blocked by SafetyGate: '${tool.name}' cannot run on secure/banking/UPI screen ($pkgLabel).",
-                reasonHi = "SafetyGate द्वारा रोका गया: सुरक्षित/बैंकिंग/UPI स्क्रीन ($pkgLabel) पर '${tool.name}' चलाने की अनुमति नहीं है।"
+        confirmationLevel: ConfirmationLevel,
+        screenContext: ScreenContextSnapshot?
+    ): SafetyGateDecision {
+        // 1. Block Full-Control Accessibility tools when STORE_SAFE_MODE is enabled
+        if (tool.requiresFullControlMode && (BuildConfig.STORE_SAFE_MODE || !BuildConfig.FULL_CONTROL_MODE)) {
+            return SafetyGateDecision(
+                allowedImmediately = false,
+                requiresConfirmation = false,
+                reasonEn = "Tool '${tool.name}' is disabled in Store-Safe Mode."
             )
         }
 
-        if (effectiveRisk == RiskLevel.LOW) {
-            return SafetyDecision.Approved
+        // 2. Hard block on banking / UPI / password / authenticator screens
+        if (SafetyGate.isSensitiveScreen(screenContext) &&
+            (tool.requiresFullControlMode || tool.riskLevel == RiskLevel.HIGH)
+        ) {
+            return SafetyGateDecision(
+                allowedImmediately = false,
+                requiresConfirmation = false,
+                reasonEn = "SafetyGate blocked '${tool.name}' because a banking, UPI, or password screen is active."
+            )
         }
 
-        val formattedArgs = if (args.isEmpty()) {
-            "no parameters"
-        } else {
-            args.entries.joinToString(", ") { "${it.key}: ${it.value}" }
-        }
+        // 3. Evaluate risk matrix vs user's ConfirmationLevel
+        return when (tool.riskLevel) {
+            RiskLevel.LOW -> {
+                if (confirmationLevel == ConfirmationLevel.STRICT) {
+                    SafetyGateDecision(
+                        allowedImmediately = false,
+                        requiresConfirmation = true,
+                        reasonEn = formatPromptEn(toolCall, tool.riskLevel)
+                    )
+                } else {
+                    SafetyGateDecision(
+                        allowedImmediately = true,
+                        requiresConfirmation = false,
+                        reasonEn = "Allowed (LOW risk)"
+                    )
+                }
+            }
 
-        val summaryEn = when (effectiveRisk) {
-            RiskLevel.MEDIUM -> "Allow JARVIS to run '${tool.name}' with ($formattedArgs)?"
-            RiskLevel.HIGH -> "CRITICAL HIGH-RISK ACTION: '${tool.name}' with ($formattedArgs). Verify carefully before approving."
-            RiskLevel.LOW -> ""
-        }
-
-        val summaryHi = when (effectiveRisk) {
-            RiskLevel.MEDIUM -> "क्या JARVIS को '${tool.name}' ($formattedArgs) चलाने की अनुमति दें?"
-            RiskLevel.HIGH -> "उच्च-जोखिम चेतावनी: '${tool.name}' ($formattedArgs)। कृपया ध्यानपूर्वक जांच कर अनुमति दें।"
-            RiskLevel.LOW -> ""
-        }
-
-        val spokenPrompt = if (language == AppLanguage.HI_IN) {
-            "कृपया स्क्रीन पर ${tool.name} की पुष्टि करें।"
-        } else {
-            "Please confirm ${tool.name.replace('_', ' ')} on screen."
-        }
-        ttsEngine.speak(spokenPrompt, language)
-
-        val requestId = UUID.randomUUID().toString()
-        val deferred = CompletableDeferred<Boolean>()
-        pendingDecisions[requestId] = deferred
-
-        _activeConfirmationRequest.value = SafetyConfirmationRequest(
-            requestId = requestId,
-            toolName = tool.name,
-            riskLevel = effectiveRisk,
-            args = args,
-            summaryEn = summaryEn,
-            summaryHi = summaryHi,
-            requiresExplicitHighRiskCheck = effectiveRisk == RiskLevel.HIGH
-        )
-
-        val approved = try {
-            deferred.await()
-        } finally {
-            pendingDecisions.remove(requestId)
-            if (_activeConfirmationRequest.value?.requestId == requestId) {
-                _activeConfirmationRequest.value = null
+            RiskLevel.MEDIUM, RiskLevel.HIGH -> {
+                SafetyGateDecision(
+                    allowedImmediately = false,
+                    requiresConfirmation = true,
+                    reasonEn = formatPromptEn(toolCall, tool.riskLevel)
+                )
             }
         }
+    }
 
-        return if (approved) {
-            SafetyDecision.Approved
+    override suspend fun requestUserApproval(
+        toolCall: ToolCallSpec,
+        tool: Tool,
+        reasonEn: String,
+        reasonHi: String
+    ): UserApprovalOutcome {
+        cancelPendingConfirmation()
+        val deferred = CompletableDeferred<UserApprovalOutcome>()
+        activeDeferred = deferred
+
+        val contactQuery = toolCall.args["contact_name"]
+            ?: toolCall.args["contact"]
+            ?: toolCall.args["recipient"]
+            ?: toolCall.args["phone_number"]
+        val candidates = if (!contactQuery.isNullOrBlank() && contactsResolver != null) {
+            runCatching { contactsResolver?.resolveCandidates(contactQuery).orEmpty() }.getOrDefault(emptyList())
         } else {
-            SafetyDecision.Denied(
-                reasonEn = "Action '${tool.name}' was cancelled by user in SafetyGate.",
-                reasonHi = "उपयोगकर्ता ने SafetyGate में '${tool.name}' को रद्द कर दिया।"
-            )
+            emptyList()
         }
+
+        val enrichedEn = if (candidates.size == 1) {
+            "$reasonEn\nMatched contact: ${candidates.first().displayName} (${candidates.first().maskedNumber})"
+        } else {
+            reasonEn
+        }
+
+        _pendingConfirmation.value = ConfirmationRequest(
+            id = toolCall.id,
+            toolCall = toolCall,
+            riskLevel = tool.riskLevel,
+            summaryEn = enrichedEn,
+            countdownSeconds = 15,
+            candidateContacts = candidates
+        )
+
+        val outcome = withTimeoutOrNull(15_500L) {
+            deferred.await()
+        } ?: UserApprovalOutcome(approved = false)
+
+        _pendingConfirmation.value = null
+        activeDeferred = null
+        return outcome
     }
 
-    override fun resolveConfirmation(requestId: String, approved: Boolean) {
-        pendingDecisions[requestId]?.complete(approved)
+    override fun resolveUserApproval(approved: Boolean, selectedPhoneOverride: String?) {
+        activeDeferred?.complete(
+            UserApprovalOutcome(
+                approved = approved,
+                selectedPhoneOverride = selectedPhoneOverride
+            )
+        )
+        _pendingConfirmation.value = null
+        activeDeferred = null
     }
 
-    override fun cancelPendingConfirmations() {
-        pendingDecisions.values.forEach { it.complete(false) }
-        pendingDecisions.clear()
-        _activeConfirmationRequest.value = null
+    override fun cancelPendingConfirmation() {
+        activeDeferred?.complete(UserApprovalOutcome(approved = false))
+        activeDeferred = null
+        _pendingConfirmation.value = null
+    }
+
+    private fun formatPromptEn(toolCall: ToolCallSpec, risk: RiskLevel): String {
+        val argsText = SafetyGate.redactSensitiveArgs(toolCall.args)
+        return "Confirm ${risk.name} risk action '${toolCall.name}' with $argsText?"
     }
 }

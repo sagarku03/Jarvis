@@ -1,7 +1,6 @@
 package com.example.ui.screens
 
 import android.Manifest
-import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
@@ -9,6 +8,7 @@ import android.provider.Settings
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -18,13 +18,23 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.BatteryChargingFull
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.ErrorOutline
+import androidx.compose.material.icons.filled.Security
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -41,40 +51,28 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.R
-import com.example.domain.model.OemVendorGuide
+import com.example.domain.model.OemBatteryGuide
 import com.example.domain.model.PermissionItemStatus
-import com.example.domain.model.PermissionKey
-import com.example.ui.components.AuroraBackground
-import com.example.ui.components.GhostButton
-import com.example.ui.components.GlassCard
-import com.example.ui.components.GradientButton
-import com.example.ui.components.SectionHeader
-import com.example.ui.components.StatusChip
-import com.example.ui.theme.Lavender
-import com.example.ui.theme.Lime
-import com.example.ui.theme.TextMuted
-import com.example.ui.theme.TextPrimary
-import com.example.ui.theme.TextSecondary
-import com.example.ui.theme.Warning
+import com.example.ui.components.AuroraGlassCard
+import com.example.ui.components.AuroraStatusPill
+import com.example.ui.theme.AuroraColors
 import com.example.ui.viewmodel.PermissionsViewModel
 
 @Composable
 fun PermissionsScreen(
     viewModel: PermissionsViewModel,
-    onBackToHome: () -> Unit
+    onNavigateBack: () -> Unit
 ) {
-    BackHandler(onBack = onBackToHome)
+    BackHandler(onBack = onNavigateBack)
 
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
-    val permissions by viewModel.permissionsList.collectAsStateWithLifecycle()
-    val settings by viewModel.userSettings.collectAsStateWithLifecycle()
-    val oemGuides = viewModel.oemVendorGuides
+    val permissionsList by viewModel.permissionsList.collectAsStateWithLifecycle()
 
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
-                viewModel.refreshPermissionsStatus()
+                viewModel.refreshStatuses()
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -84,262 +82,269 @@ fun PermissionsScreen(
     val runtimePermLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) {
-        viewModel.refreshPermissionsStatus()
+        viewModel.refreshStatuses()
     }
 
-    val grantedCount = permissions.count { it.isGranted }
-
-    AuroraBackground {
-        LazyColumn(
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(AuroraColors.BackgroundDeep)
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 18.dp),
-            contentPadding = PaddingValues(top = 14.dp, bottom = 128.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
+                .widthIn(max = 640.dp)
         ) {
-            item {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                IconButton(
+                    onClick = onNavigateBack,
+                    modifier = Modifier
+                        .size(48.dp)
+                        .testTag("permissions_back_button")
                 ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "$grantedCount of ${permissions.size} granted",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = TextMuted
-                        )
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Text(
-                            text = stringResource(R.string.permissions_header),
-                            style = MaterialTheme.typography.displayLarge,
-                            color = TextPrimary
-                        )
-                    }
-                    IconButton(
-                        onClick = { viewModel.refreshPermissionsStatus() },
-                        modifier = Modifier.testTag("refresh_permissions_button")
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = stringResource(R.string.permissions_back_button),
+                        tint = AuroraColors.TextPrimary
+                    )
+                }
+                Spacer(modifier = Modifier.width(8.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = stringResource(R.string.permissions_title),
+                        style = MaterialTheme.typography.headlineMedium,
+                        color = AuroraColors.TextPrimary
+                    )
+                    Text(
+                        text = stringResource(R.string.permissions_subtitle),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = AuroraColors.TextSecondary
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .testTag("permissions_list"),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                contentPadding = PaddingValues(bottom = 24.dp)
+            ) {
+                items(permissionsList, key = { it.id }) { item ->
+                    PermissionCard(
+                        item = item,
+                        onGrantClick = {
+                            when (item.id) {
+                                "RECORD_AUDIO" -> runtimePermLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                                "READ_CONTACTS" -> runtimePermLauncher.launch(Manifest.permission.READ_CONTACTS)
+                                "CALL_PHONE" -> runtimePermLauncher.launch(Manifest.permission.CALL_PHONE)
+                                "POST_NOTIFICATIONS" -> {
+                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                        runtimePermLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                    }
+                                }
+                                "SYSTEM_ALERT_WINDOW" -> {
+                                    runCatching {
+                                        context.startActivity(
+                                            Intent(
+                                                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                                Uri.parse("package:${context.packageName}")
+                                            ).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+                                        )
+                                    }
+                                }
+                                "ACCESSIBILITY_SERVICE" -> {
+                                    runCatching {
+                                        context.startActivity(
+                                            Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
+                                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                            }
+                                        )
+                                    }
+                                }
+                                "NOTIFICATION_LISTENER" -> {
+                                    runCatching {
+                                        context.startActivity(
+                                            Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS).apply {
+                                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                            }
+                                        )
+                                    }
+                                }
+                                "BATTERY_OPTIMIZATION" -> {
+                                    runCatching {
+                                        context.startActivity(
+                                            Intent(
+                                                Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                                                Uri.parse("package:${context.packageName}")
+                                            ).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    )
+                }
+
+                item {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         Icon(
-                            imageVector = Icons.Default.Refresh,
-                            contentDescription = "Refresh permissions",
-                            tint = Lavender
+                            imageVector = Icons.Default.BatteryChargingFull,
+                            contentDescription = stringResource(R.string.permissions_oem_title),
+                            tint = AuroraColors.EmeraldSuccess
                         )
-                    }
-                }
-            }
-
-            if (!settings.onboardingCompleted) {
-                item {
-                    GlassCard(modifier = Modifier.fillMaxWidth()) {
-                        Text(
-                            text = stringResource(R.string.permissions_subheader),
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = TextSecondary
-                        )
-                        Spacer(modifier = Modifier.height(10.dp))
-                        GradientButton(
-                            text = "Continue to JARVIS",
-                            onClick = {
-                                viewModel.markOnboardingComplete()
-                                onBackToHome()
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                            testTag = "complete_onboarding_button"
-                        )
-                    }
-                }
-            }
-
-            items(permissions, key = { it.key.name }) { item ->
-                PermissionStepCard(
-                    item = item,
-                    onRequestAction = {
-                        handlePermissionAction(
-                            context = context,
-                            key = item.key,
-                            runtimeLauncher = { perm -> runtimePermLauncher.launch(perm) }
-                        )
-                    }
-                )
-            }
-
-            item {
-                SectionHeader(title = "OEM battery & background reliability")
-            }
-
-            items(oemGuides, key = { it.vendorName }) { guide ->
-                OemBatteryGuideCard(
-                    guide = guide,
-                    onOpenAppDetails = {
-                        val intent = Intent(
-                            Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
-                            Uri.parse("package:${context.packageName}")
-                        ).apply {
-                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        Column {
+                            Text(
+                                text = stringResource(R.string.permissions_oem_title),
+                                style = MaterialTheme.typography.titleMedium,
+                                color = AuroraColors.TextPrimary
+                            )
+                            Text(
+                                text = stringResource(R.string.permissions_oem_subtitle),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = AuroraColors.TextSecondary
+                            )
                         }
-                        runCatching { context.startActivity(intent) }
                     }
-                )
+                }
+
+                items(viewModel.oemGuides, key = { it.oemName }) { guide ->
+                    OemBatteryCard(
+                        guide = guide,
+                        onOpenSettings = {
+                            runCatching {
+                                context.startActivity(
+                                    Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS).apply {
+                                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                    }
+                                )
+                            }
+                        }
+                    )
+                }
             }
         }
     }
 }
 
 @Composable
-private fun PermissionStepCard(
+private fun PermissionCard(
     item: PermissionItemStatus,
-    onRequestAction: () -> Unit
+    onGrantClick: () -> Unit
 ) {
-    GlassCard(modifier = Modifier.fillMaxWidth()) {
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    AuroraGlassCard(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("permission_card_${item.id}")
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
             Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+                modifier = Modifier.weight(1f),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Column(modifier = Modifier.weight(1f)) {
+                Icon(
+                    imageVector = if (item.isGranted) Icons.Default.CheckCircle else Icons.Default.ErrorOutline,
+                    contentDescription = item.titleEn,
+                    tint = if (item.isGranted) AuroraColors.EmeraldSuccess else AuroraColors.AmberWarning,
+                    modifier = Modifier.size(22.dp)
+                )
+                Text(
+                    text = item.titleEn,
+                    style = MaterialTheme.typography.titleMedium,
+                    color = AuroraColors.TextPrimary
+                )
+            }
+
+            if (item.isGranted) {
+                AuroraStatusPill(
+                    text = stringResource(R.string.permissions_status_granted),
+                    color = AuroraColors.EmeraldSuccess
+                )
+            } else {
+                Button(
+                    onClick = onGrantClick,
+                    colors = ButtonDefaults.buttonColors(containerColor = AuroraColors.ElectricViolet),
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+                    modifier = Modifier
+                        .height(48.dp)
+                        .testTag("grant_permission_${item.id}")
+                ) {
                     Text(
-                        text = item.titleEn,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = TextPrimary
-                    )
-                    Text(
-                        text = item.titleHi,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = Lavender
+                        text = stringResource(R.string.permissions_grant_button),
+                        style = MaterialTheme.typography.labelLarge
                     )
                 }
-
-                StatusChip(
-                    label = if (item.isGranted) "Granted" else "Needed",
-                    dotColor = if (item.isGranted) Lime else Warning
-                )
-            }
-
-            Text(
-                text = item.rationaleEn,
-                style = MaterialTheme.typography.bodyMedium,
-                color = TextSecondary
-            )
-            Text(
-                text = item.rationaleHi,
-                style = MaterialTheme.typography.bodyMedium,
-                color = TextMuted
-            )
-
-            if (!item.isGranted) {
-                Spacer(modifier = Modifier.height(4.dp))
-                GradientButton(
-                    text = "Grant access · अनुमति दें",
-                    onClick = onRequestAction,
-                    modifier = Modifier.fillMaxWidth(),
-                    testTag = "grant_perm_${item.key.name.lowercase()}"
-                )
             }
         }
+
+        Text(
+            text = item.rationaleEn,
+            style = MaterialTheme.typography.bodySmall,
+            color = AuroraColors.TextSecondary
+        )
     }
 }
 
 @Composable
-private fun OemBatteryGuideCard(
-    guide: OemVendorGuide,
-    onOpenAppDetails: () -> Unit
+private fun OemBatteryCard(
+    guide: OemBatteryGuide,
+    onOpenSettings: () -> Unit
 ) {
-    GlassCard(modifier = Modifier.fillMaxWidth()) {
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    AuroraGlassCard(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
             Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = guide.vendorName,
-                        style = MaterialTheme.typography.titleMedium,
-                        color = TextPrimary
-                    )
-                    Text(
-                        text = guide.osName,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = Lavender
-                    )
-                }
-                GhostButton(
-                    text = "App info",
-                    onClick = onOpenAppDetails
+                Icon(
+                    imageVector = Icons.Default.Security,
+                    contentDescription = guide.oemName,
+                    tint = AuroraColors.CyanGlow,
+                    modifier = Modifier.size(18.dp)
+                )
+                Text(
+                    text = guide.oemName,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = AuroraColors.CyanGlow,
+                    fontWeight = FontWeight.Bold
                 )
             }
-            Text(
-                text = guide.stepsEn,
-                style = MaterialTheme.typography.bodyMedium,
-                color = TextSecondary
-            )
-            Text(
-                text = guide.stepsHi,
-                style = MaterialTheme.typography.bodyMedium,
-                color = TextMuted
-            )
-        }
-    }
-}
-
-private fun handlePermissionAction(
-    context: Context,
-    key: PermissionKey,
-    runtimeLauncher: (String) -> Unit
-) {
-    when (key) {
-        PermissionKey.RECORD_AUDIO -> runtimeLauncher(Manifest.permission.RECORD_AUDIO)
-
-        PermissionKey.POST_NOTIFICATIONS -> {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                runtimeLauncher(Manifest.permission.POST_NOTIFICATIONS)
+            OutlinedButton(
+                onClick = onOpenSettings,
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                modifier = Modifier.height(48.dp)
+            ) {
+                Text(
+                    text = stringResource(R.string.permissions_open_battery_settings),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = AuroraColors.TextPrimary
+                )
             }
         }
-
-        PermissionKey.CALL_PHONE -> runtimeLauncher(Manifest.permission.CALL_PHONE)
-
-        PermissionKey.READ_CONTACTS -> runtimeLauncher(Manifest.permission.READ_CONTACTS)
-
-        PermissionKey.SYSTEM_ALERT_WINDOW -> {
-            val intent = Intent(
-                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                Uri.parse("package:${context.packageName}")
-            ).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            runCatching { context.startActivity(intent) }
-        }
-
-        PermissionKey.ACCESSIBILITY_SERVICE -> {
-            val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            runCatching { context.startActivity(intent) }
-        }
-
-        PermissionKey.NOTIFICATION_LISTENER -> {
-            val intent = Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            runCatching { context.startActivity(intent) }
-        }
-
-        PermissionKey.BATTERY_OPTIMIZATION -> {
-            val intent = Intent(
-                Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
-                Uri.parse("package:${context.packageName}")
-            ).apply {
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            }
-            runCatching { context.startActivity(intent) }.onFailure {
-                val fallback = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-                runCatching { context.startActivity(fallback) }
-            }
-        }
+        Text(
+            text = guide.stepsEn,
+            style = MaterialTheme.typography.bodySmall,
+            color = AuroraColors.TextPrimary
+        )
     }
 }

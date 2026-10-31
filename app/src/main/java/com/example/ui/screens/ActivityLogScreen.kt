@@ -1,8 +1,6 @@
 package com.example.ui.screens
 
-import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,192 +12,191 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.DeleteSweep
+import androidx.compose.material.icons.filled.History
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.R
-import com.example.domain.model.RiskLevel
-import com.example.domain.repository.ActivityLogRecord
-import com.example.ui.components.AuroraBackground
-import com.example.ui.components.GhostButton
-import com.example.ui.components.GlassCard
-import com.example.ui.theme.Danger
-import com.example.ui.theme.JetBrainsMonoFontFamily
-import com.example.ui.theme.Success
-import com.example.ui.theme.TextMuted
-import com.example.ui.theme.TextPrimary
-import com.example.ui.theme.TextSecondary
-import com.example.ui.theme.Warning
+import com.example.domain.model.ActivityLogEntry
+import com.example.ui.components.AuroraGlassCard
+import com.example.ui.components.AuroraSectionHeader
+import com.example.ui.components.AuroraStatusPill
+import com.example.ui.components.RiskLevelBadge
+import com.example.ui.theme.AuroraColors
+import com.example.ui.theme.JarvisTimestampMonoStyle
 import com.example.ui.viewmodel.ActivityLogViewModel
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
 @Composable
-fun ActivityLogScreen(
-    viewModel: ActivityLogViewModel,
-    onBackToHome: () -> Unit
-) {
-    BackHandler(onBack = onBackToHome)
-
+fun ActivityLogScreen(viewModel: ActivityLogViewModel) {
     val logs by viewModel.logs.collectAsStateWithLifecycle()
 
-    AuroraBackground {
-        LazyColumn(
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(AuroraColors.BackgroundDeep)
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 18.dp),
-            contentPadding = PaddingValues(top = 14.dp, bottom = 128.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
+                .widthIn(max = 640.dp)
         ) {
-            item {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "${logs.size} recorded events",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = TextMuted
-                        )
-                        Spacer(modifier = Modifier.height(2.dp))
-                        Text(
-                            text = stringResource(R.string.activity_log_title),
-                            style = MaterialTheme.typography.displayLarge,
-                            color = TextPrimary
-                        )
-                    }
-
+            AuroraSectionHeader(
+                title = stringResource(R.string.activity_title),
+                subtitle = stringResource(R.string.activity_subtitle),
+                trailing = {
                     if (logs.isNotEmpty()) {
-                        GhostButton(
-                            text = "Clear",
-                            leadingIcon = Icons.Default.DeleteSweep,
-                            onClick = { viewModel.clearLogs() },
-                            testTag = "clear_activity_logs_button"
-                        )
+                        OutlinedButton(
+                            onClick = viewModel::clearLogs,
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                            modifier = Modifier
+                                .height(48.dp)
+                                .testTag("clear_activity_logs_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.DeleteSweep,
+                                contentDescription = stringResource(R.string.activity_clear_all),
+                                tint = AuroraColors.TextSecondary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = stringResource(R.string.activity_clear_all),
+                                style = MaterialTheme.typography.labelLarge,
+                                color = AuroraColors.TextPrimary
+                            )
+                        }
                     }
                 }
-            }
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
 
             if (logs.isEmpty()) {
-                item {
-                    GlassCard(modifier = Modifier.fillMaxWidth()) {
-                        Text(
-                            text = "No tool actions logged yet",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = TextPrimary
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.History,
+                            contentDescription = stringResource(R.string.activity_empty),
+                            tint = AuroraColors.TextMuted,
+                            modifier = Modifier.size(48.dp)
                         )
-                        Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = "Run any voice or text command on Home to inspect its SafetyGate audit trail here.",
+                            text = stringResource(R.string.activity_empty),
                             style = MaterialTheme.typography.bodyMedium,
-                            color = TextSecondary
+                            color = AuroraColors.TextSecondary
                         )
                     }
                 }
-            }
-
-            items(logs, key = { it.id }) { log ->
-                ActivityLogTimelineItem(log = log)
+            } else {
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .testTag("activity_log_list"),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    contentPadding = PaddingValues(bottom = 24.dp)
+                ) {
+                    items(logs, key = { it.id }) { entry ->
+                        ActivityLogCard(entry)
+                    }
+                }
             }
         }
     }
 }
 
 @Composable
-private fun ActivityLogTimelineItem(log: ActivityLogRecord) {
-    val riskColor = when (log.riskLevel) {
-        RiskLevel.LOW -> Success
-        RiskLevel.MEDIUM -> Warning
-        RiskLevel.HIGH -> Danger
-    }
+private fun ActivityLogCard(entry: ActivityLogEntry) {
+    val formatter = remember { SimpleDateFormat("HH:mm:ss · dd MMM", Locale.getDefault()) }
+    val formattedTime = remember(entry.timestampMs) { formatter.format(Date(entry.timestampMs)) }
 
-    val timeFormat = SimpleDateFormat("HH:mm:ss · dd MMM", Locale.getDefault())
-    val timeLabel = timeFormat.format(Date(log.timestamp))
-
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        verticalAlignment = Alignment.Top
+    AuroraGlassCard(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("activity_log_card_${entry.id}")
     ) {
-        // Timeline indicator dot
-        Box(
-            modifier = Modifier
-                .padding(top = 18.dp)
-                .size(10.dp)
-                .clip(CircleShape)
-                .background(riskColor)
-        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = entry.toolName,
+                style = MaterialTheme.typography.titleMedium,
+                color = AuroraColors.CyanGlow,
+                fontWeight = FontWeight.Bold
+            )
 
-        GlassCard(modifier = Modifier.weight(1f)) {
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = log.toolName,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = TextPrimary
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (entry.userConfirmed) {
+                    AuroraStatusPill(
+                        text = "USER APPROVED",
+                        color = AuroraColors.EmeraldSuccess,
+                        icon = Icons.Default.CheckCircle
                     )
-                    Surface(
-                        color = riskColor.copy(alpha = 0.16f),
-                        shape = RoundedCornerShape(50),
-                        modifier = Modifier.border(1.dp, riskColor.copy(alpha = 0.45f), RoundedCornerShape(50))
-                    ) {
-                        Text(
-                            text = "${log.riskLevel.name} · ${log.status}",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = riskColor,
-                            letterSpacing = 0.5.sp,
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 3.dp)
-                        )
-                    }
                 }
-
-                // JetBrains Mono ONLY for args and timestamp
-                Text(
-                    text = log.argsJson,
-                    fontFamily = JetBrainsMonoFontFamily,
-                    fontSize = 12.sp,
-                    color = TextSecondary
-                )
-
-                Text(
-                    text = log.resultSummary,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = TextPrimary
-                )
-
-                Text(
-                    text = timeLabel,
-                    fontFamily = JetBrainsMonoFontFamily,
-                    fontSize = 11.sp,
-                    color = TextMuted
-                )
+                RiskLevelBadge(riskLevel = entry.riskLevel)
             }
+        }
+
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(
+                text = "${stringResource(R.string.activity_args_label)}: ${entry.argumentsSummary}",
+                style = MaterialTheme.typography.bodySmall,
+                color = AuroraColors.TextSecondary
+            )
+            Text(
+                text = "${stringResource(R.string.activity_output_label)}: ${entry.resultSummary}",
+                style = MaterialTheme.typography.bodyMedium,
+                color = AuroraColors.TextPrimary
+            )
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(
+                text = formattedTime,
+                style = JarvisTimestampMonoStyle,
+                color = AuroraColors.TextMuted
+            )
+            Text(
+                text = "${entry.durationMs} ms",
+                style = JarvisTimestampMonoStyle,
+                color = AuroraColors.ElectricViolet
+            )
         }
     }
 }

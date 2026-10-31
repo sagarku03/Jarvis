@@ -1,16 +1,14 @@
 package com.example.domain.agent
 
+import com.example.BuildConfig
 import com.example.di.Inject
 import com.example.di.Singleton
-import com.example.domain.model.AgentMessage
-import com.example.domain.model.AppLanguage
-import com.example.domain.model.AppResult
+import com.example.domain.model.ActivityLogEntry
+import com.example.domain.model.AssistantOrbState
+import com.example.domain.model.ChatMessage
 import com.example.domain.model.MessageRole
-import com.example.domain.model.OrbState
-import com.example.domain.model.PendingMemoryCandidate
-import com.example.domain.model.RiskLevel
-import com.example.domain.model.RoutineTriggerType
 import com.example.domain.model.ScreenContextSnapshot
+import com.example.domain.model.ToolCallSpec
 import com.example.domain.model.ToolExecutionResult
 import com.example.domain.repository.ActivityLogRepository
 import com.example.domain.repository.AgentBackendRepository
@@ -19,581 +17,421 @@ import com.example.domain.repository.MemoryRepository
 import com.example.domain.repository.RoutineRepository
 import com.example.domain.repository.SettingsRepository
 import com.example.domain.safety.KillSwitch
-import com.example.domain.safety.SafetyDecision
 import com.example.domain.safety.SafetyGate
 import com.example.domain.tool.ToolRegistry
-import com.example.domain.voice.TtsEngineWrapper
 import com.example.services.JarvisAccessibilityService
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.TimeoutCancellationException
-import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withTimeout
-import java.util.UUID
 
+/**
+ * Multi-step Agent Orchestrator loop:
+ * User speech/text -> Routine check -> Context assembly -> Backend /v1/agent/step ->
+ * Tool Call(s) -> SafetyGate -> Tool Execution -> (Read Screen if follow-up required) ->
+ * Feed Tool Result back -> Repeat (max 6 steps, 60s active execution budget excluding human confirmation wait) -> Final Reply.
+ */
 @Singleton
 class AgentOrchestrator @Inject constructor(
-    private val backendRepository: AgentBackendRepository,
+    private val agentBackendRepository: AgentBackendRepository,
     private val chatRepository: ChatRepository,
     private val memoryRepository: MemoryRepository,
-    private val routineRepository: RoutineRepository,
     private val activityLogRepository: ActivityLogRepository,
+    private val routineRepository: RoutineRepository,
     private val settingsRepository: SettingsRepository,
     private val toolRegistry: ToolRegistry,
     private val safetyGate: SafetyGate,
-    private val ttsEngine: TtsEngineWrapper,
-    private val killSwitch: KillSwitch,
-    private val contactsResolver: com.example.domain.contact.ContactsResolver? = null
+    private val killSwitch: KillSwitch
 ) {
     companion object {
-        const val MAX_AGENT_STEPS = 15
-        const val AGENT_TIMEOUT_MS = 60_000L
-        const val MAX_TOOL_RETRIES = 2
-        const val STUCK_SCREEN_THRESHOLD = 3
+        const val MAX_STEPS_PER_TURN = 6
+        const val MAX_ACTIVE_TURN_DURATION_MS = 60_000L
+        const val DEFAULT_GREETING = "Hi, I'm Jarvis. How can I help?"
+
+        private val NON_IDEMPOTENT_TOOLS = setOf(
+            "call_contact",
+            "send_sms",
+            "send_whatsapp_or_telegram",
+            "tap_element",
+            "type_text"
+        )
+
+        fun isNonIdempotentTool(toolName: String): Boolean =
+            toolName in NON_IDEMPOTENT_TOOLS
     }
 
-    private val orchestratorScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
-    private var activeRunJob: Job? = null
+    private val _orbState = MutableStateFlow(AssistantOrbState.IDLE)
+    val orbState: StateFlow<AssistantOrbState> = _orbState.asStateFlow()
 
-    private val _orbState = MutableStateFlow(OrbState.IDLE)
-    val orbState: StateFlow<OrbState> = _orbState.asStateFlow()
-
-    private val _lastResponseText = MutableStateFlow(
-        "नमस्ते! मैं JARVIS हूँ। आप हिन्दी, हिंग्लिश या English में कमांड दे सकते हैं। / Ready for your command."
-    )
+    private val _lastResponseText = MutableStateFlow(DEFAULT_GREETING)
     val lastResponseText: StateFlow<String> = _lastResponseText.asStateFlow()
 
-    private val _currentStepInfo = MutableStateFlow<String?>(null)
-    val currentStepInfo: StateFlow<String?> = _currentStepInfo.asStateFlow()
+    private val _lastAgentStepLatencyMs = MutableStateFlow(0L)
+    val lastAgentStepLatencyMs: StateFlow<Long> = _lastAgentStepLatencyMs.asStateFlow()
 
-    init {
-        killSwitch.registerCancelCallback {
-            activeRunJob?.cancel(CancellationException("KillSwitch triggered"))
-            ttsEngine.stopSpeaking()
-            _orbState.value = OrbState.IDLE
-            _currentStepInfo.value = "HALTED BY KILL SWITCH"
+    private var activeJob: Job? = null
+
+    fun setOrbState(state: AssistantOrbState) {
+        if (killSwitch.isKilled.value) {
+            _orbState.value = AssistantOrbState.PAUSED_KILLSWITCH
+        } else {
+            _orbState.value = state
         }
     }
 
-    fun setListeningState(listening: Boolean) {
-        if (listening) {
-            if (ttsEngine.isSpeaking.value || _orbState.value == OrbState.SPEAKING) {
-                ttsEngine.stopSpeaking()
+    fun cancelActiveTurn() {
+        activeJob?.cancel()
+        activeJob = null
+        safetyGate.cancelPendingConfirmation()
+        if (!killSwitch.isKilled.value) {
+            _orbState.value = AssistantOrbState.IDLE
+        }
+    }
+
+    suspend fun handleUserCommand(
+        userText: String,
+        screenContext: ScreenContextSnapshot? = null
+    ): String = coroutineScope {
+        val settings = settingsRepository.settingsFlow.first()
+
+        if (killSwitch.isKilled.value || settings.killSwitchActive) {
+            _orbState.value = AssistantOrbState.PAUSED_KILLSWITCH
+            val msg = "Kill Switch is active. Tap 'Resume Assistant' before running commands."
+            _lastResponseText.value = msg
+            return@coroutineScope msg
+        }
+
+        // Check if user command triggers a saved Voice Routine
+        val matchedRoutine = try {
+            routineRepository.findMatchingVoiceRoutine(userText)
+        } catch (ce: CancellationException) {
+            throw ce
+        } catch (_: Exception) {
+            null
+        }
+        if (matchedRoutine != null && matchedRoutine.actionsJson.isNotEmpty()) {
+            routineRepository.markRoutineRun(matchedRoutine.id, System.currentTimeMillis())
+            val routineOutputs = mutableListOf<String>()
+            for (subCommand in matchedRoutine.actionsJson) {
+                if (killSwitch.isKilled.value) break
+                val subReply = executeSingleTurnWithBudget(subCommand, screenContext)
+                routineOutputs.add(subReply)
             }
-            _orbState.value = OrbState.LISTENING
-        } else if (_orbState.value == OrbState.LISTENING) {
-            _orbState.value = OrbState.IDLE
+            val combined = "Routine '${matchedRoutine.title}' completed: ${routineOutputs.joinToString(" | ")}"
+            _lastResponseText.value = combined
+            return@coroutineScope combined
         }
+
+        executeSingleTurnWithBudget(userText, screenContext)
     }
 
-    fun bargeIn() {
-        if (ttsEngine.isSpeaking.value || _orbState.value == OrbState.SPEAKING) {
-            ttsEngine.stopSpeaking()
-            _orbState.value = OrbState.IDLE
-        }
-    }
+    private class TurnTimeoutException(message: String) : Exception(message)
 
-    fun processUserUtterance(
-        rawUtterance: String,
-        screenContextOverride: ScreenContextSnapshot? = null
-    ) {
-        val utterance = rawUtterance.trim()
-        if (utterance.isEmpty()) return
-
-        val turnStartTimestampMs = System.currentTimeMillis()
-        killSwitch.resetAfterKill()
-        ttsEngine.stopSpeaking()
-        activeRunJob?.cancel()
-
-        activeRunJob = orchestratorScope.launch {
-            val settings = settingsRepository.getSnapshot()
-            val language = settings.language
-
+    private suspend fun executeSingleTurnWithBudget(
+        userText: String,
+        initialScreenContext: ScreenContextSnapshot?
+    ): String = coroutineScope {
+        var finalOutput = ""
+        val job = launch {
             try {
-                _orbState.value = OrbState.THINKING
-                _currentStepInfo.value = "Understanding command & retrieving Top-K memories..."
-
-                val userMsg = AgentMessage(
-                    role = MessageRole.USER,
-                    content = utterance
+                finalOutput = executeCommandInternal(
+                    userText = userText,
+                    initialScreenContext = initialScreenContext
                 )
-                chatRepository.saveMessage(userMsg)
-
-                // Stage 5: Queue candidate memory for user approval instead of silently writing
-                maybeQueueMemoryCandidate(utterance)
-                // Stage 6: Check if user asked to create a voice routine
-                maybeCreateVoiceRoutine(utterance)
-
-                withTimeout(AGENT_TIMEOUT_MS) {
-                    var stepCount = 0
-                    var loopFinished = false
-                    var screenToolInvokedInTurn = shouldCaptureScreenOnDemand(utterance)
-                    val recentScreenHashes = mutableListOf<String>()
-
-                    while (stepCount < MAX_AGENT_STEPS && !loopFinished) {
-                        currentCoroutineContext().ensureActive()
-                        if (killSwitch.isHalted.value) {
-                            throw CancellationException("KillSwitch active")
-                        }
-
-                        stepCount++
-                        _currentStepInfo.value = "Agent Step $stepCount / $MAX_AGENT_STEPS"
-
-                        val history = chatRepository.getRecentMessages(limit = 16)
-                        val tools = toolRegistry.getToolDescriptors(settings.fullControlModeEnabled)
-                        // Stage 5: Inject only top-K (k=5) relevant memories into agent context
-                        val topKMemories = memoryRepository.getTopKRelevantMemories(utterance, k = 5)
-
-                        val liveScreenContext = if (screenContextOverride != null || screenToolInvokedInTurn || settings.simulateSecureScreen) {
-                            screenContextOverride
-                                ?: resolveCurrentScreenContext(
-                                    simulateSecure = settings.simulateSecureScreen,
-                                    fullControlEnabled = settings.fullControlModeEnabled
-                                )
-                        } else {
-                            null
-                        }
-
-                        // Phase 3 Privacy: Never send secure/banking screen content to backend
-                        val outboundScreenContext = if (liveScreenContext?.isSecureScreen == true) {
-                            null
-                        } else {
-                            liveScreenContext
-                        }
-
-                        when (val stepResult = backendRepository.executeAgentStep(
-                            messages = history,
-                            tools = tools,
-                            screenContext = outboundScreenContext,
-                            language = language,
-                            topKMemories = topKMemories
-                        )) {
-                            is AppResult.Loading -> Unit
-                            is AppResult.Error -> {
-                                val errMsg = stepResult.localized(language)
-                                speakAndRecordAssistantReply(
-                                    reply = errMsg,
-                                    language = language,
-                                    voiceSpeed = settings.voiceSpeed,
-                                    voicePitch = settings.voicePitch,
-                                    voiceProfile = settings.voiceProfile,
-                                    turnStartTimestampMs = turnStartTimestampMs
-                                )
-                                loopFinished = true
-                            }
-                            is AppResult.Success -> {
-                                val output = stepResult.data
-
-                                // Stage 5: Queue any backend-extracted memory candidates for user approval
-                                output.memoryCandidates.forEach { candidate ->
-                                    memoryRepository.queueMemoryCandidate(candidate)
-                                }
-
-                                if (output.toolCalls.isEmpty()) {
-                                    val finalReply = output.assistantText ?: defaultFallbackReply(language)
-                                    speakAndRecordAssistantReply(
-                                        reply = finalReply,
-                                        language = language,
-                                        voiceSpeed = settings.voiceSpeed,
-                                        voicePitch = settings.voicePitch,
-                                        voiceProfile = settings.voiceProfile,
-                                        turnStartTimestampMs = turnStartTimestampMs
-                                    )
-                                    loopFinished = true
-                                } else {
-                                    if (!output.assistantText.isNullOrBlank()) {
-                                        _lastResponseText.value = output.assistantText
-                                    }
-
-                                    for (toolCall in output.toolCalls) {
-                                        currentCoroutineContext().ensureActive()
-                                        _currentStepInfo.value = "Tool: ${toolCall.name}"
-
-                                        val tool = toolRegistry.findTool(
-                                            name = toolCall.name,
-                                            fullControlOverride = settings.fullControlModeEnabled
-                                        )
-
-                                        if (tool == null) {
-                                            val unavailableMsg = if (language == AppLanguage.HI_IN) {
-                                                "टूल '${toolCall.name}' उपलब्ध नहीं है या STORE_SAFE_MODE द्वारा प्रतिबंधित है।"
-                                            } else {
-                                                "Tool '${toolCall.name}' is unavailable or restricted by STORE_SAFE_MODE."
-                                            }
-                                            activityLogRepository.logToolAction(
-                                                toolName = toolCall.name,
-                                                args = toolCall.args,
-                                                riskLevel = RiskLevel.LOW,
-                                                status = "BLOCKED",
-                                                resultSummary = unavailableMsg
-                                            )
-                                            chatRepository.saveMessage(
-                                                AgentMessage(
-                                                    role = MessageRole.TOOL,
-                                                    content = unavailableMsg,
-                                                    toolCallId = toolCall.id,
-                                                    toolName = toolCall.name
-                                                )
-                                            )
-                                            continue
-                                        }
-
-                                        val contactTools = setOf("call_contact", "send_sms", "send_whatsapp_or_telegram")
-                                        var effectiveArgs = toolCall.args
-                                        if (tool.name in contactTools && contactsResolver != null) {
-                                            val rawQuery = toolCall.args["contact"] ?: toolCall.args["recipient"] ?: ""
-                                            when (val res = contactsResolver.resolve(rawQuery)) {
-                                                is com.example.domain.contact.ContactResolutionResult.NotFound -> {
-                                                    val msg = if (language == AppLanguage.HI_IN) res.messageHi else res.messageEn
-                                                    activityLogRepository.logToolAction(
-                                                        toolName = tool.name,
-                                                        args = toolCall.args,
-                                                        riskLevel = tool.riskLevel,
-                                                        status = "CONTACT_NOT_FOUND",
-                                                        resultSummary = msg
-                                                    )
-                                                    chatRepository.saveMessage(
-                                                        AgentMessage(
-                                                            role = MessageRole.TOOL,
-                                                            content = msg,
-                                                            toolCallId = toolCall.id,
-                                                            toolName = tool.name
-                                                        )
-                                                    )
-                                                    continue
-                                                }
-                                                is com.example.domain.contact.ContactResolutionResult.Ambiguous -> {
-                                                    val msg = if (language == AppLanguage.HI_IN) res.messageHi() else res.messageEn()
-                                                    activityLogRepository.logToolAction(
-                                                        toolName = tool.name,
-                                                        args = toolCall.args,
-                                                        riskLevel = tool.riskLevel,
-                                                        status = "CONTACT_AMBIGUOUS",
-                                                        resultSummary = msg
-                                                    )
-                                                    chatRepository.saveMessage(
-                                                        AgentMessage(
-                                                            role = MessageRole.TOOL,
-                                                            content = msg,
-                                                            toolCallId = toolCall.id,
-                                                            toolName = tool.name
-                                                        )
-                                                    )
-                                                    continue
-                                                }
-                                                is com.example.domain.contact.ContactResolutionResult.Resolved -> {
-                                                    val resolvedLabel = "${res.contact.displayName} (${res.contact.maskedNumber})"
-                                                    effectiveArgs = toolCall.args.toMutableMap().apply {
-                                                        put("resolved_contact", resolvedLabel)
-                                                        put("masked_number", res.contact.maskedNumber)
-                                                    }
-                                                }
-                                            }
-                                        }
-
-                                        val effectiveScreenSnap = if (tool.requiresFullControlMode) {
-                                            screenToolInvokedInTurn = true
-                                            liveScreenContext ?: resolveCurrentScreenContext(
-                                                simulateSecure = settings.simulateSecureScreen,
-                                                fullControlEnabled = settings.fullControlModeEnabled
-                                            )
-                                        } else {
-                                            liveScreenContext
-                                        }
-
-                                        val isSecure = effectiveScreenSnap?.isSecureScreen == true
-                                        val activePkg = effectiveScreenSnap?.packageName
-                                        val decision = safetyGate.evaluateBeforeExecution(
-                                            tool = tool,
-                                            args = effectiveArgs,
-                                            policyLevel = settings.safetyPolicyLevel,
-                                            isSecureScreen = isSecure,
-                                            activePackageName = activePkg,
-                                            language = language
-                                        )
-
-                                        when (decision) {
-                                            is SafetyDecision.Denied -> {
-                                                val deniedText = if (language == AppLanguage.HI_IN) {
-                                                    decision.reasonHi
-                                                } else {
-                                                    decision.reasonEn
-                                                }
-                                                activityLogRepository.logToolAction(
-                                                    toolName = tool.name,
-                                                    args = toolCall.args,
-                                                    riskLevel = tool.riskLevel,
-                                                    status = "DENIED_BY_SAFETY_GATE",
-                                                    resultSummary = deniedText
-                                                )
-                                                chatRepository.saveMessage(
-                                                    AgentMessage(
-                                                        role = MessageRole.TOOL,
-                                                        content = deniedText,
-                                                        toolCallId = toolCall.id,
-                                                        toolName = tool.name
-                                                    )
-                                                )
-                                            }
-                                            is SafetyDecision.Approved -> {
-                                                _orbState.value = OrbState.THINKING
-
-                                                // Stage 4: Execute with retry on failure (max 2 retries)
-                                                var attempt = 0
-                                                var execResult: ToolExecutionResult
-                                                do {
-                                                    if (attempt > 0) {
-                                                        _currentStepInfo.value = "Retrying ${tool.name} ($attempt/$MAX_TOOL_RETRIES)..."
-                                                        delay(250)
-                                                    }
-                                                    execResult = runCatching {
-                                                        tool.execute(toolCall.args)
-                                                    }.getOrElse { e ->
-                                                        ToolExecutionResult(
-                                                            toolName = tool.name,
-                                                            success = false,
-                                                            outputEn = "Tool execution failed: ${e.localizedMessage ?: "unexpected error"}",
-                                                            outputHi = "टूल चलाने में त्रुटि: ${e.localizedMessage ?: "अज्ञात त्रुटि"}"
-                                                        )
-                                                    }
-                                                    attempt++
-                                                } while (!execResult.success && attempt <= MAX_TOOL_RETRIES)
-
-                                                val localizedOut = execResult.localizedOutput(language)
-                                                activityLogRepository.logToolAction(
-                                                    toolName = tool.name,
-                                                    args = toolCall.args,
-                                                    riskLevel = tool.riskLevel,
-                                                    status = if (execResult.success) "SUCCESS" else "FAILED_AFTER_RETRIES",
-                                                    resultSummary = localizedOut
-                                                )
-                                                chatRepository.saveMessage(
-                                                    AgentMessage(
-                                                        role = MessageRole.TOOL,
-                                                        content = localizedOut,
-                                                        toolCallId = toolCall.id,
-                                                        toolName = tool.name
-                                                    )
-                                                )
-
-                                                // Stage 4: Stuck-screen detection (same screen hash 3 times)
-                                                if (tool.requiresFullControlMode) {
-                                                    val postSnap = resolveCurrentScreenContext(
-                                                        simulateSecure = settings.simulateSecureScreen,
-                                                        fullControlEnabled = settings.fullControlModeEnabled
-                                                    )
-                                                    val hash = postSnap?.screenHash ?: "unknown"
-                                                    recentScreenHashes.add(hash)
-                                                    if (isStuckOnSameScreen(recentScreenHashes)) {
-                                                        val stuckMsg = if (language == AppLanguage.HI_IN) {
-                                                            "स्क्रीन लगातार 3 बार से नहीं बदली है। लगता है मैं अटक गया हूँ—कृपया स्क्रीन पर मेरी मदद करें।"
-                                                        } else {
-                                                            "The screen has not changed for 3 consecutive steps. I appear to be stuck—please assist me on screen."
-                                                        }
-                                                        speakAndRecordAssistantReply(
-                                                            reply = stuckMsg,
-                                                            language = language,
-                                                            voiceSpeed = settings.voiceSpeed,
-                                                            voicePitch = settings.voicePitch,
-                                                            voiceProfile = settings.voiceProfile,
-                                                            turnStartTimestampMs = turnStartTimestampMs
-                                                        )
-                                                        loopFinished = true
-                                                        break
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    if (!loopFinished && stepCount >= MAX_AGENT_STEPS) {
-                        val maxStepReply = if (language == AppLanguage.HI_IN) {
-                            "अधिकतम 15 चरण पूरे हो गए। सुरक्षा के लिए एजेंट लूप रोक दिया गया है।"
-                        } else {
-                            "Reached the maximum limit of 15 tool steps. Stopping agent loop for safety."
-                        }
-                        speakAndRecordAssistantReply(
-                            reply = maxStepReply,
-                            language = language,
-                            voiceSpeed = settings.voiceSpeed,
-                            voicePitch = settings.voicePitch,
-                            voiceProfile = settings.voiceProfile,
-                            turnStartTimestampMs = turnStartTimestampMs
-                        )
-                    }
-                }
+            } catch (_: TurnTimeoutException) {
+                val timeoutMsg = "Turn timed out after 60 seconds. Stopping safely."
+                chatRepository.appendMessage(
+                    ChatMessage(role = MessageRole.ASSISTANT, content = timeoutMsg)
+                )
+                _lastResponseText.value = timeoutMsg
+                _orbState.value = AssistantOrbState.IDLE
+                finalOutput = timeoutMsg
             } catch (_: TimeoutCancellationException) {
-                val timeoutReply = if (language == AppLanguage.HI_IN) {
-                    "60 सेकंड का समय समाप्त हो गया। कृपया अपना कमांड फिर से प्रयास करें।"
-                } else {
-                    "Agent loop timed out after 60 seconds. Please try your command again."
-                }
-                speakAndRecordAssistantReply(
-                    reply = timeoutReply,
-                    language = language,
-                    voiceSpeed = settings.voiceSpeed,
-                    voicePitch = settings.voicePitch,
-                    voiceProfile = settings.voiceProfile,
-                    turnStartTimestampMs = turnStartTimestampMs
+                val timeoutMsg = "Turn timed out after 60 seconds. Stopping safely."
+                chatRepository.appendMessage(
+                    ChatMessage(role = MessageRole.ASSISTANT, content = timeoutMsg)
                 )
-            } catch (_: CancellationException) {
-                _orbState.value = OrbState.IDLE
-                _currentStepInfo.value = "Cancelled"
-            } catch (e: Exception) {
-                val friendlyError = if (language == AppLanguage.HI_IN) {
-                    "माफ़ कीजिए, एक अप्रत्याशित समस्या आई: ${e.localizedMessage ?: "अज्ञात त्रुटि"}"
-                } else {
-                    "Sorry, I ran into an unexpected issue: ${e.localizedMessage ?: "unknown error"}"
-                }
-                speakAndRecordAssistantReply(
-                    reply = friendlyError,
-                    language = language,
-                    voiceSpeed = settings.voiceSpeed,
-                    voicePitch = settings.voicePitch,
-                    voiceProfile = settings.voiceProfile,
-                    turnStartTimestampMs = turnStartTimestampMs
-                )
+                _lastResponseText.value = timeoutMsg
+                _orbState.value = AssistantOrbState.IDLE
+                finalOutput = timeoutMsg
+            } catch (ce: CancellationException) {
+                throw ce
             }
         }
+        activeJob = job
+        job.join()
+        finalOutput
     }
 
-    fun isStuckOnSameScreen(hashes: List<String>): Boolean {
-        if (hashes.size < STUCK_SCREEN_THRESHOLD) return false
-        val tail = hashes.takeLast(STUCK_SCREEN_THRESHOLD)
-        return tail.distinct().size == 1
-    }
+    private suspend fun executeCommandInternal(
+        userText: String,
+        initialScreenContext: ScreenContextSnapshot?
+    ): String = coroutineScope {
+        val settings = settingsRepository.settingsFlow.first()
+        var activeExecutionElapsedMs = 0L
 
-    fun shouldCaptureScreenOnDemand(utterance: String): Boolean {
-        val lower = utterance.lowercase()
-        val keywords = listOf(
-            "screen", "on my screen", "read screen", "what is on", "tap ", "click ", "scroll",
-            "स्क्रीन", "स्क्रीन पढ़ो", "स्क्रीन पर", "टैप", "स्क्रॉल"
-        )
-        return keywords.any { lower.contains(it) }
-    }
-
-    private fun resolveCurrentScreenContext(
-        simulateSecure: Boolean,
-        fullControlEnabled: Boolean
-    ): ScreenContextSnapshot? {
-        if (simulateSecure) {
-            return ScreenContextSnapshot(
-                packageName = "com.bank.upi.secure",
-                activityName = "PinEntryActivity",
-                isSecureScreen = true,
-                rawVisibleTextNodes = emptyList(),
-                structuredNodes = emptyList(),
-                compactJson = "",
-                screenHash = "com.bank.upi.secure_SECURE_BLOCKED"
+        // Save user message
+        chatRepository.appendMessage(
+            ChatMessage(
+                role = MessageRole.USER,
+                content = userText
             )
-        }
-        if (!fullControlEnabled) return null
-        return JarvisAccessibilityService.captureCurrentScreenSnapshot()
-    }
+        )
 
-    private suspend fun speakAndRecordAssistantReply(
-        reply: String,
-        language: AppLanguage,
-        voiceSpeed: Float,
-        voicePitch: Float,
-        voiceProfile: com.example.domain.model.VoiceProfile,
-        turnStartTimestampMs: Long
-    ) {
-        _lastResponseText.value = reply
-        _currentStepInfo.value = null
-        chatRepository.saveMessage(
-            AgentMessage(
+        // Opportunistically extract "remember that X is Y" into local Memory
+        extractMemoryIfRequested(userText)
+
+        _orbState.value = AssistantOrbState.THINKING
+
+        var stepCount = 0
+        var finalReply = ""
+        var currentScreenSnapshot = initialScreenContext
+            ?: JarvisAccessibilityService.captureCurrentScreenSnapshot()
+
+        while (stepCount < MAX_STEPS_PER_TURN && isActive) {
+            if (activeExecutionElapsedMs >= MAX_ACTIVE_TURN_DURATION_MS) {
+                throw TurnTimeoutException("Exceeded 60s active execution budget")
+            }
+
+            if (killSwitch.isKilled.value) {
+                _orbState.value = AssistantOrbState.PAUSED_KILLSWITCH
+                finalReply = "Stopped immediately by Kill Switch."
+                break
+            }
+
+            stepCount++
+            val recentMessages = chatRepository.getRecentContextMessages(limit = 20)
+            val memories = memoryRepository.getAllMemoriesSnapshot()
+            val availableTools = toolRegistry.getAvailableDescriptors(
+                fullControlMode = BuildConfig.FULL_CONTROL_MODE,
+                storeSafeMode = BuildConfig.STORE_SAFE_MODE
+            )
+
+            val stepStartMs = System.currentTimeMillis()
+            val stepDecision = agentBackendRepository.runAgentStep(
+                messages = recentMessages,
+                tools = availableTools,
+                memories = memories,
+                screenContext = currentScreenSnapshot,
+                language = settings.language
+            )
+            val stepDurationMs = (System.currentTimeMillis() - stepStartMs).coerceAtLeast(1L)
+            activeExecutionElapsedMs += stepDurationMs
+            _lastAgentStepLatencyMs.value = stepDurationMs
+
+            if (stepDecision.toolCalls.isEmpty()) {
+                finalReply = stepDecision.assistantText
+                    ?: "Done."
+                break
+            }
+
+            var allToolsSucceeded = true
+            val stepOutputs = mutableListOf<String>()
+
+            for (toolCall in stepDecision.toolCalls) {
+                if (killSwitch.isKilled.value) {
+                    allToolsSucceeded = false
+                    break
+                }
+
+                val tool = toolRegistry.getTool(toolCall.name)
+                if (tool == null) {
+                    val missingOutput = "Tool '${toolCall.name}' is not registered."
+                    chatRepository.appendMessage(
+                        ChatMessage(
+                            role = MessageRole.TOOL,
+                            content = missingOutput,
+                            toolName = toolCall.name
+                        )
+                    )
+                    stepOutputs.add(missingOutput)
+                    allToolsSucceeded = false
+                    continue
+                }
+
+                val decision = safetyGate.evaluate(
+                    toolCall = toolCall,
+                    tool = tool,
+                    confirmationLevel = settings.confirmationLevel,
+                    screenContext = currentScreenSnapshot
+                )
+
+                var userConfirmed = false
+                var effectiveToolCall = toolCall
+                if (!decision.allowedImmediately) {
+                    if (decision.requiresConfirmation) {
+                        // Confirmation wait time is EXCLUDED from the 60s active execution timeout
+                        val approval = safetyGate.requestUserApproval(
+                            toolCall = toolCall,
+                            tool = tool,
+                            reasonEn = decision.reasonEn,
+                            reasonHi = decision.reasonEn
+                        )
+                        if (!approval.approved) {
+                            val deniedMsg = "Cancelled '${toolCall.name}' as requested."
+                            activityLogRepository.recordLog(
+                                ActivityLogEntry(
+                                    toolName = toolCall.name,
+                                    riskLevel = tool.riskLevel,
+                                    argumentsSummary = SafetyGate.redactSensitiveArgs(toolCall.args),
+                                    resultSummary = deniedMsg,
+                                    userConfirmed = false,
+                                    durationMs = 0L
+                                )
+                            )
+                            chatRepository.appendMessage(
+                                ChatMessage(
+                                    role = MessageRole.TOOL,
+                                    content = deniedMsg,
+                                    toolName = toolCall.name
+                                )
+                            )
+                            finalReply = deniedMsg
+                            allToolsSucceeded = false
+                            break
+                        }
+                        userConfirmed = true
+                        if (approval.selectedPhoneOverride != null) {
+                            val updatedArgs = toolCall.args.toMutableMap().apply {
+                                put("phone_number", approval.selectedPhoneOverride)
+                            }
+                            effectiveToolCall = toolCall.copy(args = updatedArgs)
+                        }
+                    } else {
+                        val blockedMsg = decision.reasonEn
+                        activityLogRepository.recordLog(
+                            ActivityLogEntry(
+                                toolName = toolCall.name,
+                                riskLevel = tool.riskLevel,
+                                argumentsSummary = SafetyGate.redactSensitiveArgs(toolCall.args),
+                                resultSummary = blockedMsg,
+                                userConfirmed = false,
+                                durationMs = 0L
+                            )
+                        )
+                        finalReply = blockedMsg
+                        allToolsSucceeded = false
+                        break
+                    }
+                }
+
+                // Execute tool: NEVER retry non-idempotent tools (calls, SMS, WhatsApp, taps, text input)
+                val startMs = System.currentTimeMillis()
+                val maxAttempts = if (isNonIdempotentTool(tool.name)) 1 else 2
+                var execResult: ToolExecutionResult = ToolExecutionResult(
+                    toolName = tool.name,
+                    success = false,
+                    outputEn = "Not executed"
+                )
+                for (attempt in 1..maxAttempts) {
+                    execResult = try {
+                        tool.execute(effectiveToolCall.args)
+                    } catch (ce: CancellationException) {
+                        throw ce
+                    } catch (e: Exception) {
+                        ToolExecutionResult(
+                            toolName = tool.name,
+                            success = false,
+                            outputEn = "Tool error: ${e.localizedMessage ?: "unknown"}"
+                        )
+                    }
+                    if (execResult.success) break
+                    if (attempt < maxAttempts) {
+                        delay(200)
+                    }
+                }
+                val durationMs = (System.currentTimeMillis() - startMs).coerceAtLeast(1L)
+                activeExecutionElapsedMs += durationMs
+
+                val localizedResult = execResult.outputEn
+
+                activityLogRepository.recordLog(
+                    ActivityLogEntry(
+                        toolName = tool.name,
+                        riskLevel = tool.riskLevel,
+                        argumentsSummary = SafetyGate.redactSensitiveArgs(effectiveToolCall.args),
+                        resultSummary = localizedResult,
+                        userConfirmed = userConfirmed,
+                        durationMs = durationMs
+                    )
+                )
+
+                chatRepository.appendMessage(
+                    ChatMessage(
+                        role = MessageRole.TOOL,
+                        content = localizedResult,
+                        toolName = tool.name
+                    )
+                )
+
+                stepOutputs.add(localizedResult)
+
+                // Refresh screen snapshot after UI automation tools
+                if (execResult.requiresFollowUpScreenRead || tool.requiresFullControlMode) {
+                    val refreshed = JarvisAccessibilityService.captureCurrentScreenSnapshot()
+                    if (refreshed != null) {
+                        currentScreenSnapshot = refreshed
+                    }
+                }
+            }
+
+            if (!allToolsSucceeded && finalReply.isNotEmpty()) {
+                break
+            }
+
+            if (stepDecision.assistantText != null && stepOutputs.isNotEmpty()) {
+                finalReply = "${stepDecision.assistantText}\n${stepOutputs.joinToString("\n")}"
+                break
+            } else if (stepOutputs.isNotEmpty() && stepCount >= 2) {
+                finalReply = stepOutputs.joinToString("\n")
+                break
+            }
+        }
+
+        if (finalReply.isBlank()) {
+            finalReply = "Done."
+        }
+
+        chatRepository.appendMessage(
+            ChatMessage(
                 role = MessageRole.ASSISTANT,
-                content = reply
+                content = finalReply
             )
         )
-        _orbState.value = OrbState.SPEAKING
-        ttsEngine.speak(
-            text = reply,
-            language = language,
-            speechRate = voiceSpeed,
-            pitch = voicePitch,
-            voiceProfile = voiceProfile,
-            turnStartTimestampMs = turnStartTimestampMs,
-            onDone = {
-                if (_orbState.value == OrbState.SPEAKING) {
-                    _orbState.value = OrbState.IDLE
-                }
-            }
-        )
-    }
 
-    private fun maybeQueueMemoryCandidate(utterance: String) {
-        val lower = utterance.lowercase()
-        when {
-            lower.startsWith("remember that ") || lower.startsWith("remember ") -> {
-                val fact = utterance.substringAfter("remember ", "").removePrefix("that ").trim()
-                if (fact.isNotBlank()) {
-                    memoryRepository.queueMemoryCandidate(
-                        PendingMemoryCandidate(
-                            id = UUID.randomUUID().toString(),
-                            category = "Extracted Preference",
-                            keyLabel = fact.take(30),
-                            contentValue = fact,
-                            sourceUtterance = utterance
-                        )
-                    )
-                }
-            }
-            utterance.contains("याद रखो") || utterance.contains("याद रखना") -> {
-                val fact = utterance
-                    .replace("याद रखो", "")
-                    .replace("याद रखना", "")
-                    .replace("कि", "")
-                    .trim()
-                if (fact.isNotBlank()) {
-                    memoryRepository.queueMemoryCandidate(
-                        PendingMemoryCandidate(
-                            id = UUID.randomUUID().toString(),
-                            category = "व्यक्तिगत प्राथमिकता",
-                            keyLabel = fact.take(30),
-                            contentValue = fact,
-                            sourceUtterance = utterance
-                        )
-                    )
-                }
-            }
+        _lastResponseText.value = finalReply
+        _orbState.value = if (killSwitch.isKilled.value) {
+            AssistantOrbState.PAUSED_KILLSWITCH
+        } else {
+            AssistantOrbState.IDLE
         }
+
+        return@coroutineScope finalReply
     }
 
-    private suspend fun maybeCreateVoiceRoutine(utterance: String) {
-        val lower = utterance.lowercase()
-        if (lower.startsWith("create routine ") || lower.contains("रूटीन बनाओ")) {
-            val title = utterance
-                .replace(Regex("(?i)create routine"), "")
-                .replace("रूटीन बनाओ", "")
+    private suspend fun extractMemoryIfRequested(userText: String) {
+        val lower = userText.lowercase()
+        if (lower.startsWith("remember ") || lower.contains("remember that ")) {
+            val cleaned = userText
+                .replace(Regex("(?i)^remember( that)?\\s+"), "")
                 .trim()
-                .ifEmpty { "Custom Voice Routine" }
-            routineRepository.upsertRoutine(
-                title = title.take(36),
-                triggerType = RoutineTriggerType.TIME_DAILY,
-                triggerValue = "08:00",
-                actionsPrompt = "Weather summary, calendar agenda, and top Hindi/English news",
-                enabled = true
-            )
+            if (cleaned.isNotEmpty()) {
+                val parts = cleaned.split(" is ", " = ", limit = 2)
+                val key = parts.firstOrNull()?.trim()?.take(40) ?: "Note"
+                val value = parts.getOrNull(1)?.trim() ?: cleaned
+                memoryRepository.upsertMemory(
+                    category = "USER_PREFERENCE",
+                    key = key,
+                    value = value
+                )
+            }
         }
-    }
-
-    private fun defaultFallbackReply(language: AppLanguage): String = when (language) {
-        AppLanguage.HI_IN -> "कार्य पूरा हो गया है। क्या मैं कुछ और मदद कर सकता हूँ?"
-        AppLanguage.EN_IN, AppLanguage.HINGLISH -> "Done! Let me know if you need anything else."
     }
 }

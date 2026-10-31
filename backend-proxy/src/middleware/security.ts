@@ -1,140 +1,92 @@
-import { Request, Response, NextFunction } from 'express';
-import * as admin from 'firebase-admin';
-
-// Initialize Firebase Admin SDK once (uses Application Default Credentials in Cloud Run)
-if (!admin.apps.length) {
-  try {
-    admin.initializeApp();
-  } catch {
-    // Fallback for local test environments without ADC
-  }
-}
+import { Request, Response, NextFunction } from "express";
+import * as admin from "firebase-admin";
 
 export interface AuthenticatedRequest extends Request {
   uid?: string;
-  appCheckVerified?: boolean;
+  appId?: string;
 }
 
 /**
- * Sliding-window per-user rate limiter & daily token/TTS character budget tracker.
- * Prevents abuse and runaway cloud costs.
+ * Verifies:
+ * 1. Authorization: Bearer <Firebase ID Token>
+ * 2. X-Firebase-AppCheck: <Play Integrity App Check Token>
+ *
+ * Production safety invariant:
+ * When NODE_ENV === "production", debug-/dev- bypass tokens are strictly rejected
+ * even if ALLOW_DEV_UNAUTHENTICATED is set in the environment.
  */
-interface UserQuotaBucket {
-  requestTimestamps: number[];
-  dailyTokensUsed: number;
-  dailyTtsCharsUsed: number;
-  dayKey: string;
-}
-
-const userBuckets = new Map<string, UserQuotaBucket>();
-
-export const QUOTA_LIMITS = {
-  MAX_REQUESTS_PER_MINUTE: 30,
-  MAX_DAILY_TOKENS: 120_000,
-  MAX_DAILY_TTS_CHARS: 50_000,
-};
-
-function currentDayKey(): string {
-  return new Date().toISOString().slice(0, 10);
-}
-
-export function getOrInitBucket(uid: string): UserQuotaBucket {
-  const today = currentDayKey();
-  const existing = userBuckets.get(uid);
-  if (!existing || existing.dayKey !== today) {
-    const fresh: UserQuotaBucket = {
-      requestTimestamps: [],
-      dailyTokensUsed: 0,
-      dailyTtsCharsUsed: 0,
-      dayKey: today,
-    };
-    userBuckets.set(uid, fresh);
-    return fresh;
-  }
-  return existing;
-}
-
-export function checkSlidingWindowRateLimit(uid: string, nowMs: number = Date.now()): boolean {
-  const bucket = getOrInitBucket(uid);
-  const windowStart = nowMs - 60_000;
-  bucket.requestTimestamps = bucket.requestTimestamps.filter((t) => t > windowStart);
-  if (bucket.requestTimestamps.length >= QUOTA_LIMITS.MAX_REQUESTS_PER_MINUTE) {
-    return false;
-  }
-  bucket.requestTimestamps.push(nowMs);
-  return true;
-}
-
-export function recordTokenUsage(uid: string, tokens: number): boolean {
-  const bucket = getOrInitBucket(uid);
-  if (bucket.dailyTokensUsed + tokens > QUOTA_LIMITS.MAX_DAILY_TOKENS) {
-    return false;
-  }
-  bucket.dailyTokensUsed += tokens;
-  return true;
-}
-
-export function recordTtsUsage(uid: string, charCount: number): boolean {
-  const bucket = getOrInitBucket(uid);
-  if (bucket.dailyTtsCharsUsed + charCount > QUOTA_LIMITS.MAX_DAILY_TTS_CHARS) {
-    return false;
-  }
-  bucket.dailyTtsCharsUsed += charCount;
-  return true;
-}
-
-/**
- * Middleware: Verifies Firebase Auth ID Token (Authorization: Bearer <token>)
- * and Firebase App Check Token (X-Firebase-AppCheck: <token>).
- */
-export async function verifyFirebaseSecurity(
+export async function verifyFirebaseAndAppCheck(
   req: AuthenticatedRequest,
   res: Response,
   next: NextFunction
 ): Promise<void> {
-  const authHeader = req.header('Authorization') || '';
-  const appCheckToken = req.header('X-Firebase-AppCheck') || '';
+  const isProduction = process.env.NODE_ENV === "production";
+  const allowDevBypass = !isProduction && process.env.ALLOW_DEV_UNAUTHENTICATED === "true";
 
-  if (!authHeader.startsWith('Bearer ')) {
-    res.status(401).json({ error: 'Missing or invalid Authorization Bearer token' });
+  const authHeader = req.header("Authorization") || "";
+  const idToken = authHeader.startsWith("Bearer ")
+    ? authHeader.slice("Bearer ".length).trim()
+    : "";
+  const appCheckToken = (req.header("X-Firebase-AppCheck") || "").trim();
+
+  if (!idToken) {
+    res.status(401).json({
+      error: "Missing Authorization Bearer Firebase ID token."
+    });
     return;
   }
 
-  if (!appCheckToken) {
-    res.status(401).json({ error: 'Missing X-Firebase-AppCheck header' });
+  // Strictly block debug-/dev- tokens in production
+  if (isProduction && (idToken.startsWith("debug-") || idToken.startsWith("dev-"))) {
+    res.status(401).json({
+      error: "Development tokens are forbidden in production."
+    });
     return;
   }
 
-  const idToken = authHeader.slice('Bearer '.length).trim();
-  const allowDevBypass =
-    process.env.NODE_ENV === 'test' || process.env.ALLOW_DEV_UNAUTHENTICATED === 'true';
+  if (allowDevBypass && (idToken.startsWith("debug-") || idToken.startsWith("dev-"))) {
+    req.uid = "dev-local-user";
+    req.appId = "dev-local-app";
+    next();
+    return;
+  }
 
   try {
-    if (allowDevBypass && (idToken.startsWith('debug-') || idToken.startsWith('dev-'))) {
-      req.uid = 'debug-user-jarvis';
-      req.appCheckVerified = true;
-    } else {
-      const [decodedToken] = await Promise.all([
-        admin.auth().verifyIdToken(idToken, true),
-        admin.appCheck().verifyToken(appCheckToken),
-      ]);
-      req.uid = decodedToken.uid;
-      req.appCheckVerified = true;
+    if (!admin.apps.length) {
+      admin.initializeApp();
     }
 
-    const uid = req.uid || req.ip || 'anonymous';
-    if (!checkSlidingWindowRateLimit(uid)) {
-      res.status(429).json({
-        error: 'Rate limit exceeded (max 30 requests/minute). Please wait a moment.',
+    const decodedToken = await admin.auth().verifyIdToken(idToken, true);
+    req.uid = decodedToken.uid;
+
+    if (!appCheckToken) {
+      res.status(401).json({
+        error: "Missing X-Firebase-AppCheck Play Integrity token."
       });
       return;
     }
 
+    const appCheckClaims = await admin.appCheck().verifyToken(appCheckToken);
+    req.appId = appCheckClaims.appId;
     next();
-  } catch (err) {
-    res.status(403).json({
-      error: 'Firebase Auth or App Check verification failed',
-      details: err instanceof Error ? err.message : 'Unknown error',
+  } catch (_err) {
+    res.status(401).json({
+      error: "Unauthorized: Invalid Firebase ID token or App Check token."
     });
   }
+}
+
+/**
+ * Prompt-injection sanitizer:
+ * 1. Strips system-override phrases ("ignore previous instructions", "disregard safety", etc.).
+ * 2. Caps screen context size so malicious third-party apps cannot overflow the prompt window.
+ */
+export function sanitizeUntrustedText(raw: string, maxChars = 4000): string {
+  if (!raw) return "";
+  const truncated = raw.slice(0, maxChars);
+  return truncated
+    .replace(/ignore\s+(all\s+)?(previous|prior)\s+instructions/gi, "[FILTERED]")
+    .replace(/disregard\s+(all\s+)?safety\s+rules/gi, "[FILTERED]")
+    .replace(/system\s*override/gi, "[FILTERED]")
+    .replace(/<\/?(system|assistant|tool_call|UntrustedScreenContent)>/gi, "");
 }

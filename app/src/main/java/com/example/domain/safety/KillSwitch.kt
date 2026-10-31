@@ -15,38 +15,50 @@ data class KillSwitchEvent(
     val reason: String
 )
 
-interface KillSwitch {
-    val isHalted: StateFlow<Boolean>
-    val killEvents: SharedFlow<KillSwitchEvent>
-
-    fun triggerKillSwitch(reason: String = "User activated emergency KillSwitch")
-    fun resetAfterKill()
-    fun registerCancelCallback(callback: () -> Unit)
-}
-
+/**
+ * Global emergency kill-switch that halts all microphone capture, TTS output,
+ * UI automation gestures, and in-flight agent loops immediately.
+ */
 @Singleton
-class KillSwitchImpl @Inject constructor() : KillSwitch {
-    private val _isHalted = MutableStateFlow(false)
-    override val isHalted: StateFlow<Boolean> = _isHalted.asStateFlow()
+class KillSwitch @Inject constructor() {
+
+    private val _isKilled = MutableStateFlow(false)
+    val isKilled: StateFlow<Boolean> = _isKilled.asStateFlow()
+
+    val isHalted: StateFlow<Boolean>
+        get() = isKilled
+
+    private val _lastReason = MutableStateFlow<String?>(null)
+    val lastReason: StateFlow<String?> = _lastReason.asStateFlow()
 
     private val _killEvents = MutableSharedFlow<KillSwitchEvent>(extraBufferCapacity = 8)
-    override val killEvents: SharedFlow<KillSwitchEvent> = _killEvents.asSharedFlow()
+    val killEvents: SharedFlow<KillSwitchEvent> = _killEvents.asSharedFlow()
 
     private val cancelCallbacks = CopyOnWriteArrayList<() -> Unit>()
 
-    override fun triggerKillSwitch(reason: String) {
-        _isHalted.value = true
+    fun trigger(reason: String = "User activated emergency KillSwitch") {
+        _lastReason.value = reason
+        _isKilled.value = true
         cancelCallbacks.forEach { callback ->
             runCatching { callback.invoke() }
         }
         _killEvents.tryEmit(KillSwitchEvent(reason = reason))
     }
 
-    override fun resetAfterKill() {
-        _isHalted.value = false
+    fun triggerKillSwitch(reason: String = "User activated emergency KillSwitch") {
+        trigger(reason)
     }
 
-    override fun registerCancelCallback(callback: () -> Unit) {
+    fun reset() {
+        _lastReason.value = null
+        _isKilled.value = false
+    }
+
+    fun resetAfterKill() {
+        reset()
+    }
+
+    fun registerCancelCallback(callback: () -> Unit) {
         cancelCallbacks.add(callback)
     }
 }

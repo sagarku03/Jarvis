@@ -13,15 +13,17 @@ import com.example.domain.tool.Tool
 class SetAlarmTool @Inject constructor(
     private val context: Context
 ) : Tool {
+
     override val name: String = "set_alarm"
-    override val description: String = "Sets an alarm for the specified hour (0-23) and minute (0-59)."
-    override val jsonSchema: String = """{"type":"object","properties":{"hour":{"type":"string","description":"Hour in 24h format (0-23)"},"minute":{"type":"string","description":"Minute (0-59)"},"label":{"type":"string","description":"Alarm label"}},"required":["hour","minute"]}"""
+    override val description: String = "Set an alarm in the system Clock app for a given hour and minute."
+    override val jsonSchema: String = """{"type":"object","properties":{"hour":{"type":"integer"},"minute":{"type":"integer"},"label":{"type":"string"}},"required":["hour","minute"]}"""
     override val riskLevel: RiskLevel = RiskLevel.LOW
 
     override suspend fun execute(args: Map<String, String>): ToolExecutionResult {
         val hour = args["hour"]?.toIntOrNull()?.coerceIn(0, 23) ?: 7
         val minute = args["minute"]?.toIntOrNull()?.coerceIn(0, 59) ?: 0
-        val label = args["label"]?.takeIf { it.isNotBlank() } ?: "JARVIS Alarm"
+        val label = args["label"]?.takeIf { it.isNotBlank() } ?: "Jarvis Alarm"
+        val formattedTime = String.format("%02d:%02d", hour, minute)
 
         return try {
             val intent = Intent(AlarmClock.ACTION_SET_ALARM).apply {
@@ -32,28 +34,12 @@ class SetAlarmTool @Inject constructor(
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
             if (intent.resolveActivity(context.packageManager) == null) {
-                return ToolExecutionResult(
-                    toolName = name,
-                    success = false,
-                    outputEn = "No Clock/Alarm app is installed on this device to set the alarm.",
-                    outputHi = "अलार्म सेट करने के लिए इस फ़ोन पर कोई घड़ी ऐप उपलब्ध नहीं है।"
-                )
+                return ToolExecutionResult(name, false, "No Clock app is available on this device to set an alarm.")
             }
             context.startActivity(intent)
-            val formattedTime = "%02d:%02d".format(hour, minute)
-            ToolExecutionResult(
-                toolName = name,
-                success = true,
-                outputEn = "Alarm '$label' set for $formattedTime.",
-                outputHi = "$formattedTime के लिए '$label' अलार्म सेट कर दिया गया है।"
-            )
+            ToolExecutionResult(name, true, "Alarm '$label' set for $formattedTime.")
         } catch (e: Exception) {
-            ToolExecutionResult(
-                toolName = name,
-                success = false,
-                outputEn = "Failed to set alarm: ${e.localizedMessage}",
-                outputHi = "अलार्म सेट करने में विफल: ${e.localizedMessage}"
-            )
+            ToolExecutionResult(name, false, "Failed to set alarm: ${e.localizedMessage ?: "error"}.")
         }
     }
 }

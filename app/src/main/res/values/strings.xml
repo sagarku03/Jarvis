@@ -1,61 +1,159 @@
 <resources>
     <string name="app_name">JARVIS</string>
-    <string name="app_tagline">Personal Voice Assistant</string>
 
-    <!-- Navigation -->
+    <!-- Navigation Tabs -->
     <string name="nav_home">Home</string>
-    <string name="nav_routines">Routines</string>
-    <string name="nav_permissions">Permissions</string>
+    <string name="nav_activity">Activity</string>
     <string name="nav_memory">Memory</string>
-    <string name="nav_activity">Audit log</string>
+    <string name="nav_routines">Routines</string>
     <string name="nav_settings">Settings</string>
+    <string name="nav_permissions">Permissions</string>
 
-    <!-- Accessibility & Services -->
-    <string name="accessibility_service_label">JARVIS Screen Control</string>
-    <string name="accessibility_service_description">Allows JARVIS to read screen elements and execute user-authorized taps and scrolls. Skips password fields and banking apps.</string>
-    <string name="notification_listener_label">JARVIS Notification Reader</string>
-    <string name="voice_service_notification_title">JARVIS Voice Active</string>
-    <string name="voice_service_notification_text">Listening for \"Hey Jarvis\" · Tap Stop to halt</string>
-    <string name="overlay_service_notification_title">JARVIS Floating Orb</string>
-    <string name="overlay_service_notification_text">Quick status &amp; emergency stop overlay active</string>
+    <!-- Home Screen -->
+    <string name="home_subtitle">Personal AI Voice Assistant</string>
+    <string name="home_greeting_default">Hi, I\'m Jarvis. How can I help?</string>
+    <string name="home_tap_to_talk">Tap orb to talk</string>
+    <string name="home_listening">Listening…</string>
+    <string name="home_thinking">Thinking…</string>
+    <string name="home_speaking">Speaking… Tap orb to interrupt</string>
+    <string name="home_paused_killswitch">Kill switch active — tap Resume to re-enable</string>
+    <string name="home_offline_voice_chip">Offline voice</string>
+    <string name="home_neural_voice_chip">Neural voice</string>
+    <string name="home_input_hint">Ask Jarvis anything…</string>
+    <string name="home_send">Send</string>
+    <string name="home_cancel_turn">Cancel</string>
+    <string name="home_kill_switch_trigger">Kill Switch</string>
+    <string name="home_kill_switch_resume">Resume Assistant</string>
+    <string name="home_mic_active_badge">MIC ACTIVE</string>
+    <string name="home_wake_listening_badge">HEY JARVIS READY</string>
+    <string name="home_wake_paused_badge">WAKE PAUSED</string>
+    <string name="home_Empty_transcript">Say a command or type below to get started.</string>
+    <string name="home_Partial_prefix">Listening: %1$s</string>
+    <string name="home_Followup_badge">Follow-up active</string>
 
-    <!-- Orb States -->
-    <string name="orb_state_idle">Tap the mic to talk</string>
-    <string name="orb_state_listening">Listening…</string>
-    <string name="orb_state_thinking">Thinking…</string>
-    <string name="orb_state_speaking">Speaking – tap to interrupt</string>
+    <!-- Speech Recognizer Errors -->
+    <string name="stt_error_no_match">Didn\'t catch that — tap the orb to try again.</string>
+    <string name="stt_error_speech_timeout">No speech detected — tap the orb to try again.</string>
+    <string name="stt_error_busy">Microphone is busy — retrying…</string>
+    <string name="stt_error_network">Network unavailable for speech recognition.</string>
+    <string name="stt_error_network_timeout">Speech recognition network timed out.</string>
+    <string name="stt_error_server">Speech recognition service unavailable.</string>
+    <string name="stt_error_audio">Microphone audio error — check microphone access.</string>
+    <string name="stt_error_permissions">Microphone permission is required to listen.</string>
+    <string name="stt_error_client">Speech session reset — tap the orb to speak.</string>
+    <string name="stt_error_unavailable">Speech recognition is not available on this device.</string>
 
-    <!-- Actions & Home -->
-    <string name="btn_push_to_talk">Tap the mic to talk</string>
-    <string name="btn_stop_listening">Stop listening</string>
-    <string name="btn_barge_in">Interrupt</string>
-    <string name="btn_kill_switch">STOP</string>
-    <string name="btn_launch_overlay">Floating orb</string>
-    <string name="label_live_transcript">YOU SAID</string>
-    <string name="label_last_response">Assistant reply</string>
-    <string name="label_quick_prompts">Quick actions</string>
-    <string name="placeholder_command_input">Ask anything in Hindi, Hinglish, or English…</string>
+    <!-- Safety Gate Confirmation Dialog -->
+    <string name="safety_confirm_title">Confirm %1$s Risk Action</string>
+    <string name="safety_confirm_Countdown">Auto-cancels in %1$ds</string>
+    <string name="safety_confirm_approve">Approve &amp; Execute</string>
+    <string name="safety_confirm_deny">Deny</string>
+    <string name="safety_contact_picker_title">Select Contact</string>
+    <string name="safety_contact_picker_cancel">Cancel</string>
 
-    <!-- Safety Gate Dialog -->
-    <string name="safety_gate_medium_title">Confirm action</string>
-    <string name="safety_gate_high_title">Confirm high-risk action</string>
-    <string name="safety_gate_approve">Approve</string>
-    <string name="safety_gate_deny">Cancel</string>
+    <!-- Activity Log Screen -->
+    <string name="activity_title">Activity Log</string>
+    <string name="activity_subtitle">Tool calls, arguments, results, and execution latency</string>
+    <string name="activity_clear_all">Clear Log</string>
+    <string name="activity_empty">No tool executions recorded yet.</string>
+    <string name="activity_args_label">Arguments</string>
+    <string name="activity_output_label">Result</string>
 
-    <!-- Permissions & Onboarding -->
-    <string name="permissions_header">Permissions</string>
-    <string name="permissions_subheader">Clear rationale in English &amp; हिन्दी</string>
-    <string name="perm_granted">Granted</string>
-    <string name="perm_missing">Needed</string>
+    <!-- Memory Screen -->
+    <string name="memory_title">Memory &amp; Facts</string>
+    <string name="memory_subtitle">Contacts, preferences, and saved notes</string>
+    <string name="memory_search_hint">Search memories by key or value…</string>
+    <string name="memory_add_title">Save Memory</string>
+    <string name="memory_key_hint">Key (e.g., Mom, Home address)</string>
+    <string name="memory_value_hint">Value (e.g., +91 98765 43210, MG Road)</string>
+    <string name="memory_save_button">Save Fact</string>
+    <string name="memory_clear_all">Clear All</string>
+    <string name="memory_empty">No saved facts yet. Add a contact alias or preference above.</string>
 
-    <!-- Memory, Routines & Activity Log -->
-    <string name="memory_title">Memory vault</string>
-    <string name="memory_add_button">Save memory</string>
+    <!-- Routines Screen -->
     <string name="routines_title">Routines</string>
-    <string name="activity_log_title">Audit log</string>
-    <string name="activity_log_clear">Clear</string>
+    <string name="routines_subtitle">Automated multi-step voice workflows</string>
+    <string name="routines_create_title">Create Routine</string>
+    <string name="routines_name_hint">Routine title (e.g., Morning Briefing)</string>
+    <string name="routines_trigger_value_hint">Trigger value (e.g., 07:00 or Bluetooth name)</string>
+    <string name="routines_actions_hint">Comma-separated commands (e.g., Read notifications, Set volume to 60%)</string>
+    <string name="routines_save_button">Save Routine</string>
+    <string name="routines_run_now">Run Now</string>
+    <string name="routines_delete">Delete</string>
+    <string name="routines_empty">No routines configured yet.</string>
 
-    <!-- Settings -->
+    <!-- Settings Screen -->
     <string name="settings_title">Settings</string>
-    <string name="settings_delete_all">Delete all local data</string>
+    <string name="settings_subtitle">Voice, speech locale, wake word, and safety controls</string>
+    <string name="settings_language_title">Speech Recognition Locale</string>
+    <string name="settings_language_desc">Select your English accent for speech recognition. Jarvis still understands Indian names through the AI model.</string>
+    <string name="settings_voice_title">Assistant Voice</string>
+    <string name="settings_voice_desc">Neural cloud voice with automatic device TTS fallback when offline.</string>
+    <string name="settings_voice_speed_label">Speech Speed (%1$sx)</string>
+    <string name="settings_voice_preview">Preview Voice</string>
+    <string name="settings_voice_preview_phrase">Hi, I\'m Jarvis. Ready to help you on your phone.</string>
+    <string name="settings_wake_title">Wake Word (&quot;Hey Jarvis&quot;)</string>
+    <string name="settings_wake_not_configured">Wake word not set up</string>
+    <string name="settings_wake_not_configured_desc">Add PORCUPINE_ACCESS_KEY in Secrets and bundle hey_jarvis_android.ppn in assets to enable hands-free wake word detection.</string>
+    <string name="settings_wake_enable">Enable background wake word</string>
+    <string name="settings_wake_pause">Pause wake word listening</string>
+    <string name="settings_wake_sensitivity">Wake Sensitivity (%1$d%%)</string>
+    <string name="settings_boot_autostart">Resume notification on device boot</string>
+    <string name="settings_overlay_enable">Floating overlay orb over other apps</string>
+    <string name="settings_safety_title">Safety &amp; Confirmation Gate</string>
+    <string name="settings_diagnostics_title">Voice Diagnostics</string>
+    <string name="settings_diagnostics_state">Session state: %1$s</string>
+    <string name="settings_diagnostics_tts">TTS engine: %1$s</string>
+    <string name="settings_diagnostics_stt_error">Last STT status: %1$s</string>
+    <string name="settings_diagnostics_latency">Latency — STT: %1$dms · Agent: %2$dms · TTS: %3$dms</string>
+    <string name="settings_permissions_button">Manage System Permissions</string>
+    <string name="settings_sign_out">Sign Out</string>
+
+    <!-- Permissions Screen -->
+    <string name="permissions_title">Permissions &amp; Access</string>
+    <string name="permissions_subtitle">Why each permission is needed</string>
+    <string name="permissions_oem_title">Battery Optimization Guidance</string>
+    <string name="permissions_oem_subtitle">Prevent background voice service from being stopped by your phone manufacturer</string>
+    <string name="permissions_open_battery_settings">Open Battery Settings</string>
+    <string name="permissions_status_granted">Granted</string>
+    <string name="permissions_status_missing">Action Needed</string>
+    <string name="permissions_grant_button">Grant</string>
+    <string name="permissions_back_button">Back</string>
+
+    <!-- Login Screen -->
+    <string name="login_title">Sign in to JARVIS</string>
+    <string name="login_subtitle">Authenticate to enable cloud reasoning and neural voice</string>
+    <string name="login_email_label">Email address</string>
+    <string name="login_password_label">Password</string>
+    <string name="login_sign_in_button">Sign In</string>
+    <string name="login_create_account_button">Create Account</string>
+    <string name="login_google_button">Continue with Google</string>
+    <string name="login_forgot_password">Reset Password</string>
+    <string name="login_dev_offline_mode">Continue with offline phone tools (Dev)</string>
+    <string name="login_firebase_not_configured">Firebase Auth is not configured on this build.</string>
+
+    <!-- Floating Overlay & Notifications -->
+    <string name="overlay_chip_label">JARVIS</string>
+    <string name="overlay_stop_button">STOP</string>
+    <string name="fgs_notification_channel_name">Jarvis Voice Service</string>
+    <string name="fgs_notification_title_active">Jarvis is ready</string>
+    <string name="fgs_notification_title_paused">Jarvis wake word paused</string>
+    <string name="fgs_notification_text_active">Listening for wake word — tap Stop to disable immediately.</string>
+    <string name="fgs_notification_text_paused">Microphone is not recording.</string>
+    <string name="fgs_action_stop">STOP</string>
+    <string name="fgs_action_pause">Pause</string>
+    <string name="fgs_action_resume">Resume</string>
+    <string name="boot_resume_channel_name">Jarvis Boot Resume</string>
+    <string name="boot_resume_title">Tap to resume Jarvis voice assistant</string>
+    <string name="boot_resume_text">Android requires a tap after restart to enable microphone listening.</string>
+
+    <!-- Accessibility Service -->
+    <string name="accessibility_service_description">Allows JARVIS to read screen elements and perform user-approved tap, scroll, and text actions in Full Control Mode. Password fields and banking apps are strictly blocked.</string>
+    <string name="accessibility_disabled_message">Accessibility service is not enabled. Open Settings to enable.</string>
+
+    <!-- Risk Badges & Accessibility Labels -->
+    <string name="risk_badge_low">LOW RISK</string>
+    <string name="risk_badge_medium">MED RISK</string>
+    <string name="risk_badge_high">HIGH RISK</string>
+    <string name="cd_voice_orb">Jarvis voice assistant orb</string>
 </resources>

@@ -13,14 +13,15 @@ import com.example.domain.tool.Tool
 class SetTimerTool @Inject constructor(
     private val context: Context
 ) : Tool {
+
     override val name: String = "set_timer"
-    override val description: String = "Starts a countdown timer for the given duration in seconds."
-    override val jsonSchema: String = """{"type":"object","properties":{"seconds":{"type":"string","description":"Countdown duration in seconds"},"label":{"type":"string","description":"Timer label"}},"required":["seconds"]}"""
+    override val description: String = "Start a countdown timer in the system Clock app."
+    override val jsonSchema: String = """{"type":"object","properties":{"seconds":{"type":"integer"},"durationSeconds":{"type":"integer"},"label":{"type":"string"}}}"""
     override val riskLevel: RiskLevel = RiskLevel.LOW
 
     override suspend fun execute(args: Map<String, String>): ToolExecutionResult {
-        val seconds = args["seconds"]?.toIntOrNull()?.coerceAtLeast(1) ?: 60
-        val label = args["label"]?.takeIf { it.isNotBlank() } ?: "JARVIS Timer"
+        val seconds = (args["seconds"] ?: args["durationSeconds"])?.toIntOrNull()?.coerceAtLeast(1) ?: 60
+        val label = args["label"]?.takeIf { it.isNotBlank() } ?: "Jarvis Timer"
 
         return try {
             val intent = Intent(AlarmClock.ACTION_SET_TIMER).apply {
@@ -30,27 +31,12 @@ class SetTimerTool @Inject constructor(
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
             if (intent.resolveActivity(context.packageManager) == null) {
-                return ToolExecutionResult(
-                    toolName = name,
-                    success = false,
-                    outputEn = "No Clock/Timer app is installed on this device to start the timer.",
-                    outputHi = "टाइमर शुरू करने के लिए इस फ़ोन पर कोई घड़ी ऐप उपलब्ध नहीं है।"
-                )
+                return ToolExecutionResult(name, false, "No Clock app is available on this device to start a timer.")
             }
             context.startActivity(intent)
-            ToolExecutionResult(
-                toolName = name,
-                success = true,
-                outputEn = "Started timer '$label' for $seconds seconds.",
-                outputHi = "$seconds सेकंड के लिए '$label' टाइमर शुरू कर दिया गया है।"
-            )
+            ToolExecutionResult(name, true, "Started timer '$label' for $seconds seconds.")
         } catch (e: Exception) {
-            ToolExecutionResult(
-                toolName = name,
-                success = false,
-                outputEn = "Could not start timer: ${e.localizedMessage}",
-                outputHi = "टाइमर शुरू करने में त्रुटि: ${e.localizedMessage}"
-            )
+            ToolExecutionResult(name, false, "Failed to start timer: ${e.localizedMessage ?: "error"}.")
         }
     }
 }

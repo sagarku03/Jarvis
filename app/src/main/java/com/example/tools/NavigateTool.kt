@@ -13,59 +13,41 @@ import com.example.domain.tool.Tool
 class NavigateTool @Inject constructor(
     private val context: Context
 ) : Tool {
-    override val name: String = "navigate"
-    override val description: String = "Opens Google Maps directions/navigation to a destination."
-    override val jsonSchema: String = """{"type":"object","properties":{"destination":{"type":"string","description":"Destination address or place name"}},"required":["destination"]}"""
+
+    override val name: String = "navigate_maps"
+    override val description: String = "Launch Google Maps navigation or directions to a destination."
+    override val jsonSchema: String = """{"type":"object","properties":{"destination":{"type":"string","description":"Place name or address to navigate to"}},"required":["destination"]}"""
     override val riskLevel: RiskLevel = RiskLevel.LOW
 
     override suspend fun execute(args: Map<String, String>): ToolExecutionResult {
-        val destination = args["destination"]?.trim().orEmpty()
-        if (destination.isEmpty()) {
-            return ToolExecutionResult(
-                toolName = name,
-                success = false,
-                outputEn = "Missing 'destination' parameter.",
-                outputHi = "'destination' (गंतव्य) की जानकारी नहीं मिली।"
-            )
+        val destination = args["destination"].orEmpty().trim()
+        if (destination.isBlank()) {
+            return ToolExecutionResult(name, false, "Parameter 'destination' is required.")
         }
 
         return try {
-            val geoUri = Uri.parse("geo:0,0?q=${Uri.encode(destination)}")
-            val mapIntent = Intent(Intent.ACTION_VIEW, geoUri).apply {
+            val encoded = Uri.encode(destination)
+            val geoIntent = Intent(Intent.ACTION_VIEW, Uri.parse("geo:0,0?q=$encoded")).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
-            if (mapIntent.resolveActivity(context.packageManager) != null) {
-                context.startActivity(mapIntent)
-            } else {
-                val webMaps = Intent(
-                    Intent.ACTION_VIEW,
-                    Uri.parse("https://www.google.com/maps/search/?api=1&query=${Uri.encode(destination)}")
-                ).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-                if (webMaps.resolveActivity(context.packageManager) == null) {
-                    return ToolExecutionResult(
-                        toolName = name,
-                        success = false,
-                        outputEn = "No Maps or browser app is installed to navigate to '$destination'.",
-                        outputHi = "'$destination' के लिए कोई मैप्स या ब्राउज़र ऐप उपलब्ध नहीं है।"
-                    )
-                }
-                context.startActivity(webMaps)
+            if (geoIntent.resolveActivity(context.packageManager) != null) {
+                context.startActivity(geoIntent)
+                return ToolExecutionResult(name, true, "Started Maps navigation to '$destination'.")
             }
-            ToolExecutionResult(
-                toolName = name,
-                success = true,
-                outputEn = "Launched Maps navigation for '$destination'.",
-                outputHi = "'$destination' के लिए मैप्स नेविगेशन शुरू कर दिया गया है।"
-            )
+
+            val webIntent = Intent(
+                Intent.ACTION_VIEW,
+                Uri.parse("https://www.google.com/maps/search/?api=1&query=$encoded")
+            ).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            if (webIntent.resolveActivity(context.packageManager) == null) {
+                return ToolExecutionResult(name, false, "No Maps or browser app is available for '$destination'.")
+            }
+            context.startActivity(webIntent)
+            ToolExecutionResult(name, true, "Opened Maps directions for '$destination'.")
         } catch (e: Exception) {
-            ToolExecutionResult(
-                toolName = name,
-                success = false,
-                outputEn = "Could not open Maps: ${e.localizedMessage}",
-                outputHi = "मैप्स खोलने में त्रुटि: ${e.localizedMessage}"
-            )
+            ToolExecutionResult(name, false, "Failed to open Maps: ${e.localizedMessage ?: "error"}.")
         }
     }
 }

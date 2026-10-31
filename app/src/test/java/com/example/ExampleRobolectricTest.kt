@@ -18,20 +18,24 @@ class ExampleRobolectricTest {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val appName = context.getString(R.string.app_name)
         assertEquals("JARVIS", appName)
+        assertEquals(
+            "Hi, I'm Jarvis. How can I help?",
+            context.getString(R.string.home_greeting_default)
+        )
 
         val app = context as JarvisApplication
-        val fullControlTools = app.container.toolRegistry.getAvailableTools(fullControlOverride = true)
+        val fullControlTools = app.appContainer.toolRegistry.getAvailableTools(fullControlOverride = true)
         assertEquals(20, fullControlTools.size)
-        assertTrue(fullControlTools.any { it.name == "flashlight" })
+        assertTrue(fullControlTools.any { it.name == "toggle_flashlight" })
         assertTrue(fullControlTools.any { it.name == "call_contact" })
         assertTrue(fullControlTools.any { it.name == "send_sms" })
         assertTrue(fullControlTools.any { it.name == "read_screen" })
         assertTrue(fullControlTools.any { it.name == "tap_element" })
         assertTrue(fullControlTools.any { it.name == "send_whatsapp_or_telegram" })
-        assertTrue(fullControlTools.any { it.name == "read_or_reply_notifications" })
+        assertTrue(fullControlTools.any { it.name == "notification_action" })
 
-        val storeSafeTools = app.container.toolRegistry.getAvailableTools(fullControlOverride = false)
-        assertEquals(13, storeSafeTools.size)
+        val storeSafeTools = app.appContainer.toolRegistry.getAvailableTools(fullControlOverride = false)
+        assertEquals(14, storeSafeTools.size)
         assertTrue(storeSafeTools.none { it.requiresFullControlMode })
     }
 }

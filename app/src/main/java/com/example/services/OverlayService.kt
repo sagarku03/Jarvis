@@ -1,9 +1,5 @@
 package com.example.services
 
-import android.app.Notification
-import android.app.NotificationChannel
-import android.app.NotificationManager
-import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
@@ -14,120 +10,44 @@ import android.os.Build
 import android.os.IBinder
 import android.provider.Settings
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
-import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
-import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import com.example.JarvisApplication
 import com.example.MainActivity
 import com.example.R
 import com.example.di.AndroidEntryPoint
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 
 /**
- * Floating Overlay Orb Service with instant one-tap STOP (KillSwitch) pill.
- * Styled with Aurora Violet Glass tokens.
+ * Floating draggable Aurora Violet Glass orb overlay over other apps.
+ * Only starts when `Settings.canDrawOverlays(context)` is granted and user enables it.
+ * Provides quick assistant launch and a 1-tap emergency STOP button tied to the global KillSwitch.
  */
 @AndroidEntryPoint
 class OverlayService : Service() {
 
-    companion object {
-        const val CHANNEL_ID = "jarvis_overlay_channel"
-        const val NOTIFICATION_ID = 1002
-        const val ACTION_SHOW = "com.example.services.ACTION_SHOW_OVERLAY"
-        const val ACTION_HIDE = "com.example.services.ACTION_HIDE_OVERLAY"
-
-        private val _isOverlayShowing = MutableStateFlow(false)
-        val isOverlayShowing: StateFlow<Boolean> = _isOverlayShowing.asStateFlow()
-    }
-
     private var windowManager: WindowManager? = null
-    private var overlayView: View? = null
+    private var floatingView: View? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_HIDE) {
-            removeOverlayView()
-            stopForeground(STOP_FOREGROUND_REMOVE)
+        if (!Settings.canDrawOverlays(this)) {
             stopSelf()
             return START_NOT_STICKY
         }
-
-        createNotificationChannel()
-        runCatching {
-            startForeground(NOTIFICATION_ID, buildNotification())
+        if (floatingView == null) {
+            showFloatingOrb()
         }
-
-        if (Settings.canDrawOverlays(this)) {
-            showFloatingOrbOverlay()
-        } else {
-            _isOverlayShowing.value = false
-        }
-
         return START_STICKY
     }
 
-    private fun showFloatingOrbOverlay() {
-        if (overlayView != null) return
-
-        val wm = getSystemService(Context.WINDOW_SERVICE) as? WindowManager ?: return
+    private fun showFloatingOrb() {
+        val wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
         windowManager = wm
-
-        val container = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(28, 18, 28, 18)
-            background = GradientDrawable(
-                GradientDrawable.Orientation.TL_BR,
-                intArrayOf(
-                    Color.parseColor("#EB181132"),
-                    Color.parseColor("#EB0E0A1F")
-                )
-            ).apply {
-                shape = GradientDrawable.RECTANGLE
-                cornerRadius = 64f
-                setStroke(3, Color.parseColor("#8B5CF6"))
-            }
-        }
-
-        val orbTitle = TextView(this).apply {
-            text = "● JARVIS  "
-            setTextColor(Color.parseColor("#F5F3FF"))
-            textSize = 13f
-            setOnClickListener {
-                val openIntent = Intent(this@OverlayService, MainActivity::class.java).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-                }
-                startActivity(openIntent)
-            }
-        }
-
-        val stopButton = Button(this).apply {
-            text = "STOP"
-            setTextColor(Color.parseColor("#F5F3FF"))
-            textSize = 11f
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.RECTANGLE
-                cornerRadius = 40f
-                setColor(Color.parseColor("#33FF6B87"))
-                setStroke(2, Color.parseColor("#99FF6B87"))
-            }
-            setOnClickListener {
-                val appContainer = (application as? JarvisApplication)?.container
-                appContainer?.killSwitch?.triggerKillSwitch("Stopped via Floating Overlay KillSwitch")
-                removeOverlayView()
-                stopForeground(STOP_FOREGROUND_REMOVE)
-                stopSelf()
-            }
-        }
-
-        container.addView(orbTitle)
-        container.addView(stopButton)
 
         val layoutType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
@@ -144,57 +64,112 @@ class OverlayService : Service() {
                 WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             PixelFormat.TRANSLUCENT
         ).apply {
-            gravity = Gravity.TOP or Gravity.END
+            gravity = Gravity.TOP or Gravity.START
             x = 24
-            y = 140
+            y = 260
+        }
+
+        val density = resources.displayMetrics.density
+        val padH = (14 * density).toInt()
+        val padV = (8 * density).toInt()
+
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(padH, padV, padH, padV)
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = 999f
+                setColor(Color.parseColor("#E60F1322")) // Aurora Surface #0F1322 with glass alpha
+                setStroke((1.5f * density).toInt(), Color.parseColor("#8B5CF6")) // Electric Violet stroke
+            }
+            elevation = 12f * density
+        }
+
+        val orbChip = TextView(this).apply {
+            text = getString(R.string.overlay_chip_label)
+            setTextColor(Color.parseColor("#F5F7FF"))
+            textSize = 12f
+            setPadding(0, 0, (10 * density).toInt(), 0)
+            setOnClickListener {
+                val launchIntent = Intent(this@OverlayService, MainActivity::class.java).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                }
+                startActivity(launchIntent)
+            }
+        }
+
+        val stopButton = TextView(this).apply {
+            text = getString(R.string.overlay_stop_button)
+            setTextColor(Color.parseColor("#FFFFFF"))
+            textSize = 12f
+            setPadding((10 * density).toInt(), (4 * density).toInt(), (10 * density).toInt(), (4 * density).toInt())
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = 999f
+                setColor(Color.parseColor("#EF4444")) // Coral Red #EF4444
+            }
+            setOnClickListener {
+                val app = applicationContext as? JarvisApplication
+                app?.appContainer?.killSwitch?.trigger("Floating overlay STOP pressed")
+                VoiceForegroundService.stopService(this@OverlayService)
+                stopSelf()
+            }
+        }
+
+        container.addView(orbChip)
+        container.addView(stopButton)
+
+        var initialX = 0
+        var initialY = 0
+        var initialTouchX = 0f
+        var initialTouchY = 0f
+
+        container.setOnTouchListener { _, event ->
+            when (event.action) {
+                MotionEvent.ACTION_DOWN -> {
+                    initialX = params.x
+                    initialY = params.y
+                    initialTouchX = event.rawX
+                    initialTouchY = event.rawY
+                    false
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    params.x = initialX + (event.rawX - initialTouchX).toInt()
+                    params.y = initialY + (event.rawY - initialTouchY).toInt()
+                    runCatching { wm.updateViewLayout(container, params) }
+                    true
+                }
+                else -> false
+            }
         }
 
         runCatching {
             wm.addView(container, params)
-            overlayView = container
-            _isOverlayShowing.value = true
+            floatingView = container
         }
-    }
-
-    private fun removeOverlayView() {
-        overlayView?.let { view ->
-            runCatching { windowManager?.removeView(view) }
-        }
-        overlayView = null
-        _isOverlayShowing.value = false
     }
 
     override fun onDestroy() {
-        removeOverlayView()
+        floatingView?.let { view ->
+            runCatching { windowManager?.removeView(view) }
+        }
+        floatingView = null
         super.onDestroy()
     }
 
-    private fun createNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                CHANNEL_ID,
-                "JARVIS Overlay Orb",
-                NotificationManager.IMPORTANCE_LOW
-            )
-            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
-            nm?.createNotificationChannel(channel)
+    companion object {
+        fun startIfPermitted(context: Context) {
+            if (Settings.canDrawOverlays(context)) {
+                ContextCompat.startForegroundService(
+                    context,
+                    Intent(context, OverlayService::class.java)
+                )
+            }
         }
-    }
 
-    private fun buildNotification(): Notification {
-        val openIntent = Intent(this, MainActivity::class.java)
-        val pending = PendingIntent.getActivity(
-            this,
-            0,
-            openIntent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
-            .setContentTitle(getString(R.string.overlay_service_notification_title))
-            .setContentText(getString(R.string.overlay_service_notification_text))
-            .setContentIntent(pending)
-            .setOngoing(true)
-            .build()
+        fun stop(context: Context) {
+            context.stopService(Intent(context, OverlayService::class.java))
+        }
     }
 }

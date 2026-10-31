@@ -7,43 +7,45 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.preferencesDataStoreFile
 import androidx.room.Room
 import com.example.BuildConfig
-import com.example.data.local.ActivityLogDao
-import com.example.data.local.ChatMessageDao
 import com.example.data.local.JarvisDatabase
-import com.example.data.local.MemoryItemDao
-import com.example.data.local.RoutineDao
+import com.example.data.remote.AgentStepRequestDto
+import com.example.data.remote.AgentStepResponseDto
 import com.example.data.remote.ApiService
-import com.example.data.remote.FirebaseProxyAuthInterceptor
-import com.example.env.FlavorEnvironment
-import com.example.env.FlavorEnvironmentImpl
+import com.example.data.remote.AuthHeaderInterceptor
+import com.example.data.remote.FakeBackend
+import com.example.data.remote.SttRequestDto
+import com.example.data.remote.SttResponseDto
+import com.example.data.remote.TokenProvider
+import com.example.data.remote.TtsRequestDto
 import com.example.data.repository.ActivityLogRepositoryImpl
 import com.example.data.repository.AgentBackendRepositoryImpl
+import com.example.data.repository.AuthRepositoryImpl
 import com.example.data.repository.ChatRepositoryImpl
 import com.example.data.repository.MemoryRepositoryImpl
 import com.example.data.repository.RoutineRepositoryImpl
 import com.example.data.repository.SettingsRepositoryImpl
-import com.example.data.security.VaultCipherManager
 import com.example.domain.agent.AgentOrchestrator
+import com.example.domain.contacts.ContactsResolver
 import com.example.domain.repository.ActivityLogRepository
 import com.example.domain.repository.AgentBackendRepository
+import com.example.domain.repository.AuthRepository
 import com.example.domain.repository.ChatRepository
 import com.example.domain.repository.MemoryRepository
 import com.example.domain.repository.RoutineRepository
 import com.example.domain.repository.SettingsRepository
 import com.example.domain.safety.KillSwitch
-import com.example.domain.safety.KillSwitchImpl
 import com.example.domain.safety.SafetyGate
 import com.example.domain.safety.SafetyGateImpl
-import com.example.domain.tool.Tool
 import com.example.domain.tool.ToolRegistry
-import com.example.domain.voice.AudioRecorder
-import com.example.domain.voice.SpeechRecognizerWrapper
-import com.example.domain.voice.TtsEngineWrapper
-import com.example.domain.voice.WakeWordDetector
 import com.example.services.voice.AndroidSpeechRecognizerWrapper
 import com.example.services.voice.AndroidTtsEngineWrapper
+import com.example.services.voice.PcmAudioRecorder
 import com.example.services.voice.PcmAudioRecorderImpl
 import com.example.services.voice.PorcupineWakeWordEngineImpl
+import com.example.services.voice.SpeechRecognizerWrapper
+import com.example.services.voice.TtsEngineWrapper
+import com.example.services.voice.VoiceSessionManager
+import com.example.services.voice.WakeWordEngine
 import com.example.tools.CallContactTool
 import com.example.tools.FlashlightTool
 import com.example.tools.NavigateTool
@@ -64,234 +66,314 @@ import com.example.tools.VolumeTool
 import com.example.tools.WaitForElementTool
 import com.example.tools.WebSearchTool
 import com.example.tools.WhatsAppTelegramTool
+import com.google.firebase.FirebaseApp
+import com.google.firebase.appcheck.FirebaseAppCheck
+import com.google.firebase.appcheck.playintegrity.PlayIntegrityAppCheckProviderFactory
+import com.google.firebase.auth.FirebaseAuth
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.tasks.await
+import okhttp3.CertificatePinner
 import okhttp3.OkHttpClient
+import okhttp3.ResponseBody
 import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
+import java.net.URI
 import java.util.concurrent.TimeUnit
 
-@Module
-@InstallIn(SingletonComponent::class)
-object DatabaseModule {
-    val MIGRATION_1_2 = object : androidx.room.migration.Migration(1, 2) {
-        override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
-            db.execSQL(
-                "CREATE TABLE IF NOT EXISTS `routines` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `title` TEXT NOT NULL, `triggerType` TEXT NOT NULL, `triggerValue` TEXT NOT NULL, `actionsPrompt` TEXT NOT NULL, `enabled` INTEGER NOT NULL, `lastRunTimestamp` INTEGER)"
-            )
-        }
-    }
+@Target(AnnotationTarget.CONSTRUCTOR, AnnotationTarget.FIELD, AnnotationTarget.FUNCTION)
+@Retention(AnnotationRetention.RUNTIME)
+annotation class Inject
 
-    @Provides
-    @Singleton
-    fun provideDatabase(context: Context): JarvisDatabase {
-        val builder = Room.databaseBuilder(
-            context.applicationContext,
-            JarvisDatabase::class.java,
-            "jarvis_encrypted_vault.db"
-        ).addMigrations(MIGRATION_1_2)
+@Target(AnnotationTarget.CLASS)
+@Retention(AnnotationRetention.RUNTIME)
+annotation class Singleton
 
-        if (BuildConfig.IS_DEV_FLAVOR) {
-            builder.fallbackToDestructiveMigration(dropAllTables = true)
-        }
-        return builder.build()
-    }
+@Target(AnnotationTarget.CLASS)
+@Retention(AnnotationRetention.RUNTIME)
+annotation class HiltViewModel
 
-    @Provides
-    fun provideChatDao(db: JarvisDatabase): ChatMessageDao = db.chatMessageDao()
+@Target(AnnotationTarget.CLASS)
+@Retention(AnnotationRetention.RUNTIME)
+annotation class AndroidEntryPoint
 
-    @Provides
-    fun provideMemoryDao(db: JarvisDatabase): MemoryItemDao = db.memoryItemDao()
+/**
+ * Application dependency container providing constructor-injected singletons across all layers.
+ */
+class AppContainer(context: Context) {
 
-    @Provides
-    fun provideActivityLogDao(db: JarvisDatabase): ActivityLogDao = db.activityLogDao()
+    private val appContext = context.applicationContext
 
-    @Provides
-    fun provideRoutineDao(db: JarvisDatabase): RoutineDao = db.routineDao()
+    val killSwitch: KillSwitch = KillSwitch()
 
-    @Provides
-    @Singleton
-    fun provideDataStore(context: Context): DataStore<Preferences> {
-        return PreferenceDataStoreFactory.create(
-            produceFile = { context.applicationContext.preferencesDataStoreFile("jarvis_settings") }
+    val dataStore: DataStore<Preferences> by lazy {
+        PreferenceDataStoreFactory.create(
+            produceFile = { appContext.preferencesDataStoreFile("jarvis_settings.preferences_pb") }
         )
     }
-}
 
-@Module
-@InstallIn(SingletonComponent::class)
-object NetworkModule {
-    @Provides
-    @Singleton
-    fun provideMoshi(): Moshi = Moshi.Builder()
-        .add(KotlinJsonAdapterFactory())
-        .build()
+    val database: JarvisDatabase by lazy {
+        Room.databaseBuilder(
+            appContext,
+            JarvisDatabase::class.java,
+            "jarvis_assistant.db"
+        ).fallbackToDestructiveMigration().build()
+    }
 
-    @Provides
-    @Singleton
-    fun provideOkHttpClient(): OkHttpClient {
-        val logging = HttpLoggingInterceptor().apply {
-            level = HttpLoggingInterceptor.Level.BASIC
+    val firebaseAuth: FirebaseAuth? by lazy {
+        try {
+            val apps = FirebaseApp.getApps(appContext)
+            val app = if (apps.isNotEmpty()) {
+                FirebaseApp.getInstance()
+            } else {
+                FirebaseApp.initializeApp(appContext)
+            }
+            if (app != null) {
+                runCatching {
+                    val appCheck = FirebaseAppCheck.getInstance()
+                    appCheck.installAppCheckProviderFactory(
+                        PlayIntegrityAppCheckProviderFactory.getInstance()
+                    )
+                }
+                FirebaseAuth.getInstance(app)
+            } else {
+                null
+            }
+        } catch (_: Exception) {
+            null
         }
-        return OkHttpClient.Builder()
-            .addInterceptor(FirebaseProxyAuthInterceptor())
-            .addInterceptor(logging)
-            .connectTimeout(20, TimeUnit.SECONDS)
-            .readTimeout(30, TimeUnit.SECONDS)
+    }
+
+    val authRepository: AuthRepository by lazy {
+        AuthRepositoryImpl(firebaseAuth)
+    }
+
+    val tokenProvider: TokenProvider by lazy {
+        object : TokenProvider {
+            override fun getFirebaseIdToken(): String? {
+                val user = firebaseAuth?.currentUser ?: return null
+                return runCatching {
+                    runBlocking { user.getIdToken(false).await().token }
+                }.getOrNull()
+            }
+
+            override fun getAppCheckToken(): String? {
+                return runCatching {
+                    val apps = FirebaseApp.getApps(appContext)
+                    if (apps.isEmpty()) return@runCatching null
+                    runBlocking {
+                        FirebaseAppCheck.getInstance().getAppCheckToken(false).await().token
+                    }
+                }.getOrNull()
+            }
+        }
+    }
+
+    val moshi: Moshi by lazy {
+        Moshi.Builder()
+            .addLast(KotlinJsonAdapterFactory())
             .build()
     }
 
-    private const val FALLBACK_UNCONFIGURED_BASE_URL = "https://127.0.0.1/"
-
-    fun isValidBackendUrlConfigured(rawUrl: String?): Boolean {
-        val trimmed = rawUrl?.trim().orEmpty()
-        if (trimmed.isEmpty()) return false
-        val lower = trimmed.lowercase()
-        if (!lower.startsWith("http://") && !lower.startsWith("https://")) return false
-        val withTrailingSlash = if (trimmed.endsWith("/")) trimmed else "$trimmed/"
-        val parsed = okhttp3.HttpUrl.Companion.run { withTrailingSlash.toHttpUrlOrNull() }
-            ?: return false
-        return parsed.host.isNotBlank() && parsed.host != "127.0.0.1"
-    }
-
-    /**
-     * Validates and normalizes a raw base URL string for Retrofit.
-     * If no valid URL is configured yet, uses a local loopback placeholder so Retrofit
-     * initializes safely without pointing to any fake external domain like example.com.
-     */
-    fun sanitizeBaseUrl(rawUrl: String?): String {
-        val trimmed = rawUrl?.trim().orEmpty()
-        if (trimmed.isEmpty()) return FALLBACK_UNCONFIGURED_BASE_URL
-
-        val lower = trimmed.lowercase()
-        if (!lower.startsWith("http://") && !lower.startsWith("https://")) {
-            return FALLBACK_UNCONFIGURED_BASE_URL
+    val okHttpClient: OkHttpClient by lazy {
+        val logging = HttpLoggingInterceptor().apply {
+            level = if (BuildConfig.DEBUG) {
+                HttpLoggingInterceptor.Level.BASIC
+            } else {
+                HttpLoggingInterceptor.Level.NONE
+            }
         }
 
-        val withTrailingSlash = if (trimmed.endsWith("/")) trimmed else "$trimmed/"
-        val parsed = okhttp3.HttpUrl.Companion.run { withTrailingSlash.toHttpUrlOrNull() }
-            ?: return FALLBACK_UNCONFIGURED_BASE_URL
-        return if (parsed.host.isBlank()) FALLBACK_UNCONFIGURED_BASE_URL else parsed.toString()
+        val builder = OkHttpClient.Builder()
+            .addInterceptor(AuthHeaderInterceptor(tokenProvider))
+            .addInterceptor(logging)
+            .connectTimeout(15, TimeUnit.SECONDS)
+            .readTimeout(25, TimeUnit.SECONDS)
+            .writeTimeout(20, TimeUnit.SECONDS)
+
+        val configuredPin = BuildConfig.JARVIS_BACKEND_CERT_SHA256.trim()
+        val baseUrl = sanitizeBaseUrl(BuildConfig.JARVIS_BACKEND_BASE_URL)
+        val host = runCatching { URI(baseUrl).host }.getOrNull()
+        if (!host.isNullOrBlank() && configuredPin.startsWith("sha256/") && configuredPin.length > 15) {
+            val pinner = CertificatePinner.Builder()
+                .add(host, configuredPin)
+                .build()
+            builder.certificatePinner(pinner)
+        }
+
+        builder.build()
     }
 
-    @Provides
-    @Singleton
-    fun provideApiService(okHttpClient: OkHttpClient, moshi: Moshi): ApiService {
-        val safeBaseUrl = sanitizeBaseUrl(BuildConfig.JARVIS_BACKEND_BASE_URL)
-        return runCatching {
-            Retrofit.Builder()
-                .baseUrl(safeBaseUrl)
-                .client(okHttpClient)
-                .addConverterFactory(MoshiConverterFactory.create(moshi))
-                .build()
-                .create(ApiService::class.java)
-        }.getOrElse {
-            Retrofit.Builder()
-                .baseUrl(FALLBACK_UNCONFIGURED_BASE_URL)
-                .client(okHttpClient)
-                .addConverterFactory(MoshiConverterFactory.create(moshi))
-                .build()
-                .create(ApiService::class.java)
+    val retrofit: Retrofit by lazy {
+        val baseUrl = sanitizeBaseUrl(BuildConfig.JARVIS_BACKEND_BASE_URL)
+        Retrofit.Builder()
+            .baseUrl(baseUrl)
+            .client(okHttpClient)
+            .addConverterFactory(MoshiConverterFactory.create(moshi))
+            .build()
+    }
+
+    private val networkApiService: ApiService by lazy {
+        retrofit.create(ApiService::class.java)
+    }
+
+    private val fakeBackend: FakeBackend by lazy {
+        FakeBackend()
+    }
+
+    val apiService: ApiService by lazy {
+        if (!BuildConfig.USE_FAKE_BACKEND) {
+            networkApiService
+        } else {
+            // In debug builds, allow /v1/tts neural voice synthesis to call the real backend
+            // when BuildConfig.AI_VOICE is enabled and a non-placeholder URL is configured,
+            // falling back to FakeBackend when unreachable.
+            object : ApiService {
+                private val hasConfiguredBackend: Boolean
+                    get() {
+                        val url = BuildConfig.JARVIS_BACKEND_BASE_URL.trim()
+                        return url.startsWith("http") && !url.contains("jarvis-proxy.example.com")
+                    }
+
+                override suspend fun agentStep(request: AgentStepRequestDto): AgentStepResponseDto {
+                    if (hasConfiguredBackend) {
+                        return try {
+                            networkApiService.agentStep(request)
+                        } catch (_: Exception) {
+                            fakeBackend.agentStep(request)
+                        }
+                    }
+                    return fakeBackend.agentStep(request)
+                }
+
+                override suspend fun speechToText(request: SttRequestDto): SttResponseDto {
+                    if (hasConfiguredBackend) {
+                        return try {
+                            networkApiService.speechToText(request)
+                        } catch (_: Exception) {
+                            fakeBackend.speechToText(request)
+                        }
+                    }
+                    return fakeBackend.speechToText(request)
+                }
+
+                override suspend fun synthesizeSpeech(request: TtsRequestDto): ResponseBody {
+                    if (BuildConfig.AI_VOICE && hasConfiguredBackend) {
+                        return try {
+                            networkApiService.synthesizeSpeech(request)
+                        } catch (_: Exception) {
+                            fakeBackend.synthesizeSpeech(request)
+                        }
+                    }
+                    return fakeBackend.synthesizeSpeech(request)
+                }
+            }
         }
     }
-}
 
-@Module
-@InstallIn(SingletonComponent::class)
-object ToolMultibindingModule {
-    @Provides
-    @IntoSet
-    fun provideToolsSet(
-        context: Context,
-        contactsResolver: com.example.domain.contact.ContactsResolver
-    ): Set<Tool> {
-        val openAppTool = OpenAppTool(context)
-        return setOf(
-            // Stage 1: 11 Intent-based Tools
-            openAppTool,
-            CallContactTool(context, contactsResolver),
-            SendSmsTool(context, contactsResolver),
-            SetAlarmTool(context),
-            SetTimerTool(context),
-            FlashlightTool(context),
-            VolumeTool(context),
-            OpenUrlTool(context),
-            WebSearchTool(context),
-            PlayMediaTool(context),
-            NavigateTool(context),
-            // Stage 4: 7 Full Phone Control (AccessibilityService) Tools
-            ReadScreenTool(),
-            TapElementTool(),
-            TypeTextTool(),
-            ScrollTool(),
-            SystemNavigationTool(),
-            WaitForElementTool(),
-            OpenAppAndFindTool(openAppTool),
-            // Stage 5: 2 Notification & Messaging Tools
-            NotificationActionTool(),
-            WhatsAppTelegramTool(context, contactsResolver)
+    private fun sanitizeBaseUrl(raw: String): String {
+        val trimmed = raw.trim()
+        val withScheme = if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+            trimmed
+        } else {
+            "https://jarvis-proxy.example.com/"
+        }
+        return if (withScheme.endsWith("/")) withScheme else "$withScheme/"
+    }
+
+    val chatRepository: ChatRepository by lazy {
+        ChatRepositoryImpl(database.chatMessageDao())
+    }
+
+    val memoryRepository: MemoryRepository by lazy {
+        MemoryRepositoryImpl(database.memoryDao())
+    }
+
+    val activityLogRepository: ActivityLogRepository by lazy {
+        ActivityLogRepositoryImpl(database.activityLogDao())
+    }
+
+    val routineRepository: RoutineRepository by lazy {
+        RoutineRepositoryImpl(database.routineDao())
+    }
+
+    val settingsRepository: SettingsRepository by lazy {
+        SettingsRepositoryImpl(dataStore)
+    }
+
+    val contactsResolver: ContactsResolver by lazy {
+        ContactsResolver(appContext, memoryRepository)
+    }
+
+    val safetyGate: SafetyGate by lazy {
+        SafetyGateImpl(contactsResolver)
+    }
+
+    val toolRegistry: ToolRegistry by lazy {
+        ToolRegistry(
+            tools = setOf(
+                OpenAppTool(appContext),
+                OpenAppAndFindTool(appContext),
+                CallContactTool(appContext, contactsResolver),
+                SendSmsTool(appContext, contactsResolver),
+                WhatsAppTelegramTool(appContext, contactsResolver),
+                SetAlarmTool(appContext),
+                SetTimerTool(appContext),
+                VolumeTool(appContext),
+                FlashlightTool(appContext),
+                PlayMediaTool(appContext),
+                NavigateTool(appContext),
+                WebSearchTool(appContext),
+                OpenUrlTool(appContext),
+                NotificationActionTool(appContext),
+                ReadScreenTool(),
+                TapElementTool(),
+                TypeTextTool(),
+                ScrollTool(),
+                WaitForElementTool(),
+                SystemNavigationTool()
+            )
         )
     }
-}
 
-/**
- * Singleton DI Container wiring all Modules for ViewModels & Services.
- */
-@Singleton
-class AppContainer(context: Context) {
-    private val appContext = context.applicationContext
-
-    val database: JarvisDatabase = DatabaseModule.provideDatabase(appContext)
-    val dataStore: DataStore<Preferences> = DatabaseModule.provideDataStore(appContext)
-    val vaultCipherManager: VaultCipherManager = VaultCipherManager()
-
-    val flavorEnvironment: FlavorEnvironment = FlavorEnvironmentImpl()
-    val moshi: Moshi = NetworkModule.provideMoshi()
-    val okHttpClient: OkHttpClient = NetworkModule.provideOkHttpClient()
-    val remoteApiService: ApiService = NetworkModule.provideApiService(okHttpClient, moshi)
-
-    val killSwitch: KillSwitch = KillSwitchImpl()
-    val audioRecorder: AudioRecorder = PcmAudioRecorderImpl(appContext, killSwitch)
-    val speechRecognizer: SpeechRecognizerWrapper = AndroidSpeechRecognizerWrapper(appContext, killSwitch)
-    val ttsEngine: TtsEngineWrapper = AndroidTtsEngineWrapper(appContext, remoteApiService, killSwitch)
-    val wakeWordDetector: WakeWordDetector = PorcupineWakeWordEngineImpl(audioRecorder)
-    val safetyGate: SafetyGate = SafetyGateImpl(ttsEngine, killSwitch)
-
-    val authRepository: com.example.domain.repository.AuthRepository =
-        com.example.data.repository.FirebaseAuthRepositoryImpl()
-    val chatRepository: ChatRepository = ChatRepositoryImpl(database.chatMessageDao())
-    val memoryRepository: MemoryRepository = MemoryRepositoryImpl(database.memoryItemDao(), vaultCipherManager)
-    val routineRepository: RoutineRepository = RoutineRepositoryImpl(database.routineDao())
-    val activityLogRepository: ActivityLogRepository = ActivityLogRepositoryImpl(database.activityLogDao())
-    val settingsRepository: SettingsRepository = SettingsRepositoryImpl(dataStore)
-
-    val contactsResolver: com.example.domain.contact.ContactsResolver =
-        com.example.domain.contact.ContactsResolver(
-            dataSource = com.example.domain.contact.AndroidContactsDataSource(appContext),
-            memoryRepository = memoryRepository
+    val agentOrchestrator: AgentOrchestrator by lazy {
+        AgentOrchestrator(
+            agentBackendRepository = AgentBackendRepositoryImpl(appContext, apiService),
+            chatRepository = chatRepository,
+            memoryRepository = memoryRepository,
+            activityLogRepository = activityLogRepository,
+            routineRepository = routineRepository,
+            settingsRepository = settingsRepository,
+            toolRegistry = toolRegistry,
+            safetyGate = safetyGate,
+            killSwitch = killSwitch
         )
+    }
 
-    val toolsSet: Set<Tool> = ToolMultibindingModule.provideToolsSet(appContext, contactsResolver)
-    val toolRegistry: ToolRegistry = ToolRegistry(toolsSet)
+    val pcmAudioRecorder: PcmAudioRecorder by lazy {
+        PcmAudioRecorderImpl(appContext)
+    }
 
-    val backendRepository: AgentBackendRepository = AgentBackendRepositoryImpl(
-        context = appContext,
-        remoteApiService = remoteApiService,
-        optionalFakeApiService = flavorEnvironment.provideOptionalFakeApiService()
-    )
+    val speechRecognizerWrapper: SpeechRecognizerWrapper by lazy {
+        AndroidSpeechRecognizerWrapper(appContext)
+    }
 
-    val agentOrchestrator: AgentOrchestrator = AgentOrchestrator(
-        backendRepository = backendRepository,
-        chatRepository = chatRepository,
-        memoryRepository = memoryRepository,
-        routineRepository = routineRepository,
-        activityLogRepository = activityLogRepository,
-        settingsRepository = settingsRepository,
-        toolRegistry = toolRegistry,
-        safetyGate = safetyGate,
-        ttsEngine = ttsEngine,
-        killSwitch = killSwitch,
-        contactsResolver = contactsResolver
-    )
+    val ttsEngineWrapper: TtsEngineWrapper by lazy {
+        AndroidTtsEngineWrapper(appContext, apiService)
+    }
+
+    val wakeWordEngine: WakeWordEngine by lazy {
+        PorcupineWakeWordEngineImpl(appContext, pcmAudioRecorder)
+    }
+
+    val voiceSessionManager: VoiceSessionManager by lazy {
+        VoiceSessionManager(
+            speechRecognizer = speechRecognizerWrapper,
+            ttsEngine = ttsEngineWrapper,
+            audioRecorder = pcmAudioRecorder,
+            wakeWordEngine = wakeWordEngine
+        )
+    }
 }

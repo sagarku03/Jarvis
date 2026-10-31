@@ -1,164 +1,196 @@
-import com.google.gms.googleservices.GoogleServicesPlugin.MissingGoogleServicesStrategy
+import java.util.Base64
+import java.io.File
+import java.util.Properties
 
 plugins {
-  alias(libs.plugins.android.application)
-  alias(libs.plugins.kotlin.compose)
-  alias(libs.plugins.google.devtools.ksp)
-  alias(libs.plugins.secrets)
-  alias(libs.plugins.google.services)
+    alias(libs.plugins.android.application)
+    alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.google.devtools.ksp)
+    alias(libs.plugins.secrets)
 }
+
+val localProps = Properties().apply {
+    val file = rootProject.file("local.properties")
+    if (file.exists()) {
+        file.inputStream().use { load(it) }
+    }
+    val envFile = rootProject.file(".env")
+    if (envFile.exists()) {
+        envFile.inputStream().use { load(it) }
+    }
+}
+
+val storeSafeProp = (project.findProperty("STORE_SAFE_MODE")?.toString()
+    ?: localProps.getProperty("STORE_SAFE_MODE")
+    ?: "false").toBoolean()
+val fullControlProp = !storeSafeProp
+val backendBaseUrlProp = (project.findProperty("JARVIS_BACKEND_BASE_URL")?.toString()
+    ?: localProps.getProperty("JARVIS_BACKEND_BASE_URL")
+    ?: "https://jarvis-proxy.example.com/")
+val backendCertPinProp = (project.findProperty("JARVIS_BACKEND_CERT_SHA256")?.toString()
+    ?: localProps.getProperty("JARVIS_BACKEND_CERT_SHA256")
+    ?: "")
+val googleWebClientIdProp = (project.findProperty("GOOGLE_WEB_CLIENT_ID")?.toString()
+    ?: localProps.getProperty("GOOGLE_WEB_CLIENT_ID")
+    ?: "")
 
 android {
-  namespace = "com.example"
-  compileSdk { version = release(36) { minorApiLevel = 1 } }
+    namespace = "com.example"
+    compileSdk = 36
 
-  defaultConfig {
-    applicationId = "com.aistudio.jarvis.vcaixq"
-    minSdk = 24
-    targetSdk = 36
-    versionCode = 1
-    versionName = "1.0.0"
+    defaultConfig {
+        applicationId = "com.aistudio.jarvis.vcaixq"
+        minSdk = 24
+        targetSdk = 36
+        versionCode = 1
+        versionName = "1.0"
 
-    testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
-    buildConfigField("boolean", "FULL_CONTROL_MODE", "true")
-    buildConfigField("boolean", "STORE_SAFE_MODE", "false")
-  }
+        buildConfigField("boolean", "FULL_CONTROL_MODE", fullControlProp.toString())
+        buildConfigField("boolean", "STORE_SAFE_MODE", storeSafeProp.toString())
+        buildConfigField("boolean", "AI_VOICE", "true")
+        buildConfigField("String", "JARVIS_BACKEND_BASE_URL", "\"$backendBaseUrlProp\"")
+        buildConfigField("String", "JARVIS_BACKEND_CERT_SHA256", "\"$backendCertPinProp\"")
+        buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", "\"$googleWebClientIdProp\"")
 
-  // Separate dev (debug) and prod (release) source sets so FakeBackend, seeded demo data,
-  // and simulation toggles exist strictly in src/dev and never in src/main or src/prod.
-  sourceSets {
-    getByName("debug") {
-      kotlin.directories.add("src/dev/java")
-      res.directories.add("src/dev/res")
+        resValue("bool", "enable_accessibility_automation", fullControlProp.toString())
     }
-    getByName("release") {
-      kotlin.directories.add("src/prod/java")
-      res.directories.add("src/prod/res")
-    }
-  }
 
-  // Do not remove or modify these signingConfigs. They are necessary for building, installing,
-  // and updating Android apps in AI Studio.
-  signingConfigs {
-    create("release") {
-      val keystorePath = System.getenv("KEYSTORE_PATH") ?: "${rootDir}/my-upload-key.jks"
-      storeFile = file(keystorePath)
-      storePassword = System.getenv("STORE_PASSWORD")
-      keyAlias = "upload"
-      keyPassword = System.getenv("KEY_PASSWORD")
-    }
-    create("debugConfig") {
-      storeFile = file("${rootDir}/debug.keystore")
-      storePassword = "android"
-      keyAlias = "androiddebugkey"
-      keyPassword = "android"
-    }
-  }
+    signingConfigs {
+        create("release") {
+            val keystoreFile = file("../debug.keystore")
+            val base64File = file("../debug.keystore.base64")
 
-  buildTypes {
-    release {
-      isCrunchPngs = false
-      isMinifyEnabled = false
-      proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-      buildConfigField("boolean", "USE_FAKE_BACKEND", "false")
-      buildConfigField("boolean", "IS_DEV_FLAVOR", "false")
-      // Do not remove or modify this signingConfig assignment. It is necessary for Android apps in
-      // AI Studio.
-      signingConfig = signingConfigs.getByName("release")
+            if (!keystoreFile.exists() && base64File.exists()) {
+                val base64String = base64File.readText().replace("\\s".toRegex(), "")
+                keystoreFile.writeBytes(Base64.getDecoder().decode(base64String))
+            }
+
+            storeFile = keystoreFile
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+        getByName("debug") {
+            val keystoreFile = file("../debug.keystore")
+            val base64File = file("../debug.keystore.base64")
+
+            if (!keystoreFile.exists() && base64File.exists()) {
+                val base64String = base64File.readText().replace("\\s".toRegex(), "")
+                keystoreFile.writeBytes(Base64.getDecoder().decode(base64String))
+            }
+
+            storeFile = keystoreFile
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
     }
-    debug {
-      buildConfigField("boolean", "USE_FAKE_BACKEND", "true")
-      buildConfigField("boolean", "IS_DEV_FLAVOR", "true")
-      // Do not remove or modify this signingConfig assignment. It is necessary for Android apps in
-      // AI Studio.
-      signingConfig = signingConfigs.getByName("debugConfig")
+
+    buildTypes {
+        release {
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
+            signingConfig = signingConfigs.getByName("release")
+            buildConfigField("boolean", "USE_FAKE_BACKEND", "false")
+            buildConfigField("boolean", "IS_DEV_FLAVOR", "false")
+            buildConfigField("boolean", "SUPPORTS_SIMULATED_FEATURES", "false")
+            buildConfigField("boolean", "SUPPORTS_LATENCY_DEBUG_PANEL", "false")
+        }
+        debug {
+            signingConfig = signingConfigs.getByName("debug")
+            buildConfigField("boolean", "USE_FAKE_BACKEND", "true")
+            buildConfigField("boolean", "IS_DEV_FLAVOR", "true")
+            buildConfigField("boolean", "SUPPORTS_SIMULATED_FEATURES", "false")
+            buildConfigField("boolean", "SUPPORTS_LATENCY_DEBUG_PANEL", "true")
+        }
     }
-  }
-  compileOptions {
-    sourceCompatibility = JavaVersion.VERSION_11
-    targetCompatibility = JavaVersion.VERSION_11
-  }
-  buildFeatures {
-    compose = true
-    buildConfig = true
-  }
-  testOptions { unitTests { isIncludeAndroidResources = true } }
-  dependenciesInfo {
-    includeInApk = false
-    includeInBundle = true
-  }
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_11
+        targetCompatibility = JavaVersion.VERSION_11
+    }
+    buildFeatures {
+        compose = true
+        buildConfig = true
+        resValues = true
+    }
+    testOptions {
+        unitTests {
+            isIncludeAndroidResources = true
+        }
+    }
 }
 
-// Configure the Secrets Gradle Plugin to use .env and .env.example files
-// to match the convention used in Web projects.
 secrets {
-  propertiesFileName = ".env"
-  defaultPropertiesFileName = ".env.example"
-  ignoreList.add("FIREBASE_APPCHECK_DEBUG_TOKEN")
+    propertiesFileName = ".env"
+    defaultPropertiesFileName = ".env.example"
+    ignoreList.add("keyToIgnore")
+    ignoreList.add("sdk.*")
 }
 
-googleServices { missingGoogleServicesStrategy = MissingGoogleServicesStrategy.WARN }
-
-// Some unused dependencies are commented out below instead of being removed.
-// This makes it easy to add them back in the future if needed.
 dependencies {
-  implementation(platform(libs.androidx.compose.bom))
-  implementation(platform(libs.firebase.bom))
-  // implementation(libs.accompanist.permissions)
-  implementation(libs.androidx.activity.compose)
-  // implementation(libs.androidx.camera.camera2)
-  // implementation(libs.androidx.camera.core)
-  // implementation(libs.androidx.camera.lifecycle)
-  // implementation(libs.androidx.camera.view)
-  implementation(libs.androidx.compose.material.icons.core)
-  implementation(libs.androidx.compose.material.icons.extended)
-  implementation(libs.androidx.compose.material3)
-  implementation(libs.androidx.compose.ui)
-  implementation(libs.androidx.compose.ui.graphics)
-  implementation(libs.androidx.compose.ui.tooling.preview)
-  implementation(libs.androidx.core.ktx)
-  implementation(libs.androidx.datastore.preferences)
-  implementation(libs.androidx.lifecycle.runtime.compose)
-  implementation(libs.androidx.lifecycle.runtime.ktx)
-  implementation(libs.androidx.lifecycle.viewmodel.compose)
-  implementation(libs.androidx.navigation.compose)
-  implementation(libs.androidx.room.ktx)
-  implementation(libs.androidx.room.runtime)
-  // implementation(libs.coil.compose)
-  implementation(libs.converter.moshi)
-  // implementation(libs.firebase.ai)
-  // Uncomment to use Firestore:
-  // implementation(libs.firebase.firestore)
+    implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.lifecycle.runtime.ktx)
+    implementation(libs.androidx.activity.compose)
+    implementation(platform(libs.androidx.compose.bom))
+    implementation(libs.androidx.compose.ui)
+    implementation(libs.androidx.compose.ui.graphics)
+    implementation(libs.androidx.compose.ui.tooling.preview)
+    implementation(libs.androidx.compose.material3)
 
-  // Uncomment ALL FOUR of the following dependencies together to use Firebase Auth and Google
-  // Sign-In via Credential Manager:
-  implementation(libs.firebase.auth)
-  // implementation(libs.androidx.credentials)
-  // implementation(libs.androidx.credentials.play.services)
-  // implementation(libs.googleid)
-  implementation(libs.firebase.appcheck.recaptcha)
-  implementation(libs.firebase.appcheck.debug)
-  implementation(libs.kotlinx.coroutines.android)
-  implementation(libs.kotlinx.coroutines.core)
-  implementation(libs.logging.interceptor)
-  implementation(libs.moshi.kotlin)
-  implementation(libs.okhttp)
-  // implementation(libs.play.services.location)
-  implementation(libs.retrofit)
-  testImplementation(libs.androidx.compose.ui.test.junit4)
-  testImplementation(libs.androidx.core)
-  testImplementation(libs.androidx.junit)
-  testImplementation(libs.junit)
-  testImplementation(libs.kotlinx.coroutines.test)
-  testImplementation(libs.robolectric)
-  androidTestImplementation(platform(libs.androidx.compose.bom))
-  androidTestImplementation(libs.androidx.compose.ui.test.junit4)
-  androidTestImplementation(libs.androidx.espresso.core)
-  androidTestImplementation(libs.androidx.junit)
-  androidTestImplementation(libs.androidx.runner)
-  debugImplementation(libs.androidx.compose.ui.test.manifest)
-  debugImplementation(libs.androidx.compose.ui.tooling)
-  "ksp"(libs.androidx.room.compiler)
-  "ksp"(libs.moshi.kotlin.codegen)
+    // Material Icons Extended & Navigation
+    implementation(libs.androidx.compose.material.icons.core)
+    implementation(libs.androidx.compose.material.icons.extended)
+    implementation(libs.androidx.navigation.compose)
+    implementation(libs.androidx.lifecycle.runtime.compose)
+    implementation(libs.androidx.lifecycle.viewmodel.compose)
+
+    // Room Local Database (memory, chat, activity log, routines)
+    implementation(libs.androidx.room.runtime)
+    implementation(libs.androidx.room.ktx)
+    ksp(libs.androidx.room.compiler)
+
+    // DataStore Preferences (settings, language, voice speed, safety level)
+    implementation(libs.androidx.datastore.preferences)
+
+    // Networking & Backend Proxy (Retrofit + OkHttp + Moshi)
+    implementation(libs.retrofit)
+    implementation(libs.converter.moshi)
+    implementation(libs.okhttp)
+    implementation(libs.logging.interceptor)
+    implementation(libs.moshi.kotlin)
+    ksp(libs.moshi.kotlin.codegen)
+
+    // Coroutines
+    implementation(libs.kotlinx.coroutines.core)
+    implementation(libs.kotlinx.coroutines.android)
+
+    // On-device Wake Word Engine ("Hey Jarvis")
+    implementation("ai.picovoice:porcupine-android:3.0.2")
+
+    // Firebase Auth + App Check + Credential Manager Google Sign-In
+    implementation(platform(libs.firebase.bom))
+    implementation(libs.firebase.auth)
+    implementation("com.google.firebase:firebase-appcheck-playintegrity")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.10.2")
+    implementation(libs.androidx.credentials)
+    implementation(libs.androidx.credentials.play.services)
+    implementation(libs.googleid)
+
+    testImplementation(libs.junit)
+    testImplementation(libs.robolectric)
+    testImplementation(libs.androidx.core)
+    testImplementation(libs.androidx.runner)
+    testImplementation(libs.kotlinx.coroutines.test)
+    androidTestImplementation(libs.androidx.junit)
+    androidTestImplementation(libs.androidx.espresso.core)
+    androidTestImplementation(platform(libs.androidx.compose.bom))
+    androidTestImplementation(libs.androidx.compose.ui.test.junit4)
+    debugImplementation(libs.androidx.compose.ui.tooling)
+    debugImplementation(libs.androidx.compose.ui.test.manifest)
 }

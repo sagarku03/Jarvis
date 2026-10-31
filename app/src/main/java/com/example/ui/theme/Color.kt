@@ -2,37 +2,40 @@ package com.example.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-// Aurora Violet Glass Design Tokens (Phase 2)
-val Bg0 = Color(0xFF07050F)
-val Bg1 = Color(0xFF0E0A1F)
-val BgTopGradient = Color(0xFF0B0718)
-val SurfaceVariantDark = Color(0xFF1A1533)
+object AuroraColors {
+    val BackgroundDeep = Color(0xFF07080D)
+    val SurfacePrimary = Color(0xFF10131C)
+    val SurfaceElevated = Color(0xFF171B28)
+    val ElectricViolet = Color(0xFF7C5CFF)
+    val CyanGlow = Color(0xFF00E5FF)
+    val EmeraldSuccess = Color(0xFF10B981)
+    val AmberWarning = Color(0xFFF59E0B)
+    val CoralDanger = Color(0xFFF43F5E)
+    val TextPrimary = Color(0xFFF3F5FF)
+    val TextSecondary = Color(0xFF9EA6C2)
+    val TextMuted = Color(0xFF646D8A)
+    val GlassBorder = Color(0x1FFFFFFF)
+    val GlassHighlight = Color(0x147C5CFF)
+}
 
-// Glass Fills & Strokes
-val GlassFill = Color(0x14FFFFFF)          // white 8%
-val GlassFillElevated = Color(0x1FFFFFFF)  // white 12%
-val GlassStroke = Color(0x24FFFFFF)        // white 14%
-val GlassStrokeStrong = Color(0x4DFFFFFF)  // white 30%
-val NavBarFill = Color(0xB8140E2A)
-val SafetySheetFill = Color(0xDB181132)    // rgba(24,17,50,86%)
-val ScrimBackdrop = Color(0xA004020C)
+val BackgroundDeep = AuroraColors.BackgroundDeep
+val SurfacePrimary = AuroraColors.SurfacePrimary
+val SurfaceElevated = AuroraColors.SurfaceElevated
+val ElectricViolet = AuroraColors.ElectricViolet
+val CyanGlow = AuroraColors.CyanGlow
+val EmeraldSuccess = AuroraColors.EmeraldSuccess
+val AmberWarning = AuroraColors.AmberWarning
+val CoralDanger = AuroraColors.CoralDanger
+val TextPrimary = AuroraColors.TextPrimary
+val TextSecondary = AuroraColors.TextSecondary
+val TextMuted = AuroraColors.TextMuted
 
-// Brand & Accent Colors
-val Violet500 = Color(0xFF8B5CF6)
-val Violet600 = Color(0xFF6D3AF0)
-val Indigo600 = Color(0xFF5B3DF5)
-val Lavender = Color(0xFFB388FF)           // glows/icons/links only, never under white text
-val ElectricBlue = Color(0xFF4C8DFF)
-val Aqua = Color(0xFF2DE2E6)
-val Lime = Color(0xFFC8F53C)               // live/on/success indicator dot only
-val ThinkingMagenta = Color(0xFFE879F9)
-
-// Semantic Status & Safety Colors
-val Success = Color(0xFF3DDC97)
-val Warning = Color(0xFFFFB547)
-val Danger = Color(0xFFFF6B87)
-
-// Text Hierarchy (WCAG AA compliant on Bg0/Bg1)
-val TextPrimary = Color(0xFFF5F3FF)
-val TextSecondary = Color(0xFFC4BEE6)
-val TextMuted = Color(0xFF9A94C0)
+val Bg0 = AuroraColors.BackgroundDeep
+val Bg1 = AuroraColors.SurfacePrimary
+val SurfaceVariantDark = AuroraColors.SurfaceElevated
+val Violet500 = AuroraColors.ElectricViolet
+val Violet600 = Color(0xFF6344E5)
+val ElectricBlue = Color(0xFF38BDF8)
+val Aqua = AuroraColors.CyanGlow
+val GlassStroke = AuroraColors.GlassBorder
+val Danger = AuroraColors.CoralDanger

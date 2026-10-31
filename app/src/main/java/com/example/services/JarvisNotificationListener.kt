@@ -1,205 +1,174 @@
 package com.example.services
 
 import android.app.Notification
+import android.app.PendingIntent
 import android.app.RemoteInput
 import android.content.Intent
 import android.os.Bundle
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import com.example.di.AndroidEntryPoint
-import com.example.domain.model.CapturedNotificationItem
-import com.example.domain.safety.SafetyGateImpl
+import com.example.domain.model.NotificationItemSnapshot
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import java.util.concurrent.ConcurrentHashMap
 
 /**
- * Full JarvisNotificationListener.
- * Captures incoming notifications (excluding OTPs, PINs, CVVs, passwords, bank debit/credit alerts,
- * and blocked banking packages), summarizes unread items, and executes confirmed quick-replies via
- * RemoteInput PendingIntents.
+ * Notification Listener Service with:
+ * 1. Strict OTP & verification code redaction (never reads 4-8 digit OTP codes aloud or sends them to the LLM).
+ * 2. Direct inline reply execution via RemoteInput after SafetyGate user confirmation.
+ * 3. Notification dismissal by key or sender/title match.
  */
 @AndroidEntryPoint
 class JarvisNotificationListener : NotificationListenerService() {
 
     companion object {
-        private val _isListenerConnected = MutableStateFlow(false)
-        val isListenerConnected: StateFlow<Boolean> = _isListenerConnected.asStateFlow()
-
-        private val _recentNotifications = MutableStateFlow<List<CapturedNotificationItem>>(emptyList())
-        val recentNotifications: StateFlow<List<CapturedNotificationItem>> =
-            _recentNotifications.asStateFlow()
-
-        private val replyActionsMap = ConcurrentHashMap<String, Notification.Action>()
-
-        private val SENSITIVE_AUTH_PATTERNS = listOf(
-            "otp",
-            "verification code",
-            "one-time",
-            "one time password",
-            "security code",
-            "passcode",
-            "cvv",
-            "mpin",
-            "upi pin",
-            "password",
-            "ओटीपी",
-            "पिन",
-            "कोड",
-            "सत्यापन",
-            "पासवर्ड",
-            "गुप्त कोड"
+        // Non-UI regex detector for OTP / verification codes
+        private val OTP_KEYWORD_REGEX = Regex(
+            "(?i)\\b(otp|verification code|security code|passcode|one-time password|pin)\\b"
         )
+        private val OTP_DIGITS_REGEX = Regex("\\b\\d{4,8}\\b")
 
-        private val BANK_ALERT_KEYWORDS = listOf(
-            "debited",
-            "credited",
-            "a/c",
-            "acct",
-            "खाते से",
-            "डेबिट",
-            "क्रेडिट",
-            "भुगतान"
-        )
+        @Volatile
+        private var instance: JarvisNotificationListener? = null
 
-        private val CURRENCY_PATTERNS = listOf(
-            "rs.",
-            "rs ",
-            "inr",
-            "₹"
-        )
+        private val _recentNotifications = MutableStateFlow<List<NotificationItemSnapshot>>(emptyList())
+        val recentNotifications: StateFlow<List<NotificationItemSnapshot>> = _recentNotifications.asStateFlow()
 
-        /**
-         * Phase 1 Security Filter:
-         * Skips OTP/PIN/CVV/password patterns in English + Hindi (ओटीपी, पिन, कोड),
-         * bank debit/credit alert amounts, and all notifications from SafetyGate-blocked banking packages.
-         */
-        fun shouldFilterSensitiveNotification(
-            packageName: String,
-            title: String,
-            text: String
-        ): Boolean {
-            val normalizedPkg = packageName.trim().lowercase()
-            if (SafetyGateImpl.BLOCKED_SENSITIVE_PACKAGES.any { normalizedPkg == it.lowercase() } ||
-                normalizedPkg.contains(".bank") ||
-                normalizedPkg.contains(".upi") ||
-                normalizedPkg.contains("passkey")
-            ) {
-                return true
-            }
+        private val replyActionsMap = mutableMapOf<String, Pair<PendingIntent, Array<RemoteInput>>>()
 
-            val combined = "$title $text".lowercase()
-            if (SENSITIVE_AUTH_PATTERNS.any { pattern -> combined.contains(pattern) }) {
-                return true
-            }
+        fun isListenerConnected(): Boolean = instance != null
 
-            val hasBankKeyword = BANK_ALERT_KEYWORDS.any { kw -> combined.contains(kw) }
-            val hasCurrencyOrDigits = CURRENCY_PATTERNS.any { cur -> combined.contains(cur) } ||
-                Regex("""\b\d{4,6}\b""").containsMatchIn(combined)
-            if (hasBankKeyword && hasCurrencyOrDigits) {
-                return true
-            }
+        fun redactOtpContent(rawTitle: String, rawText: String): Pair<String, Boolean> {
+            val combined = "$rawTitle $rawText"
+            val containsOtpKeyword = OTP_KEYWORD_REGEX.containsMatchIn(combined)
+            val containsDigitCode = OTP_DIGITS_REGEX.containsMatchIn(rawText)
 
-            return false
-        }
-
-        fun summarizeNotifications(): String {
-            val items = _recentNotifications.value.take(5)
-            if (items.isEmpty()) return "No unread notifications."
-            return items.joinToString(" | ") { item ->
-                "[${item.appName}] ${item.title}: ${item.text}"
-            }
-        }
-
-        /**
-         * Phase 1 Quick-Reply:
-         * Returns success=true ONLY if a valid RemoteInput action exists and PendingIntent.send() succeeded.
-         */
-        fun sendConfirmedQuickReply(notificationKey: String?, replyText: String): Pair<Boolean, String> {
-            val targetItem = if (!notificationKey.isNullOrBlank()) {
-                _recentNotifications.value.firstOrNull { it.key == notificationKey }
+            return if (containsOtpKeyword || containsDigitCode) {
+                val redacted = OTP_DIGITS_REGEX.replace(rawText, "[REDACTED-CODE]")
+                redacted to true
             } else {
-                _recentNotifications.value.firstOrNull { it.canQuickReply }
-            } ?: return false to "No replyable notification found."
-
-            val action = replyActionsMap[targetItem.key]
-                ?: return false to "Quick-reply failed: Notification '${targetItem.title}' does not expose a reply action."
-
-            val remoteInputs = action.remoteInputs
-            if (remoteInputs.isNullOrEmpty()) {
-                return false to "Quick-reply failed: Notification '${targetItem.title}' has no RemoteInput fields."
+                rawText to false
             }
+        }
 
-            val pendingIntent = action.actionIntent
-                ?: return false to "Quick-reply failed: Notification '${targetItem.title}' has no reply PendingIntent."
+        fun sendInlineReply(targetQuery: String, replyMessage: String): Pair<Boolean, String> {
+            val service = instance
+                ?: return false to "Notification Listener access is not enabled."
+            val currentList = _recentNotifications.value
+            val matched = currentList.firstOrNull {
+                it.title.contains(targetQuery, ignoreCase = true) ||
+                    it.packageName.contains(targetQuery, ignoreCase = true)
+            } ?: return false to "No active notification found matching '$targetQuery'."
 
-            return runCatching {
+            val actionPair = synchronized(replyActionsMap) {
+                replyActionsMap[matched.key]
+            } ?: return false to "Notification from '${matched.title}' does not support direct reply."
+
+            return try {
+                val (pendingIntent, remoteInputs) = actionPair
                 val fillInIntent = Intent()
-                val bundle = Bundle()
+                val resultsBundle = Bundle()
                 for (remoteInput in remoteInputs) {
-                    bundle.putCharSequence(remoteInput.resultKey, replyText)
+                    resultsBundle.putCharSequence(remoteInput.resultKey, replyMessage)
                 }
-                RemoteInput.addResultsToIntent(remoteInputs, fillInIntent, bundle)
-                pendingIntent.send(null, 0, fillInIntent)
-                true to "Sent quick-reply to ${targetItem.title} (${targetItem.appName}): \"$replyText\""
-            }.getOrElse { e ->
-                false to "Quick-reply failed: ${e.localizedMessage ?: "PendingIntent send error"}"
+                RemoteInput.addResultsToIntent(remoteInputs, fillInIntent, resultsBundle)
+                pendingIntent.send(service.applicationContext, 0, fillInIntent)
+                true to "Sent reply to '${matched.title}': \"$replyMessage\""
+            } catch (e: Exception) {
+                false to "Failed to send notification reply: ${e.localizedMessage}"
             }
         }
 
-        internal fun clearNotificationsForTest() {
-            _recentNotifications.value = emptyList()
-            replyActionsMap.clear()
-        }
+        fun dismissNotification(targetQuery: String): Pair<Boolean, String> {
+            val service = instance
+                ?: return false to "Notification Listener access is not enabled."
+            val matched = _recentNotifications.value.firstOrNull {
+                it.title.contains(targetQuery, ignoreCase = true) ||
+                    it.packageName.contains(targetQuery, ignoreCase = true)
+            } ?: return false to "No active notification matching '$targetQuery' to dismiss."
 
-        internal fun putNotificationWithoutActionForTest(item: CapturedNotificationItem) {
-            _recentNotifications.value = listOf(item)
-            replyActionsMap.remove(item.key)
+            return try {
+                service.cancelNotification(matched.key)
+                _recentNotifications.value = _recentNotifications.value.filterNot { it.key == matched.key }
+                synchronized(replyActionsMap) {
+                    replyActionsMap.remove(matched.key)
+                }
+                true to "Dismissed notification from '${matched.title}'."
+            } catch (e: Exception) {
+                false to "Could not dismiss notification: ${e.localizedMessage}"
+            }
         }
     }
 
     override fun onListenerConnected() {
         super.onListenerConnected()
-        _isListenerConnected.value = true
+        instance = this
+        refreshActiveNotifications()
     }
 
     override fun onListenerDisconnected() {
-        _isListenerConnected.value = false
+        if (instance === this) {
+            instance = null
+        }
         super.onListenerDisconnected()
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
-        val notification = sbn?.notification ?: return
-        val pkg = sbn.packageName ?: return
+        sbn ?: return
+        processStatusBarNotification(sbn)
+    }
 
-        val extras = notification.extras
-        val title = extras?.getCharSequence(Notification.EXTRA_TITLE)?.toString()?.trim().orEmpty()
-        val text = extras?.getCharSequence(Notification.EXTRA_TEXT)?.toString()?.trim().orEmpty()
-        if (title.isEmpty() && text.isEmpty()) return
+    override fun onNotificationRemoved(sbn: StatusBarNotification?) {
+        val key = sbn?.key ?: return
+        _recentNotifications.value = _recentNotifications.value.filterNot { it.key == key }
+        synchronized(replyActionsMap) {
+            replyActionsMap.remove(key)
+        }
+    }
 
-        if (shouldFilterSensitiveNotification(pkg, title, text)) {
-            return
+    private fun refreshActiveNotifications() {
+        runCatching {
+            activeNotifications?.forEach { processStatusBarNotification(it) }
+        }
+    }
+
+    private fun processStatusBarNotification(sbn: StatusBarNotification) {
+        val extras = sbn.notification.extras ?: return
+        val rawTitle = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString()?.trim().orEmpty()
+        val rawText = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString()?.trim().orEmpty()
+        if (rawTitle.isEmpty() && rawText.isEmpty()) return
+
+        val (sanitizedText, isRedacted) = redactOtpContent(rawTitle, rawText)
+
+        var hasReply = false
+        val actions = sbn.notification.actions
+        if (!actions.isNullOrEmpty()) {
+            for (action in actions) {
+                val remoteInputs = action.remoteInputs
+                if (!remoteInputs.isNullOrEmpty() && action.actionIntent != null) {
+                    hasReply = true
+                    synchronized(replyActionsMap) {
+                        replyActionsMap[sbn.key] = action.actionIntent to remoteInputs
+                    }
+                    break
+                }
+            }
         }
 
-        val replyAction = notification.actions?.firstOrNull { act ->
-            !act.remoteInputs.isNullOrEmpty() && act.actionIntent != null
-        }
-        if (replyAction != null) {
-            replyActionsMap[sbn.key] = replyAction
-        }
-
-        val item = CapturedNotificationItem(
+        val item = NotificationItemSnapshot(
             key = sbn.key,
-            packageName = pkg,
-            appName = pkg.substringAfterLast('.').replaceFirstChar { it.uppercase() },
-            title = title,
-            text = text,
-            timestamp = sbn.postTime,
-            canQuickReply = replyAction != null
+            packageName = sbn.packageName,
+            title = rawTitle.ifEmpty { sbn.packageName },
+            text = sanitizedText,
+            hasReplyAction = hasReply,
+            isOtpRedacted = isRedacted,
+            postedAtMs = sbn.postTime
         )
 
-        val updated = (listOf(item) + _recentNotifications.value.filterNot { it.key == sbn.key }).take(15)
+        val updated = (_recentNotifications.value.filterNot { it.key == sbn.key } + item)
+            .sortedByDescending { it.postedAtMs }
+            .take(15)
         _recentNotifications.value = updated
     }
 }

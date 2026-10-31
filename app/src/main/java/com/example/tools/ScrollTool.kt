@@ -9,25 +9,16 @@ import com.example.services.JarvisAccessibilityService
 
 @Singleton
 class ScrollTool @Inject constructor() : Tool {
-    override val name: String = "scroll"
-    override val description: String = "Scrolls or swipes the active screen up or down and verifies screen change."
-    override val jsonSchema: String = """{"type":"object","properties":{"direction":{"type":"string","description":"up or down"}},"required":["direction"]}"""
+
+    override val name: String = "scroll_screen"
+    override val description: String = "Scroll the active screen up or down using Accessibility."
+    override val jsonSchema: String = """{"type":"object","properties":{"direction":{"type":"string","enum":["down","up"]}}}"""
     override val riskLevel: RiskLevel = RiskLevel.LOW
     override val requiresFullControlMode: Boolean = true
 
     override suspend fun execute(args: Map<String, String>): ToolExecutionResult {
-        val direction = args["direction"]?.trim()?.lowercase() ?: "down"
+        val direction = args["direction"] ?: "down"
         val (ok, msg) = JarvisAccessibilityService.executeScroll(direction)
-        val outputHi = when {
-            ok -> "स्क्रीन को '$direction' दिशा में स्क्रॉल किया गया।"
-            msg == JarvisAccessibilityService.ACCESSIBILITY_DISABLED_EN -> JarvisAccessibilityService.ACCESSIBILITY_DISABLED_HI
-            else -> "स्क्रॉल करने में विफल: $msg"
-        }
-        return ToolExecutionResult(
-            toolName = name,
-            success = ok,
-            outputEn = msg,
-            outputHi = outputHi
-        )
+        return ToolExecutionResult(toolName = name, success = ok, outputEn = msg)
     }
 }

@@ -13,20 +13,13 @@ import com.example.JarvisApplication
 import com.example.di.AndroidEntryPoint
 import com.example.domain.model.ScreenContextSnapshot
 import com.example.domain.model.ScreenNodeSnapshot
-import com.example.domain.safety.SafetyGateImpl
+import com.example.domain.safety.SafetyGate
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
-/**
- * Stage 4: Full JarvisAccessibilityService (active ONLY when BuildConfig.FULL_CONTROL_MODE && !BuildConfig.STORE_SAFE_MODE).
- * Implements:
- * 1. ScreenReader: Converts AccessibilityNodeInfo tree into a compact capped JSON, skipping password fields and blocked banking/UPI apps.
- * 2. ActionExecutor: Tap by node/coordinates, long press, swipe/scroll, type text, back/home/recents/notifications/quick_settings, with post-action verification.
- * 3. Hardware Volume-Key Combo KillSwitch: Double Volume-Down press immediately halts active gestures and triggers global KillSwitch.
- */
 @AndroidEntryPoint
 class JarvisAccessibilityService : AccessibilityService() {
 
@@ -36,11 +29,9 @@ class JarvisAccessibilityService : AccessibilityService() {
 
         const val ACCESSIBILITY_DISABLED_EN =
             "Accessibility service is not enabled. Open Settings to enable."
-        const val ACCESSIBILITY_DISABLED_HI =
-            "Accessibility सेवा चालू नहीं है। इसे चालू करने के लिए Settings खोलें।"
 
-        @Volatile
-        private var instance: JarvisAccessibilityService? = null
+        private val _instance = MutableStateFlow<JarvisAccessibilityService?>(null)
+        val instance: StateFlow<JarvisAccessibilityService?> = _instance.asStateFlow()
 
         private val _isConnected = MutableStateFlow(false)
         val isConnected: StateFlow<Boolean> = _isConnected.asStateFlow()
@@ -53,7 +44,7 @@ class JarvisAccessibilityService : AccessibilityService() {
 
         fun captureCurrentScreenSnapshot(): ScreenContextSnapshot? {
             if (!isFullControlAllowed()) return null
-            val service = instance ?: return null
+            val service = _instance.value ?: return null
             return service.readScreenInternal()
         }
 
@@ -61,7 +52,7 @@ class JarvisAccessibilityService : AccessibilityService() {
             if (!isFullControlAllowed()) {
                 return false to "Blocked: STORE_SAFE_MODE is active."
             }
-            val service = instance ?: return false to ACCESSIBILITY_DISABLED_EN
+            val service = _instance.value ?: return false to ACCESSIBILITY_DISABLED_EN
             return service.performTapWithVerification(targetText, x, y)
         }
 
@@ -69,7 +60,7 @@ class JarvisAccessibilityService : AccessibilityService() {
             if (!isFullControlAllowed()) {
                 return false to "Blocked: STORE_SAFE_MODE is active."
             }
-            val service = instance ?: return false to ACCESSIBILITY_DISABLED_EN
+            val service = _instance.value ?: return false to ACCESSIBILITY_DISABLED_EN
             return service.performTypeTextWithVerification(text, targetHint)
         }
 
@@ -77,7 +68,7 @@ class JarvisAccessibilityService : AccessibilityService() {
             if (!isFullControlAllowed()) {
                 return false to "Blocked: STORE_SAFE_MODE is active."
             }
-            val service = instance ?: return false to ACCESSIBILITY_DISABLED_EN
+            val service = _instance.value ?: return false to ACCESSIBILITY_DISABLED_EN
             return service.performScrollWithVerification(direction)
         }
 
@@ -85,7 +76,7 @@ class JarvisAccessibilityService : AccessibilityService() {
             if (!isFullControlAllowed()) {
                 return false to "Blocked: STORE_SAFE_MODE is active."
             }
-            val service = instance ?: return false to ACCESSIBILITY_DISABLED_EN
+            val service = _instance.value ?: return false to ACCESSIBILITY_DISABLED_EN
             return service.performGlobalNavigation(actionName)
         }
 
@@ -93,7 +84,7 @@ class JarvisAccessibilityService : AccessibilityService() {
             if (!isFullControlAllowed()) {
                 return false to "Blocked: STORE_SAFE_MODE is active."
             }
-            val service = instance ?: return false to ACCESSIBILITY_DISABLED_EN
+            val service = _instance.value ?: return false to ACCESSIBILITY_DISABLED_EN
             val deadline = System.currentTimeMillis() + timeoutMs.coerceIn(500L, 10_000L)
             while (System.currentTimeMillis() < deadline) {
                 val snap = service.readScreenInternal()
@@ -115,7 +106,7 @@ class JarvisAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         if (isFullControlAllowed()) {
-            instance = this
+            _instance.value = this
             _isConnected.value = true
         } else {
             _isConnected.value = false
@@ -123,28 +114,21 @@ class JarvisAccessibilityService : AccessibilityService() {
     }
 
     override fun onUnbind(intent: android.content.Intent?): Boolean {
-        instance = null
+        _instance.value = null
         _isConnected.value = false
         return super.onUnbind(intent)
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (!isFullControlAllowed()) return
-        // Phase 3 Privacy: Do NOT continuously scrape or serialize the screen on every window event.
-        // Screen context is captured strictly on-demand when an accessibility tool is invoked.
     }
 
-    /**
-     * Stage 4 KillSwitch via Hardware Volume-Key Combo:
-     * Double-pressing Volume Down within 850ms immediately triggers the global KillSwitch
-     * and cancels any active gesture mid-flight.
-     */
     override fun onKeyEvent(event: KeyEvent?): Boolean {
         if (event?.keyCode == KeyEvent.KEYCODE_VOLUME_DOWN && event.action == KeyEvent.ACTION_DOWN) {
             val now = System.currentTimeMillis()
             if (now - lastVolumeDownPressMs in 80..850) {
                 val app = application as? JarvisApplication
-                app?.container?.killSwitch?.triggerKillSwitch("Hardware Volume-Down Double-Press KillSwitch")
+                app?.appContainer?.killSwitch?.trigger("Hardware Volume-Down Double-Press KillSwitch")
             }
             lastVolumeDownPressMs = now
         }
@@ -154,20 +138,17 @@ class JarvisAccessibilityService : AccessibilityService() {
     override fun onInterrupt() = Unit
 
     override fun onDestroy() {
-        instance = null
+        _instance.value = null
         _isConnected.value = false
         super.onDestroy()
     }
 
-    /**
-     * Stage 4 ScreenReader (Phase 3 Privacy Hardened):
-     * Traverses AccessibilityNodeInfo tree on-demand into a capped compact JSON, skipping password fields
-     * and strictly refusing to serialize or return any node text when on a banking/UPI/password screen.
-     */
+    fun captureScreenContext(): ScreenContextSnapshot? = readScreenInternal()
+
     private fun readScreenInternal(): ScreenContextSnapshot? {
         val root = rootInActiveWindow ?: return null
         val pkg = root.packageName?.toString() ?: "unknown"
-        val isBlockedPkg = SafetyGateImpl.BLOCKED_SENSITIVE_PACKAGES.any {
+        val isBlockedPkg = SafetyGate.BLOCKED_SENSITIVE_PACKAGES.any {
             pkg.equals(it, ignoreCase = true)
         } || pkg.contains(".bank", ignoreCase = true) || pkg.contains(".upi", ignoreCase = true)
 
@@ -193,7 +174,6 @@ class JarvisAccessibilityService : AccessibilityService() {
             if (node == null || collectedNodes.size >= MAX_NODES) return
             if (node.isPassword) {
                 hasPasswordNode = true
-                // Strictly skip reading or serializing password fields!
                 return
             }
 

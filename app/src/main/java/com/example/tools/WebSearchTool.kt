@@ -14,20 +14,16 @@ import com.example.domain.tool.Tool
 class WebSearchTool @Inject constructor(
     private val context: Context
 ) : Tool {
+
     override val name: String = "web_search"
-    override val description: String = "Performs a Google web search for the given query."
-    override val jsonSchema: String = """{"type":"object","properties":{"query":{"type":"string","description":"Search query text"}},"required":["query"]}"""
+    override val description: String = "Perform a web search in the default browser or Google Search app."
+    override val jsonSchema: String = """{"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}"""
     override val riskLevel: RiskLevel = RiskLevel.LOW
 
     override suspend fun execute(args: Map<String, String>): ToolExecutionResult {
-        val query = args["query"]?.trim().orEmpty()
-        if (query.isEmpty()) {
-            return ToolExecutionResult(
-                toolName = name,
-                success = false,
-                outputEn = "Search query cannot be empty.",
-                outputHi = "खोज के लिए प्रश्न खाली नहीं हो सकता।"
-            )
+        val query = args["query"].orEmpty().trim()
+        if (query.isBlank()) {
+            return ToolExecutionResult(name, false, "Search query cannot be empty.")
         }
 
         return try {
@@ -37,36 +33,22 @@ class WebSearchTool @Inject constructor(
             }
             if (searchIntent.resolveActivity(context.packageManager) != null) {
                 context.startActivity(searchIntent)
-            } else {
-                val fallbackBrowser = Intent(
-                    Intent.ACTION_VIEW,
-                    Uri.parse("https://www.google.com/search?q=${Uri.encode(query)}")
-                ).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-                if (fallbackBrowser.resolveActivity(context.packageManager) == null) {
-                    return ToolExecutionResult(
-                        toolName = name,
-                        success = false,
-                        outputEn = "No search or browser app is installed to search for '$query'.",
-                        outputHi = "'$query' खोजने के लिए कोई ब्राउज़र उपलब्ध नहीं है।"
-                    )
-                }
-                context.startActivity(fallbackBrowser)
+                return ToolExecutionResult(name, true, "Started web search for '$query'.")
             }
-            ToolExecutionResult(
-                toolName = name,
-                success = true,
-                outputEn = "Launched web search for '$query'.",
-                outputHi = "'$query' के लिए वेब खोज शुरू कर दी गई है।"
-            )
+
+            val browserIntent = Intent(
+                Intent.ACTION_VIEW,
+                Uri.parse("https://www.google.com/search?q=${Uri.encode(query)}")
+            ).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            if (browserIntent.resolveActivity(context.packageManager) == null) {
+                return ToolExecutionResult(name, false, "No browser is available to search for '$query'.")
+            }
+            context.startActivity(browserIntent)
+            ToolExecutionResult(name, true, "Opened web search for '$query'.")
         } catch (e: Exception) {
-            ToolExecutionResult(
-                toolName = name,
-                success = false,
-                outputEn = "Web search failed: ${e.localizedMessage}",
-                outputHi = "वेब खोज विफल रही: ${e.localizedMessage}"
-            )
+            ToolExecutionResult(name, false, "Web search failed: ${e.localizedMessage ?: "error"}.")
         }
     }
 }

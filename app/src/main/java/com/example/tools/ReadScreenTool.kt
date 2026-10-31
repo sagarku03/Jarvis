@@ -20,15 +20,13 @@ class ReadScreenTool @Inject constructor() : Tool {
             ?: return ToolExecutionResult(
                 toolName = name,
                 success = false,
-                outputEn = JarvisAccessibilityService.ACCESSIBILITY_DISABLED_EN,
-                outputHi = JarvisAccessibilityService.ACCESSIBILITY_DISABLED_HI
+                outputEn = JarvisAccessibilityService.ACCESSIBILITY_DISABLED_EN
             )
 
         return ToolExecutionResult(
             toolName = name,
             success = true,
-            outputEn = "Screen read from ${snap.packageName}: ${snap.structuredNodes.size} nodes (secure=${snap.isSecureScreen}).",
-            outputHi = "${snap.packageName} से स्क्रीन पढ़ी गई: ${snap.structuredNodes.size} तत्व मिले।"
+            outputEn = "Screen read from ${snap.packageName}: ${snap.structuredNodes.size} nodes (secure=${snap.isSecureScreen})."
         )
     }
 }
