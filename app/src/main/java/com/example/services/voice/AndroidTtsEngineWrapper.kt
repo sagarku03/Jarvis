@@ -13,7 +13,7 @@ import android.speech.tts.Voice
 import com.example.di.Inject
 import com.example.di.Singleton
 import com.example.domain.model.AppLanguage
-import com.example.domain.model.VoiceProfile
+import com.example.domain.model.DeviceVoiceOption
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -21,9 +21,10 @@ import java.util.Locale
 import java.util.UUID
 
 /**
- * On-device Android `TextToSpeech` engine wrapper:
- * 1. Selects the best installed `en-IN` / English voice (`Voice.QUALITY_VERY_HIGH` / `QUALITY_HIGH`, offline preferred).
- * 2. Exposes `isUsingOfflineFallback` (`true` for Device voice, `false` for Cloud voice) so the UI shows a clear voice chip.
+ * Honest on-device Android `TextToSpeech` engine wrapper:
+ * 1. Queries `TextToSpeech.getVoices()` for real installed voices filtered by user locale,
+ *    preferring `quality >= Voice.QUALITY_HIGH` and `!isNetworkConnectionRequired`.
+ * 2. Splits replies into sentences (`[.!?]\s+`) and queues with `QUEUE_FLUSH` then `QUEUE_ADD`.
  * 3. Requests exclusive assistant audio focus (`USAGE_ASSISTANT` + `CONTENT_TYPE_SPEECH`, `AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE`).
  */
 @Singleton
@@ -47,6 +48,9 @@ class AndroidTtsEngineWrapper @Inject constructor(
     private val _isUsingOfflineFallback = MutableStateFlow(true)
     override val isUsingOfflineFallback: StateFlow<Boolean> = _isUsingOfflineFallback.asStateFlow()
 
+    private val _availableVoices = MutableStateFlow<List<DeviceVoiceOption>>(emptyList())
+    override val availableVoices: StateFlow<List<DeviceVoiceOption>> = _availableVoices.asStateFlow()
+
     private var pendingCompletionCallback: (() -> Unit)? = null
 
     init {
@@ -66,7 +70,8 @@ class AndroidTtsEngineWrapper @Inject constructor(
                     .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                     .build()
             )
-            selectBestOfflineVoice(AppLanguage.EN_IN)
+            refreshAvailableVoices(AppLanguage.EN_IN)
+            selectBestDeviceVoice(AppLanguage.EN_IN, "")
             tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
                 override fun onStart(utteranceId: String?) {
                     _isSpeaking.value = true
@@ -92,10 +97,54 @@ class AndroidTtsEngineWrapper @Inject constructor(
         }
     }
 
+    override fun refreshAvailableVoices(language: AppLanguage) {
+        val engine = tts ?: return
+        val rawVoices = runCatching { engine.voices }.getOrNull().orEmpty()
+        val englishVoices = rawVoices
+            .filter { v -> v.locale.language.equals("en", ignoreCase = true) }
+            .sortedWith(
+                compareByDescending<Voice> { it.locale.toLanguageTag().equals(language.speechLocale, ignoreCase = true) }
+                    .thenByDescending { !it.isNetworkConnectionRequired }
+                    .thenByDescending { it.quality >= Voice.QUALITY_HIGH }
+                    .thenByDescending { it.quality }
+                    .thenBy { it.name }
+            )
+            .take(12)
+            .map { v ->
+                val qualityLabel = when {
+                    v.quality >= Voice.QUALITY_VERY_HIGH -> "Very High Quality"
+                    v.quality >= Voice.QUALITY_HIGH -> "High Quality"
+                    else -> "Standard"
+                }
+                val modeLabel = if (v.isNetworkConnectionRequired) "Network" else "On-device"
+                DeviceVoiceOption(
+                    id = v.name,
+                    displayName = "${v.locale.displayCountry.ifEmpty { v.locale.language }} · ${v.name.takeLast(14)} ($qualityLabel, $modeLabel)",
+                    localeTag = v.locale.toLanguageTag(),
+                    quality = v.quality,
+                    isOffline = !v.isNetworkConnectionRequired
+                )
+            }
+
+        _availableVoices.value = if (englishVoices.isNotEmpty()) {
+            englishVoices
+        } else {
+            listOf(
+                DeviceVoiceOption(
+                    id = "system_default",
+                    displayName = "System Default (${language.displayName})",
+                    localeTag = language.speechLocale,
+                    quality = Voice.QUALITY_NORMAL,
+                    isOffline = true
+                )
+            )
+        }
+    }
+
     override fun speak(
         text: String,
         language: AppLanguage,
-        voiceProfile: VoiceProfile,
+        selectedVoiceName: String,
         speed: Float,
         pitch: Float,
         onComplete: () -> Unit
@@ -114,19 +163,27 @@ class AndroidTtsEngineWrapper @Inject constructor(
         val sentences = splitIntoSentenceChunks(sanitized)
         _isUsingOfflineFallback.value = true
         _firstAudioLatencyMs.value = (SystemClock.elapsedRealtime() - startTime).coerceAtLeast(1L)
-        speakWithAndroidTtsFallback(
+        speakWithDeviceTts(
             sentences = sentences,
             language = language,
-            voiceProfile = voiceProfile,
+            selectedVoiceName = selectedVoiceName,
             speed = speed
         )
     }
 
-    private fun selectBestOfflineVoice(language: AppLanguage) {
+    private fun selectBestDeviceVoice(language: AppLanguage, selectedVoiceName: String) {
         val engine = tts ?: return
-        val preferredTags = listOf(language.speechLocale, "en-IN", "en-US", "en-GB")
         val availableVoices = runCatching { engine.voices }.getOrNull().orEmpty()
 
+        if (selectedVoiceName.isNotBlank() && selectedVoiceName != "system_default") {
+            val explicitMatch = availableVoices.firstOrNull { it.name == selectedVoiceName }
+            if (explicitMatch != null) {
+                runCatching { engine.voice = explicitMatch }
+                return
+            }
+        }
+
+        val preferredTags = listOf(language.speechLocale, "en-IN", "en-US", "en-GB")
         val bestVoice: Voice? = preferredTags.firstNotNullOfOrNull { tag ->
             val targetLocale = Locale.forLanguageTag(tag)
             availableVoices
@@ -148,10 +205,10 @@ class AndroidTtsEngineWrapper @Inject constructor(
         }
     }
 
-    private fun speakWithAndroidTtsFallback(
+    private fun speakWithDeviceTts(
         sentences: List<String>,
         language: AppLanguage,
-        voiceProfile: VoiceProfile,
+        selectedVoiceName: String,
         speed: Float
     ) {
         val engine = tts
@@ -164,8 +221,8 @@ class AndroidTtsEngineWrapper @Inject constructor(
             return
         }
 
-        selectBestOfflineVoice(language)
-        val clampedRate = (speed * voiceProfile.defaultRate).coerceIn(0.8f, 1.2f)
+        selectBestDeviceVoice(language, selectedVoiceName)
+        val clampedRate = speed.coerceIn(0.8f, 1.3f)
         engine.setPitch(1.0f)
         engine.setSpeechRate(clampedRate)
 

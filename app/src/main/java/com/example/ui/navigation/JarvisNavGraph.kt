@@ -19,6 +19,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.R
 import com.example.ui.components.AuroraBackground
@@ -29,6 +30,7 @@ import com.example.ui.screens.MemoryScreen
 import com.example.ui.screens.PermissionsScreen
 import com.example.ui.screens.RoutinesScreen
 import com.example.ui.screens.SettingsScreen
+import com.example.ui.screens.SetupGateScreen
 import com.example.ui.viewmodel.ActivityLogViewModel
 import com.example.ui.viewmodel.HomeViewModel
 import com.example.ui.viewmodel.JarvisViewModelFactory
@@ -36,6 +38,7 @@ import com.example.ui.viewmodel.MemoryViewModel
 import com.example.ui.viewmodel.PermissionsViewModel
 import com.example.ui.viewmodel.RoutinesViewModel
 import com.example.ui.viewmodel.SettingsViewModel
+import com.example.ui.viewmodel.SetupViewModel
 
 enum class JarvisDestination(
     val route: String,
@@ -54,6 +57,7 @@ enum class JarvisDestination(
 fun JarvisRootApp(
     factory: JarvisViewModelFactory
 ) {
+    val setupViewModel: SetupViewModel = viewModel(factory = factory)
     val homeViewModel: HomeViewModel = viewModel(factory = factory)
     val activityLogViewModel: ActivityLogViewModel = viewModel(factory = factory)
     val memoryViewModel: MemoryViewModel = viewModel(factory = factory)
@@ -61,8 +65,19 @@ fun JarvisRootApp(
     val permissionsViewModel: PermissionsViewModel = viewModel(factory = factory)
     val settingsViewModel: SettingsViewModel = viewModel(factory = factory)
 
+    val isGateUnlocked by setupViewModel.isGateUnlocked.collectAsStateWithLifecycle()
+
     var currentTab by rememberSaveable { mutableStateOf(JarvisDestination.HOME) }
     var showPermissionsScreen by rememberSaveable { mutableStateOf(false) }
+
+    // Hard setup gate: if setupComplete is false or encrypted key is missing, block all tabs
+    if (!isGateUnlocked) {
+        SetupGateScreen(
+            setupViewModel = setupViewModel,
+            permissionsViewModel = permissionsViewModel
+        )
+        return
+    }
 
     if (showPermissionsScreen) {
         BackHandler { showPermissionsScreen = false }
@@ -95,7 +110,8 @@ fun JarvisRootApp(
                 when (currentTab) {
                     JarvisDestination.HOME -> HomeScreen(
                         viewModel = homeViewModel,
-                        onOpenPermissions = { showPermissionsScreen = true }
+                        onOpenPermissions = { showPermissionsScreen = true },
+                        onOpenSettings = { currentTab = JarvisDestination.SETTINGS }
                     )
 
                     JarvisDestination.ACTIVITY -> ActivityLogScreen(
@@ -112,7 +128,10 @@ fun JarvisRootApp(
 
                     JarvisDestination.SETTINGS -> SettingsScreen(
                         viewModel = settingsViewModel,
-                        onOpenPermissionsScreen = { showPermissionsScreen = true }
+                        onOpenPermissionsScreen = { showPermissionsScreen = true },
+                        onKeyRemoved = {
+                            setupViewModel.refreshPermissionAndKeyState()
+                        }
                     )
                 }
             }

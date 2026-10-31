@@ -25,12 +25,20 @@ enum class VoiceSessionState {
     SPEAKING
 }
 
+data class DeviceVoiceOption(
+    val id: String,
+    val displayName: String,
+    val localeTag: String,
+    val quality: Int,
+    val isOffline: Boolean
+)
+
 data class VoiceDiagnosticsSnapshot(
     val sessionState: VoiceSessionState = VoiceSessionState.IDLE,
     val lastSttErrorCode: Int? = null,
     val lastSttErrorMessage: String = "None",
-    val isOfflineTtsActive: Boolean = false,
-    val activeVoiceId: String = VoiceProfile.EN_IN_NEURAL2_D.id,
+    val isOfflineTtsActive: Boolean = true,
+    val activeVoiceId: String = "default",
     val sttLatencyMs: Long = 0L,
     val agentLatencyMs: Long = 0L,
     val ttsLatencyMs: Long = 0L
@@ -63,53 +71,6 @@ enum class AppLanguage(
     }
 }
 
-enum class VoiceProfile(
-    val id: String,
-    val displayName: String,
-    val subtitle: String,
-    val defaultPitch: Float,
-    val defaultRate: Float,
-    val localeTag: String = "en-IN"
-) {
-    EN_IN_NEURAL2_D(
-        id = "en-IN-Neural2-D",
-        displayName = "Aarav · Indian English (Male)",
-        subtitle = "Warm, natural Indian English assistant voice",
-        defaultPitch = 1.0f,
-        defaultRate = 1.0f,
-        localeTag = "en-IN"
-    ),
-    EN_IN_NEURAL2_A(
-        id = "en-IN-Neural2-A",
-        displayName = "Ananya · Indian English (Female)",
-        subtitle = "Clear, expressive Indian English voice",
-        defaultPitch = 1.0f,
-        defaultRate = 1.0f,
-        localeTag = "en-IN"
-    ),
-    EN_US_STUDIO_O(
-        id = "en-US-Studio-O",
-        displayName = "Orion · US English (Studio)",
-        subtitle = "Crisp studio-grade American English voice",
-        defaultPitch = 1.0f,
-        defaultRate = 1.0f,
-        localeTag = "en-US"
-    ),
-    EN_GB_NEURAL2_B(
-        id = "en-GB-Neural2-B",
-        displayName = "Arthur · British English (Neural)",
-        subtitle = "Calm, articulate British English voice",
-        defaultPitch = 1.0f,
-        defaultRate = 1.0f,
-        localeTag = "en-GB"
-    );
-
-    companion object {
-        fun fromId(id: String): VoiceProfile =
-            entries.firstOrNull { it.id.equals(id, ignoreCase = true) } ?: EN_IN_NEURAL2_D
-    }
-}
-
 enum class ConfirmationLevel(
     val code: String,
     val labelEn: String
@@ -129,11 +90,30 @@ enum class ConfirmationLevel(
     }
 }
 
+data class ConversationItem(
+    val id: Long = 0L,
+    val startedAtMs: Long = System.currentTimeMillis(),
+    val endedAtMs: Long? = null,
+    val title: String = "New Conversation",
+    val summary: String? = null
+)
+
+data class ConversationSummaryItem(
+    val id: Long = 0L,
+    val conversationId: Long,
+    val fromMessageId: Long,
+    val toMessageId: Long,
+    val text: String,
+    val createdAtMs: Long = System.currentTimeMillis()
+)
+
 data class ChatMessage(
     val id: Long = 0L,
+    val conversationId: Long = 1L,
     val role: MessageRole,
     val content: String,
     val toolName: String? = null,
+    val toolArgsJson: String? = null,
     val timestampMs: Long = System.currentTimeMillis()
 )
 
@@ -160,7 +140,8 @@ data class ToolExecutionResult(
 
 data class AgentStepDecision(
     val assistantText: String?,
-    val toolCalls: List<ToolCallSpec>
+    val toolCalls: List<ToolCallSpec>,
+    val keyRejected: Boolean = false
 )
 
 data class ConfirmationRequest(
@@ -190,26 +171,77 @@ data class ActivityLogEntry(
     val timestampMs: Long = System.currentTimeMillis()
 )
 
+enum class MemoryCategory {
+    PROFILE,
+    CONTACT,
+    PREFERENCE,
+    ROUTINE_HINT,
+    TASK,
+    NOTE,
+    EPISODE;
+
+    companion object {
+        fun fromString(raw: String): MemoryCategory {
+            val clean = raw.trim().uppercase()
+            return entries.firstOrNull { it.name == clean } ?: when {
+                clean.contains("CONTACT") -> CONTACT
+                clean.contains("PROFILE") || clean.contains("NAME") || clean.contains("CITY") -> PROFILE
+                clean.contains("PREF") -> PREFERENCE
+                clean.contains("ROUTINE") -> ROUTINE_HINT
+                clean.contains("TASK") || clean.contains("REMINDER") -> TASK
+                clean.contains("EPISODE") -> EPISODE
+                else -> NOTE
+            }
+        }
+    }
+}
+
+enum class MemorySource {
+    USER_EXPLICIT,
+    AUTO_LEARNED,
+    SETUP_WIZARD,
+    TOOL_RESULT;
+
+    companion object {
+        fun fromString(raw: String): MemorySource =
+            entries.firstOrNull { it.name.equals(raw.trim(), ignoreCase = true) } ?: USER_EXPLICIT
+    }
+}
+
 data class MemoryFact(
     val id: Long = 0L,
     val category: String,
     val key: String,
     val value: String,
-    val updatedAtMs: Long = System.currentTimeMillis()
+    val source: String = MemorySource.USER_EXPLICIT.name,
+    val confidence: Float = 1.0f,
+    val importance: Int = 3,
+    val pinned: Boolean = false,
+    val createdAtMs: Long = System.currentTimeMillis(),
+    val updatedAtMs: Long = System.currentTimeMillis(),
+    val lastUsedAtMs: Long = System.currentTimeMillis(),
+    val useCount: Int = 0,
+    val supersededById: Long? = null
 )
 
 data class UserSettings(
+    val setupComplete: Boolean = false,
+    val selectedModelId: String = "gemini-2.5-flash",
+    val availableModels: List<String> = listOf("gemini-2.5-flash"),
     val language: AppLanguage = AppLanguage.EN_IN,
-    val voiceProfile: VoiceProfile = VoiceProfile.EN_IN_NEURAL2_D,
+    val selectedVoiceName: String = "",
     val speechSpeed: Float = 1.0f,
     val speechPitch: Float = 1.0f,
-    val wakeWordSensitivity: Float = 0.65f,
-    val wakeWordEnabled: Boolean = false,
-    val wakeWordPaused: Boolean = false,
-    val bootAutoStartEnabled: Boolean = false,
     val floatingOrbEnabled: Boolean = false,
     val confirmationLevel: ConfirmationLevel = ConfirmationLevel.STANDARD,
-    val killSwitchActive: Boolean = false
+    val killSwitchActive: Boolean = false,
+    val autoLearnEnabled: Boolean = true,
+    val askBeforeSavingFact: Boolean = false,
+    val requestsToday: Int = 0,
+    val tokensToday: Int = 0,
+    val totalRequests: Int = 0,
+    val totalTokens: Int = 0,
+    val usageDayEpoch: Long = 0L
 )
 
 data class ScreenNodeSnapshot(
@@ -290,6 +322,6 @@ data class PermissionItemStatus(
     val titleEn: String,
     val rationaleEn: String,
     val isGranted: Boolean,
+    val isRequiredForSetup: Boolean = false,
     val isOptionalInStoreSafeMode: Boolean = false
 )
-

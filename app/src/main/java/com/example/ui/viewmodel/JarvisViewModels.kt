@@ -10,7 +10,9 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
-import com.example.BuildConfig
+import com.example.data.local.ApiKeyStore
+import com.example.data.remote.GeminiClient
+import com.example.data.remote.KeyVerificationResult
 import com.example.di.AppContainer
 import com.example.domain.agent.AgentOrchestrator
 import com.example.domain.model.ActivityLogEntry
@@ -19,15 +21,18 @@ import com.example.domain.model.AssistantOrbState
 import com.example.domain.model.ChatMessage
 import com.example.domain.model.ConfirmationLevel
 import com.example.domain.model.ConfirmationRequest
+import com.example.domain.model.ConversationItem
+import com.example.domain.model.DeviceVoiceOption
 import com.example.domain.model.LatencyMetrics
+import com.example.domain.model.MemoryCategory
 import com.example.domain.model.MemoryFact
+import com.example.domain.model.MemorySource
 import com.example.domain.model.OemBatteryGuide
 import com.example.domain.model.PermissionItemStatus
 import com.example.domain.model.RoutineItem
 import com.example.domain.model.RoutineTriggerType
 import com.example.domain.model.UserSettings
 import com.example.domain.model.VoiceDiagnosticsSnapshot
-import com.example.domain.model.VoiceProfile
 import com.example.domain.model.VoiceSessionState
 import com.example.domain.repository.ActivityLogRepository
 import com.example.domain.repository.ChatRepository
@@ -44,16 +49,244 @@ import com.example.services.VoiceForegroundService
 import com.example.services.voice.SpeechRecognizerWrapper
 import com.example.services.voice.TtsEngineWrapper
 import com.example.services.voice.VoiceSessionManager
-import com.example.services.voice.WakeWordEngine
+import com.example.tools.MemorySafetyFilter
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+
+data class ContactNicknameDraft(
+    val nickname: String = "",
+    val fullName: String = ""
+)
+
+class SetupViewModel(
+    private val appContext: Context,
+    private val apiKeyStore: ApiKeyStore,
+    private val geminiClient: GeminiClient,
+    private val settingsRepository: SettingsRepository,
+    private val memoryRepository: MemoryRepository
+) : ViewModel() {
+
+    private val _keyPresenceVersion = MutableStateFlow(0)
+
+    val isGateUnlocked: StateFlow<Boolean> = combine(
+        settingsRepository.settingsFlow,
+        _keyPresenceVersion
+    ) { settings, _ ->
+        settings.setupComplete && apiKeyStore.exists()
+    }.stateIn(
+        viewModelScope,
+        SharingStarted.WhileSubscribed(5000),
+        apiKeyStore.exists()
+    )
+
+    private val _apiKeyInput = MutableStateFlow("")
+    val apiKeyInput: StateFlow<String> = _apiKeyInput.asStateFlow()
+
+    private val _isKeyVisible = MutableStateFlow(false)
+    val isKeyVisible: StateFlow<Boolean> = _isKeyVisible.asStateFlow()
+
+    private val _isVerifying = MutableStateFlow(false)
+    val isVerifying: StateFlow<Boolean> = _isVerifying.asStateFlow()
+
+    private val _isKeyVerified = MutableStateFlow(apiKeyStore.exists())
+    val isKeyVerified: StateFlow<Boolean> = _isKeyVerified.asStateFlow()
+
+    private val _verificationMessage = MutableStateFlow<String?>(null)
+    val verificationMessage: StateFlow<String?> = _verificationMessage.asStateFlow()
+
+    private val _verificationSuccess = MutableStateFlow(apiKeyStore.exists())
+    val verificationSuccess: StateFlow<Boolean> = _verificationSuccess.asStateFlow()
+
+    private val _availableModels = MutableStateFlow(
+        listOf("gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash")
+    )
+    val availableModels: StateFlow<List<String>> = _availableModels.asStateFlow()
+
+    private val _selectedModelId = MutableStateFlow("gemini-2.5-flash")
+    val selectedModelId: StateFlow<String> = _selectedModelId.asStateFlow()
+
+    private val _userNameInput = MutableStateFlow("")
+    val userNameInput: StateFlow<String> = _userNameInput.asStateFlow()
+
+    private val _userCityInput = MutableStateFlow("")
+    val userCityInput: StateFlow<String> = _userCityInput.asStateFlow()
+
+    private val _contactNicknames = MutableStateFlow(
+        listOf(
+            ContactNicknameDraft(),
+            ContactNicknameDraft(),
+            ContactNicknameDraft()
+        )
+    )
+    val contactNicknames: StateFlow<List<ContactNicknameDraft>> = _contactNicknames.asStateFlow()
+
+    private val _isMicGranted = MutableStateFlow(checkMicPermission())
+    val isMicGranted: StateFlow<Boolean> = _isMicGranted.asStateFlow()
+
+    private val _privacyAccepted = MutableStateFlow(false)
+    val privacyAccepted: StateFlow<Boolean> = _privacyAccepted.asStateFlow()
+
+    val canUnlockJarvis: StateFlow<Boolean> = combine(
+        _isKeyVerified,
+        _userNameInput,
+        _isMicGranted,
+        _privacyAccepted
+    ) { keyVerified, name, micGranted, privacyChecked ->
+        (keyVerified || apiKeyStore.exists()) &&
+            name.trim().isNotEmpty() &&
+            micGranted &&
+            privacyChecked
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+
+    fun refreshPermissionAndKeyState() {
+        _isMicGranted.value = checkMicPermission()
+        val hasKey = apiKeyStore.exists()
+        _isKeyVerified.value = hasKey
+        _keyPresenceVersion.value += 1
+    }
+
+    private fun checkMicPermission(): Boolean {
+        return ContextCompat.checkSelfPermission(
+            appContext,
+            Manifest.permission.RECORD_AUDIO
+        ) == PackageManager.PERMISSION_GRANTED
+    }
+
+    fun updateApiKeyInput(value: String) {
+        _apiKeyInput.value = value
+        if (_isKeyVerified.value && value.trim() != apiKeyStore.get()) {
+            _isKeyVerified.value = false
+            _verificationSuccess.value = false
+            _verificationMessage.value = null
+        }
+    }
+
+    fun toggleKeyVisibility() {
+        _isKeyVisible.value = !_isKeyVisible.value
+    }
+
+    fun selectModel(modelId: String) {
+        _selectedModelId.value = modelId
+        viewModelScope.launch {
+            settingsRepository.setSelectedModelId(modelId)
+        }
+    }
+
+    fun updateUserName(name: String) {
+        _userNameInput.value = name
+    }
+
+    fun updateUserCity(city: String) {
+        _userCityInput.value = city
+    }
+
+    fun updateContactNickname(index: Int, nickname: String, fullName: String) {
+        if (index !in 0..2) return
+        val updated = _contactNicknames.value.toMutableList()
+        updated[index] = ContactNicknameDraft(nickname = nickname, fullName = fullName)
+        _contactNicknames.value = updated
+    }
+
+    fun setPrivacyAccepted(accepted: Boolean) {
+        _privacyAccepted.value = accepted
+    }
+
+    fun verifyApiKey() {
+        val candidate = _apiKeyInput.value.trim()
+        if (candidate.isEmpty()) {
+            _verificationSuccess.value = false
+            _verificationMessage.value = "Invalid API key"
+            return
+        }
+        _isVerifying.value = true
+        _verificationMessage.value = null
+        viewModelScope.launch {
+            when (val result = geminiClient.verifyKeyAndListModels(candidate)) {
+                is KeyVerificationResult.Valid -> {
+                    apiKeyStore.save(candidate)
+                    val models = result.availableModels
+                    val defaultModel = result.defaultModelId
+                    _availableModels.value = models
+                    _selectedModelId.value = defaultModel
+                    settingsRepository.setAvailableModels(models)
+                    settingsRepository.setSelectedModelId(defaultModel)
+                    _isKeyVerified.value = true
+                    _verificationSuccess.value = true
+                    _verificationMessage.value = "Verified — ${models.size} models available"
+                    _keyPresenceVersion.value += 1
+                }
+                is KeyVerificationResult.Invalid -> {
+                    _isKeyVerified.value = false
+                    _verificationSuccess.value = false
+                    _verificationMessage.value = result.message
+                }
+                is KeyVerificationResult.RateLimited -> {
+                    _isKeyVerified.value = false
+                    _verificationSuccess.value = false
+                    _verificationMessage.value = result.message
+                }
+                is KeyVerificationResult.NetworkError -> {
+                    _isKeyVerified.value = false
+                    _verificationSuccess.value = false
+                    _verificationMessage.value = result.message
+                }
+            }
+            _isVerifying.value = false
+        }
+    }
+
+    fun completeSetup() {
+        val name = _userNameInput.value.trim()
+        if (name.isEmpty() || !apiKeyStore.exists() || !checkMicPermission() || !_privacyAccepted.value) {
+            return
+        }
+        viewModelScope.launch {
+            memoryRepository.upsertMemory(
+                category = MemoryCategory.PROFILE.name,
+                key = "user_name",
+                value = name,
+                source = MemorySource.SETUP_WIZARD.name,
+                confidence = 1.0f,
+                pinned = true
+            )
+            val city = _userCityInput.value.trim()
+            if (city.isNotEmpty()) {
+                memoryRepository.upsertMemory(
+                    category = MemoryCategory.PROFILE.name,
+                    key = "home_city",
+                    value = city,
+                    source = MemorySource.SETUP_WIZARD.name,
+                    confidence = 1.0f,
+                    pinned = true
+                )
+            }
+            for (draft in _contactNicknames.value) {
+                val nick = draft.nickname.trim()
+                val full = draft.fullName.trim()
+                if (nick.isNotEmpty() && full.isNotEmpty()) {
+                    memoryRepository.upsertMemory(
+                        category = MemoryCategory.CONTACT.name,
+                        key = "contact_${nick.lowercase()}",
+                        value = "$nick -> $full",
+                        source = MemorySource.SETUP_WIZARD.name,
+                        confidence = 1.0f,
+                        pinned = true
+                    )
+                }
+            }
+            settingsRepository.setSelectedModelId(_selectedModelId.value)
+            settingsRepository.setSetupComplete(true)
+            _keyPresenceVersion.value += 1
+        }
+    }
+}
 
 class HomeViewModel(
     private val agentOrchestrator: AgentOrchestrator,
@@ -63,8 +296,7 @@ class HomeViewModel(
     private val killSwitch: KillSwitch,
     private val voiceSessionManager: VoiceSessionManager,
     private val speechRecognizer: SpeechRecognizerWrapper,
-    private val ttsEngine: TtsEngineWrapper,
-    private val wakeWordEngine: WakeWordEngine
+    private val ttsEngine: TtsEngineWrapper
 ) : ViewModel() {
 
     val messages: StateFlow<List<ChatMessage>> = chatRepository.messagesFlow
@@ -93,15 +325,10 @@ class HomeViewModel(
     val lastResponseText: StateFlow<String> = agentOrchestrator.lastResponseText
     val pendingConfirmation: StateFlow<ConfirmationRequest?> = safetyGate.pendingConfirmation
     val isKilled: StateFlow<Boolean> = killSwitch.isKilled
+    val keyRejectedBanner: StateFlow<Boolean> = agentOrchestrator.keyRejectedBanner
 
-    /**
-     * Driven directly by SpeechRecognizer.onRmsChanged(rmsdB) instead of a second AudioRecord client.
-     */
     val rmsEnergyLevel: StateFlow<Float> = speechRecognizer.rmsDbLevel
     val partialTranscript: StateFlow<String> = speechRecognizer.partialTranscript
-    val isWakeWordMonitoring: StateFlow<Boolean> = wakeWordEngine.isMonitoring
-    val isWakeWordPaused: StateFlow<Boolean> = wakeWordEngine.isPaused
-    val isOfflineVoiceActive: StateFlow<Boolean> = ttsEngine.isUsingOfflineFallback
 
     private val _inputDraft = MutableStateFlow("")
     val inputDraft: StateFlow<String> = _inputDraft.asStateFlow()
@@ -112,15 +339,14 @@ class HomeViewModel(
     val latencyMetrics: StateFlow<LatencyMetrics> = combine(
         speechRecognizer.lastSttLatencyMs,
         agentOrchestrator.lastAgentStepLatencyMs,
-        ttsEngine.firstAudioLatencyMs,
-        ttsEngine.isUsingOfflineFallback
-    ) { stt, agent, tts, isOffline ->
+        ttsEngine.firstAudioLatencyMs
+    ) { stt, agent, tts ->
         LatencyMetrics(
             sttLatencyMs = stt,
             agentStepLatencyMs = agent,
             ttsFirstAudioLatencyMs = tts,
             endToFirstAudioMs = stt + agent + tts,
-            usingStreamingBackend = !isOffline && BuildConfig.AI_VOICE
+            usingStreamingBackend = false
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), LatencyMetrics())
 
@@ -130,6 +356,18 @@ class HomeViewModel(
 
     fun dismissSttBanner() {
         _sttStatusBanner.value = null
+    }
+
+    fun clearKeyRejectedBanner() {
+        agentOrchestrator.clearKeyRejectedBanner()
+    }
+
+    fun startNewChat() {
+        viewModelScope.launch {
+            voiceSessionManager.stopAll()
+            chatRepository.startNewConversation()
+            _sttStatusBanner.value = null
+        }
     }
 
     fun sendTextCommand(textOverride: String? = null) {
@@ -149,7 +387,7 @@ class HomeViewModel(
                 voiceSessionManager.speakReply(
                     rawText = reply,
                     language = currentSettings.language,
-                    voiceProfile = currentSettings.voiceProfile,
+                    selectedVoiceName = currentSettings.selectedVoiceName,
                     speed = currentSettings.speechSpeed,
                     followUpListening = wantsFollowUp,
                     onFollowUpReady = {
@@ -170,7 +408,6 @@ class HomeViewModel(
                 voiceSessionManager.transitionToIdle()
             }
             VoiceSessionState.SPEAKING -> {
-                // Barge-in: tapping orb while SPEAKING stops TTS immediately and opens mic
                 _sttStatusBanner.value = null
                 val lang = settings.value.language
                 voiceSessionManager.bargeInAndListen(
@@ -181,7 +418,6 @@ class HomeViewModel(
                         }
                     },
                     onError = { friendlyError ->
-                        // Never speak error text via TTS; display inline message only
                         _sttStatusBanner.value = friendlyError
                     }
                 )
@@ -200,7 +436,6 @@ class HomeViewModel(
         _sttStatusBanner.value = null
         val lang = settings.value.language
 
-        // Single mic owner: VoiceSessionManager starts ONLY SpeechRecognizer (no PcmAudioRecorder).
         voiceSessionManager.startListening(
             language = lang,
             onFinalTranscript = { transcript ->
@@ -209,7 +444,6 @@ class HomeViewModel(
                 }
             },
             onError = { friendlyError ->
-                // Never speak error text aloud; show inline status message only
                 _sttStatusBanner.value = friendlyError
             }
         )
@@ -262,8 +496,12 @@ class ActivityLogViewModel(
     }
 }
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class MemoryViewModel(
-    private val memoryRepository: MemoryRepository
+    private val appContext: Context,
+    private val memoryRepository: MemoryRepository,
+    private val chatRepository: ChatRepository,
+    private val activityLogRepository: ActivityLogRepository
 ) : ViewModel() {
 
     private val _searchQuery = MutableStateFlow("")
@@ -276,26 +514,147 @@ class MemoryViewModel(
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    val conversations: StateFlow<List<ConversationItem>> = chatRepository.conversationsFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val learnedToday: StateFlow<List<MemoryFact>> = memoryRepository.learnedTodayFlow
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    private val _selectedConversation = MutableStateFlow<ConversationItem?>(null)
+    val selectedConversation: StateFlow<ConversationItem?> = _selectedConversation.asStateFlow()
+
+    private val _selectedConversationMessages = MutableStateFlow<List<ChatMessage>>(emptyList())
+    val selectedConversationMessages: StateFlow<List<ChatMessage>> = _selectedConversationMessages.asStateFlow()
+
+    private val _memoryStatusBanner = MutableStateFlow<String?>(null)
+    val memoryStatusBanner: StateFlow<String?> = _memoryStatusBanner.asStateFlow()
+
+    private val _storageSizeBytes = MutableStateFlow(computeDatabaseSizeBytes())
+    val storageSizeBytes: StateFlow<Long> = _storageSizeBytes.asStateFlow()
+
+    private fun computeDatabaseSizeBytes(): Long {
+        return runCatching {
+            val dbFile = appContext.getDatabasePath("jarvis_assistant.db")
+            val walFile = java.io.File(dbFile.path + "-wal")
+            (if (dbFile.exists()) dbFile.length() else 0L) +
+                (if (walFile.exists()) walFile.length() else 0L)
+        }.getOrDefault(0L)
+    }
+
+    fun refreshStorageSize() {
+        _storageSizeBytes.value = computeDatabaseSizeBytes()
+    }
+
     fun updateSearchQuery(query: String) {
         _searchQuery.value = query
     }
 
-    fun saveMemory(category: String, key: String, value: String) {
+    fun dismissBanner() {
+        _memoryStatusBanner.value = null
+    }
+
+    fun saveMemory(category: String, key: String, value: String, pinned: Boolean = false) {
         if (key.isBlank() || value.isBlank()) return
+        val rejection = MemorySafetyFilter.validateFact(key, value)
+        if (rejection != null) {
+            _memoryStatusBanner.value = rejection
+            return
+        }
         viewModelScope.launch {
-            memoryRepository.upsertMemory(category, key, value)
+            memoryRepository.upsertMemory(
+                category = category,
+                key = key,
+                value = value,
+                source = MemorySource.USER_EXPLICIT.name,
+                confidence = 1.0f,
+                pinned = pinned
+            )
+            _memoryStatusBanner.value = null
+            refreshStorageSize()
+        }
+    }
+
+    fun updateMemory(
+        fact: MemoryFact,
+        newCategory: String,
+        newKey: String,
+        newValue: String,
+        pinned: Boolean
+    ) {
+        if (newKey.isBlank() || newValue.isBlank()) return
+        val rejection = MemorySafetyFilter.validateFact(newKey, newValue)
+        if (rejection != null) {
+            _memoryStatusBanner.value = rejection
+            return
+        }
+        viewModelScope.launch {
+            memoryRepository.updateMemory(
+                id = fact.id,
+                category = newCategory,
+                key = newKey.trim(),
+                value = newValue.trim(),
+                pinned = pinned
+            )
+            refreshStorageSize()
+        }
+    }
+
+    fun togglePinMemory(fact: MemoryFact) {
+        viewModelScope.launch {
+            memoryRepository.setPinned(fact.id, !fact.pinned)
         }
     }
 
     fun deleteMemory(id: Long) {
         viewModelScope.launch {
             memoryRepository.deleteMemory(id)
+            refreshStorageSize()
+        }
+    }
+
+    fun undoLearnedFact(fact: MemoryFact) {
+        viewModelScope.launch {
+            memoryRepository.deleteMemory(fact.id)
+            _memoryStatusBanner.value = "Undid learned fact: ${fact.key}"
+            refreshStorageSize()
+        }
+    }
+
+    fun openConversationTranscript(conversation: ConversationItem) {
+        _selectedConversation.value = conversation
+        viewModelScope.launch {
+            _selectedConversationMessages.value =
+                chatRepository.getMessagesForConversation(conversation.id)
+        }
+    }
+
+    fun closeConversationTranscript() {
+        _selectedConversation.value = null
+        _selectedConversationMessages.value = emptyList()
+    }
+
+    fun exportMemoriesJson(onReady: (String) -> Unit) {
+        viewModelScope.launch {
+            val json = memoryRepository.exportAllAsJson()
+            onReady(json)
         }
     }
 
     fun clearAllMemories() {
         viewModelScope.launch {
             memoryRepository.clearAllMemories()
+            refreshStorageSize()
+        }
+    }
+
+    fun deleteAllAssistantData(confirmText: String, onCompleted: () -> Unit = {}) {
+        if (confirmText.trim() != "DELETE") return
+        viewModelScope.launch {
+            memoryRepository.clearAllMemories()
+            chatRepository.clearAllMessages()
+            activityLogRepository.clearAllLogs()
+            refreshStorageSize()
+            onCompleted()
         }
     }
 }
@@ -309,24 +668,19 @@ class RoutinesViewModel(
     val routines: StateFlow<List<RoutineItem>> = routineRepository.routinesFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    val oemGuides: List<OemBatteryGuide> = listOf(
-        OemBatteryGuide(
-            oemName = "Samsung (One UI)",
-            stepsEn = "Settings -> Apps -> JARVIS -> Battery -> Select 'Unrestricted'. Disable 'Put unused apps to sleep'."
-        ),
-        OemBatteryGuide(
-            oemName = "Xiaomi / Redmi / POCO (MIUI & HyperOS)",
-            stepsEn = "Settings -> Apps -> Manage Apps -> JARVIS -> Enable 'Autostart' and set Battery Saver to 'No restrictions'."
-        ),
-        OemBatteryGuide(
-            oemName = "OnePlus / Oppo (OxygenOS & ColorOS)",
-            stepsEn = "Settings -> Battery -> More Settings -> Optimize battery use -> JARVIS -> Select 'Don't optimize' and enable 'Allow background activity'."
-        ),
-        OemBatteryGuide(
-            oemName = "Realme / Vivo",
-            stepsEn = "Settings -> App Management -> App List -> JARVIS -> Battery Usage -> Enable 'Allow background activity' and 'Allow auto-launch'."
-        )
-    )
+    init {
+        viewModelScope.launch {
+            routineRepository.routinesFlow.collect { list ->
+                val hasHardwareTriggers = list.any {
+                    it.enabled && (
+                        it.triggerType == RoutineTriggerType.HEADSET_CONNECTED ||
+                            it.triggerType == RoutineTriggerType.CHARGING_STARTED
+                        )
+                }
+                RoutineTriggerReceiver.syncDynamicReceivers(appContext, hasHardwareTriggers)
+            }
+        }
+    }
 
     fun saveRoutine(
         title: String,
@@ -392,7 +746,7 @@ class PermissionsViewModel(
     val oemGuides: List<OemBatteryGuide> = listOf(
         OemBatteryGuide(
             oemName = "Samsung (One UI)",
-            stepsEn = "Settings -> Apps -> JARVIS -> Battery -> Select 'Unrestricted' so background wake-word detection is not killed."
+            stepsEn = "Settings -> Apps -> JARVIS -> Battery -> Select 'Unrestricted' so scheduled routines and foreground tasks run reliably."
         ),
         OemBatteryGuide(
             oemName = "Xiaomi / Redmi / POCO (HyperOS / MIUI)",
@@ -448,7 +802,7 @@ class PermissionsViewModel(
             PermissionItemStatus(
                 id = "RECORD_AUDIO",
                 titleEn = "Microphone (Voice Input)",
-                rationaleEn = "Required to hear your spoken commands and 'Hey Jarvis' wake word. Raw audio is never stored on disk.",
+                rationaleEn = "Required to hear your spoken commands via push-to-talk. Raw audio is never stored on disk.",
                 isGranted = hasMic
             ),
             PermissionItemStatus(
@@ -485,7 +839,7 @@ class PermissionsViewModel(
             PermissionItemStatus(
                 id = "BATTERY_OPTIMIZATION",
                 titleEn = "Unrestricted Battery Optimization",
-                rationaleEn = "Prevents OEM battery savers from stopping the 'Hey Jarvis' background wake-word service.",
+                rationaleEn = "Prevents OEM battery savers from stopping active voice sessions or scheduled routines.",
                 isGranted = isIgnoringBatteryOpt
             ),
             PermissionItemStatus(
@@ -500,8 +854,9 @@ class PermissionsViewModel(
 
 class SettingsViewModel(
     private val appContext: Context,
+    private val apiKeyStore: ApiKeyStore,
+    private val geminiClient: GeminiClient,
     private val settingsRepository: SettingsRepository,
-    private val wakeWordEngine: WakeWordEngine,
     private val voiceSessionManager: VoiceSessionManager,
     private val speechRecognizer: SpeechRecognizerWrapper,
     private val ttsEngine: TtsEngineWrapper,
@@ -512,10 +867,16 @@ class SettingsViewModel(
     val settings: StateFlow<UserSettings> = settingsRepository.settingsFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), UserSettings())
 
-    val isWakeWordConfigured: Boolean
-        get() = wakeWordEngine.isWakeWordConfigured
+    val availableDeviceVoices: StateFlow<List<DeviceVoiceOption>> = ttsEngine.availableVoices
 
-    val isOfflineVoiceActive: StateFlow<Boolean> = ttsEngine.isUsingOfflineFallback
+    private val _maskedApiKey = MutableStateFlow(apiKeyStore.mask())
+    val maskedApiKey: StateFlow<String> = _maskedApiKey.asStateFlow()
+
+    private val _keyStatusMessage = MutableStateFlow<String?>(null)
+    val keyStatusMessage: StateFlow<String?> = _keyStatusMessage.asStateFlow()
+
+    private val _isVerifyingKey = MutableStateFlow(false)
+    val isVerifyingKey: StateFlow<Boolean> = _isVerifyingKey.asStateFlow()
 
     val voiceDiagnostics: StateFlow<VoiceDiagnosticsSnapshot> = combine(
         combine(
@@ -524,15 +885,14 @@ class SettingsViewModel(
             speechRecognizer.lastErrorMessage
         ) { state, errCode, errMsg -> Triple(state, errCode, errMsg) },
         combine(
-            ttsEngine.isUsingOfflineFallback,
             settings,
             speechRecognizer.lastSttLatencyMs,
             agentOrchestrator.lastAgentStepLatencyMs,
             ttsEngine.firstAudioLatencyMs
-        ) { isOffline, userSettings, sttLat, agentLat, ttsLat ->
+        ) { userSettings, sttLat, agentLat, ttsLat ->
             VoiceDiagnosticsSnapshot(
-                isOfflineTtsActive = isOffline,
-                activeVoiceId = userSettings.voiceProfile.id,
+                isOfflineTtsActive = true,
+                activeVoiceId = userSettings.selectedVoiceName.ifBlank { "system_default" },
                 sttLatencyMs = sttLat,
                 agentLatencyMs = agentLat,
                 ttsLatencyMs = ttsLat
@@ -546,21 +906,91 @@ class SettingsViewModel(
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), VoiceDiagnosticsSnapshot())
 
+    fun refreshMaskedKey() {
+        _maskedApiKey.value = apiKeyStore.mask()
+    }
+
+    fun verifyAndSaveNewKey(newKey: String, onSuccess: () -> Unit = {}) {
+        val trimmed = newKey.trim()
+        if (trimmed.isEmpty()) {
+            _keyStatusMessage.value = "Invalid API key"
+            return
+        }
+        _isVerifyingKey.value = true
+        viewModelScope.launch {
+            when (val res = geminiClient.verifyKeyAndListModels(trimmed)) {
+                is KeyVerificationResult.Valid -> {
+                    apiKeyStore.save(trimmed)
+                    _maskedApiKey.value = apiKeyStore.mask()
+                    val models = res.availableModels
+                    settingsRepository.setAvailableModels(models)
+                    val chosen = when {
+                        models.contains(settings.value.selectedModelId) -> settings.value.selectedModelId
+                        else -> res.defaultModelId
+                    }
+                    settingsRepository.setSelectedModelId(chosen)
+                    settingsRepository.setSetupComplete(true)
+                    agentOrchestrator.clearKeyRejectedBanner()
+                    _keyStatusMessage.value = "Verified — ${models.size} models available"
+                    onSuccess()
+                }
+                is KeyVerificationResult.Invalid -> {
+                    _keyStatusMessage.value = res.message
+                }
+                is KeyVerificationResult.RateLimited -> {
+                    _keyStatusMessage.value = res.message
+                }
+                is KeyVerificationResult.NetworkError -> {
+                    _keyStatusMessage.value = res.message
+                }
+            }
+            _isVerifyingKey.value = false
+        }
+    }
+
+    fun reverifyCurrentKey() {
+        val current = apiKeyStore.get()
+        if (current.isNullOrBlank()) {
+            _keyStatusMessage.value = "Not configured"
+            return
+        }
+        verifyAndSaveNewKey(current)
+    }
+
+    fun removeApiKey(onRemoved: () -> Unit = {}) {
+        apiKeyStore.clear()
+        _maskedApiKey.value = ""
+        _keyStatusMessage.value = null
+        voiceSessionManager.stopAll()
+        VoiceForegroundService.stopService(appContext)
+        OverlayService.stop(appContext)
+        viewModelScope.launch {
+            settingsRepository.setSetupComplete(false)
+            onRemoved()
+        }
+    }
+
+    fun setSelectedModelId(modelId: String) {
+        viewModelScope.launch {
+            settingsRepository.setSelectedModelId(modelId)
+        }
+    }
+
     fun setLanguage(language: AppLanguage) {
         viewModelScope.launch {
             settingsRepository.setLanguage(language)
         }
     }
 
-    fun setVoiceProfile(profile: VoiceProfile) {
+    fun setSelectedVoiceName(voiceName: String) {
         viewModelScope.launch {
-            settingsRepository.setVoiceProfile(profile)
+            settingsRepository.setSelectedVoiceName(voiceName)
         }
     }
 
     fun setSpeechSpeed(speed: Float) {
         viewModelScope.launch {
-            settingsRepository.setSpeechSpeed(speed.coerceIn(0.8f, 1.2f))
+            settingsRepository.setSpeechSpeed(speed.coerceIn(0.8f, 1.3f))
         }
     }
 
@@ -569,43 +999,21 @@ class SettingsViewModel(
         voiceSessionManager.speakReply(
             rawText = samplePhrase,
             language = current.language,
-            voiceProfile = current.voiceProfile,
+            selectedVoiceName = current.selectedVoiceName,
             speed = current.speechSpeed,
             followUpListening = false
         )
     }
 
-    fun setWakeWordSensitivity(value: Float) {
-        wakeWordEngine.setSensitivity(value)
+    fun setAutoLearnEnabled(enabled: Boolean) {
         viewModelScope.launch {
-            settingsRepository.setWakeWordSensitivity(value)
+            settingsRepository.setAutoLearnEnabled(enabled)
         }
     }
 
-    fun setWakeWordEnabled(enabled: Boolean) {
-        if (enabled && !wakeWordEngine.isWakeWordConfigured) {
-            return
-        }
+    fun setAskBeforeSavingFact(ask: Boolean) {
         viewModelScope.launch {
-            settingsRepository.setWakeWordEnabled(enabled)
-            if (enabled) {
-                VoiceForegroundService.startService(appContext)
-            } else {
-                VoiceForegroundService.stopService(appContext)
-            }
-        }
-    }
-
-    fun setWakeWordPaused(paused: Boolean) {
-        wakeWordEngine.setPaused(paused)
-        viewModelScope.launch {
-            settingsRepository.setWakeWordPaused(paused)
-        }
-    }
-
-    fun setBootAutoStartEnabled(enabled: Boolean) {
-        viewModelScope.launch {
-            settingsRepository.setBootAutoStartEnabled(enabled)
+            settingsRepository.setAskBeforeSavingFact(ask)
         }
     }
 
@@ -648,6 +1056,14 @@ class JarvisViewModelFactory(
     @Suppress("UNCHECKED_CAST")
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         return when {
+            modelClass.isAssignableFrom(SetupViewModel::class.java) -> SetupViewModel(
+                appContext = appContext,
+                apiKeyStore = container.apiKeyStore,
+                geminiClient = container.geminiClient,
+                settingsRepository = container.settingsRepository,
+                memoryRepository = container.memoryRepository
+            ) as T
+
             modelClass.isAssignableFrom(HomeViewModel::class.java) -> HomeViewModel(
                 agentOrchestrator = container.agentOrchestrator,
                 chatRepository = container.chatRepository,
@@ -656,8 +1072,7 @@ class JarvisViewModelFactory(
                 killSwitch = container.killSwitch,
                 voiceSessionManager = container.voiceSessionManager,
                 speechRecognizer = container.speechRecognizerWrapper,
-                ttsEngine = container.ttsEngineWrapper,
-                wakeWordEngine = container.wakeWordEngine
+                ttsEngine = container.ttsEngineWrapper
             ) as T
 
             modelClass.isAssignableFrom(ActivityLogViewModel::class.java) -> ActivityLogViewModel(
@@ -665,7 +1080,10 @@ class JarvisViewModelFactory(
             ) as T
 
             modelClass.isAssignableFrom(MemoryViewModel::class.java) -> MemoryViewModel(
-                memoryRepository = container.memoryRepository
+                appContext = appContext,
+                memoryRepository = container.memoryRepository,
+                chatRepository = container.chatRepository,
+                activityLogRepository = container.activityLogRepository
             ) as T
 
             modelClass.isAssignableFrom(RoutinesViewModel::class.java) -> RoutinesViewModel(
@@ -680,8 +1098,9 @@ class JarvisViewModelFactory(
 
             modelClass.isAssignableFrom(SettingsViewModel::class.java) -> SettingsViewModel(
                 appContext = appContext,
+                apiKeyStore = container.apiKeyStore,
+                geminiClient = container.geminiClient,
                 settingsRepository = container.settingsRepository,
-                wakeWordEngine = container.wakeWordEngine,
                 voiceSessionManager = container.voiceSessionManager,
                 speechRecognizer = container.speechRecognizerWrapper,
                 ttsEngine = container.ttsEngineWrapper,

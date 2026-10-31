@@ -24,18 +24,16 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.AddComment
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.GraphicEq
-import androidx.compose.material.icons.filled.Hearing
-import androidx.compose.material.icons.filled.MicOff
+import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -60,8 +58,11 @@ import com.example.domain.model.MessageRole
 import com.example.ui.components.AuroraBackground
 import com.example.ui.components.AuroraGlassCard
 import com.example.ui.components.AuroraGlassSafetySheet
+import com.example.ui.components.AuroraIconButton
+import com.example.ui.components.AuroraSecondaryButton
 import com.example.ui.components.AuroraStatusPill
 import com.example.ui.components.AuroraStopPill
+import com.example.ui.components.AuroraTextButton
 import com.example.ui.components.JarvisOrb
 import com.example.ui.theme.AuroraColors
 import com.example.ui.viewmodel.HomeViewModel
@@ -70,7 +71,8 @@ import com.example.ui.viewmodel.HomeViewModel
 @Composable
 fun HomeScreen(
     viewModel: HomeViewModel,
-    onOpenPermissions: () -> Unit = {}
+    onOpenPermissions: () -> Unit = {},
+    onOpenSettings: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val messages by viewModel.messages.collectAsStateWithLifecycle()
@@ -79,12 +81,10 @@ fun HomeScreen(
     val lastResponse by viewModel.lastResponseText.collectAsStateWithLifecycle()
     val pendingConfirmation by viewModel.pendingConfirmation.collectAsStateWithLifecycle()
     val isKilled by viewModel.isKilled.collectAsStateWithLifecycle()
+    val keyRejectedBanner by viewModel.keyRejectedBanner.collectAsStateWithLifecycle()
     val inputDraft by viewModel.inputDraft.collectAsStateWithLifecycle()
     val rmsEnergy by viewModel.rmsEnergyLevel.collectAsStateWithLifecycle()
     val partialTranscript by viewModel.partialTranscript.collectAsStateWithLifecycle()
-    val isWakeMonitoring by viewModel.isWakeWordMonitoring.collectAsStateWithLifecycle()
-    val isWakePaused by viewModel.isWakeWordPaused.collectAsStateWithLifecycle()
-    val isOfflineVoiceActive by viewModel.isOfflineVoiceActive.collectAsStateWithLifecycle()
     val sttStatusBanner by viewModel.sttStatusBanner.collectAsStateWithLifecycle()
 
     val micPermissionLauncher = rememberLauncherForActivityResult(
@@ -131,21 +131,12 @@ fun HomeScreen(
                             text = settings.language.code,
                             color = AuroraColors.Aqua
                         )
-                        if (isOfflineVoiceActive) {
-                            AuroraStatusPill(
-                                text = stringResource(R.string.home_offline_voice_chip),
-                                color = AuroraColors.Lavender,
-                                icon = Icons.Default.VolumeUp,
-                                modifier = Modifier.testTag("home_offline_voice_chip")
-                            )
-                        } else {
-                            AuroraStatusPill(
-                                text = stringResource(R.string.home_neural_voice_chip),
-                                color = AuroraColors.ElectricViolet,
-                                icon = Icons.Default.GraphicEq,
-                                modifier = Modifier.testTag("home_neural_voice_chip")
-                            )
-                        }
+                        AuroraStatusPill(
+                            text = stringResource(R.string.home_offline_voice_chip),
+                            color = AuroraColors.Lavender,
+                            icon = Icons.Default.VolumeUp,
+                            modifier = Modifier.testTag("home_offline_voice_chip")
+                        )
                     }
                     Text(
                         text = stringResource(R.string.home_subtitle),
@@ -155,46 +146,81 @@ fun HomeScreen(
                     )
                 }
 
-                // Red (#FF6B87) STOP pill / Emerald (#3DDC97) Resume pill
-                AuroraStopPill(
-                    isKilled = isKilled,
-                    onToggle = {
-                        if (isKilled) viewModel.resetKillSwitch()
-                        else viewModel.triggerKillSwitch()
-                    },
-                    modifier = Modifier.testTag("home_kill_switch_button")
-                )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    AuroraIconButton(
+                        icon = Icons.Default.AddComment,
+                        contentDescription = stringResource(R.string.home_new_chat),
+                        testTag = "home_new_chat_button",
+                        onClick = viewModel::startNewChat,
+                        tint = AuroraColors.Lavender
+                    )
+
+                    AuroraStopPill(
+                        isKilled = isKilled,
+                        onToggle = {
+                            if (isKilled) viewModel.resetKillSwitch()
+                            else viewModel.triggerKillSwitch()
+                        },
+                        modifier = Modifier.testTag("home_kill_switch_button")
+                    )
+                }
             }
 
-            // Active Mic / Wake Word Status Row
-            if (orbState == AssistantOrbState.LISTENING || settings.wakeWordEnabled) {
+            // Key rejected banner if 401/403 encountered at runtime
+            AnimatedVisibility(visible = keyRejectedBanner) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp)
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(AuroraColors.CoralDanger.copy(alpha = 0.16f))
+                        .border(1.dp, AuroraColors.CoralDanger.copy(alpha = 0.5f), RoundedCornerShape(14.dp))
+                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                        .testTag("home_key_rejected_banner"),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        modifier = Modifier.weight(1f),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Key,
+                            contentDescription = null,
+                            tint = AuroraColors.CoralDanger,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Text(
+                            text = stringResource(R.string.home_key_rejected_banner),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = AuroraColors.TextPrimary
+                        )
+                    }
+                    AuroraTextButton(
+                        text = stringResource(R.string.home_update_key_action),
+                        onClick = onOpenSettings,
+                        testTag = "home_update_key_button"
+                    )
+                }
+            }
+
+            // Active Mic Status Row (push-to-talk only)
+            if (orbState == AssistantOrbState.LISTENING) {
                 Spacer(modifier = Modifier.height(8.dp))
                 FlowRow(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    if (orbState == AssistantOrbState.LISTENING) {
-                        AuroraStatusPill(
-                            text = stringResource(R.string.home_mic_active_badge),
-                            color = AuroraColors.Aqua,
-                            icon = Icons.Default.GraphicEq,
-                            modifier = Modifier.testTag("home_mic_active_badge")
-                        )
-                    } else if (isWakePaused) {
-                        AuroraStatusPill(
-                            text = stringResource(R.string.home_wake_paused_badge),
-                            color = AuroraColors.AmberWarning,
-                            icon = Icons.Default.MicOff,
-                            modifier = Modifier.testTag("home_wake_paused_badge")
-                        )
-                    } else if (isWakeMonitoring) {
-                        AuroraStatusPill(
-                            text = stringResource(R.string.home_wake_listening_badge),
-                            color = AuroraColors.EmeraldSuccess,
-                            icon = Icons.Default.Hearing,
-                            modifier = Modifier.testTag("home_wake_listening_badge")
-                        )
-                    }
+                    AuroraStatusPill(
+                        text = stringResource(R.string.home_mic_active_badge),
+                        color = AuroraColors.Aqua,
+                        icon = Icons.Default.GraphicEq,
+                        modifier = Modifier.testTag("home_mic_active_badge")
+                    )
                 }
             }
 
@@ -273,17 +299,13 @@ fun HomeScreen(
                             color = AuroraColors.TextPrimary,
                             modifier = Modifier.weight(1f, fill = false)
                         )
-                        IconButton(
+                        AuroraIconButton(
+                            icon = Icons.Default.Close,
+                            contentDescription = stringResource(R.string.home_cancel_turn),
+                            testTag = "home_dismiss_stt_banner",
                             onClick = { viewModel.dismissSttBanner() },
-                            modifier = Modifier.size(28.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Close,
-                                contentDescription = stringResource(R.string.home_cancel_turn),
-                                tint = AuroraColors.TextSecondary,
-                                modifier = Modifier.size(14.dp)
-                            )
-                        }
+                            tint = AuroraColors.TextSecondary
+                        )
                     }
                 }
 
@@ -372,27 +394,18 @@ fun HomeScreen(
                     )
                 )
 
-                IconButton(
-                    onClick = { viewModel.sendTextCommand() },
+                AuroraIconButton(
+                    icon = Icons.AutoMirrored.Filled.Send,
+                    contentDescription = stringResource(R.string.home_send),
+                    testTag = "home_send_button",
                     enabled = inputDraft.isNotBlank() && !isKilled,
-                    modifier = Modifier
-                        .size(48.dp)
-                        .clip(CircleShape)
-                        .background(
-                            if (inputDraft.isNotBlank() && !isKilled) {
-                                AuroraColors.Violet500
-                            } else {
-                                AuroraColors.SurfaceElevated
-                            }
-                        )
-                        .testTag("home_send_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.Send,
-                        contentDescription = stringResource(R.string.home_send),
-                        tint = AuroraColors.TextPrimary
-                    )
-                }
+                    activeFillColor = if (inputDraft.isNotBlank() && !isKilled) {
+                        AuroraColors.Violet500
+                    } else {
+                        null
+                    },
+                    onClick = { viewModel.sendTextCommand() }
+                )
             }
         }
 

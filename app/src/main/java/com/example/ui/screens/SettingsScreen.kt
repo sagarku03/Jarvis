@@ -2,7 +2,12 @@ package com.example.ui.screens
 
 import android.content.Intent
 import android.provider.Settings
+import android.speech.tts.TextToSpeech
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -15,51 +20,67 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Logout
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.BugReport
+import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.Download
-import androidx.compose.material.icons.filled.GraphicEq
-import androidx.compose.material.icons.filled.Hearing
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.RecordVoiceOver
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.VolumeUp
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.BuildConfig
 import com.example.R
 import com.example.domain.model.AppLanguage
 import com.example.domain.model.ConfirmationLevel
-import com.example.domain.model.VoiceProfile
 import com.example.ui.components.AuroraBackground
+import com.example.ui.components.AuroraDangerButton
 import com.example.ui.components.AuroraGlassCard
+import com.example.ui.components.AuroraPrimaryButton
+import com.example.ui.components.AuroraSecondaryButton
 import com.example.ui.components.AuroraSectionHeader
 import com.example.ui.components.AuroraStatusPill
+import com.example.ui.components.AuroraTextButton
 import com.example.ui.theme.AuroraColors
+import com.example.ui.theme.JarvisMonoStyle
 import com.example.ui.viewmodel.SettingsViewModel
 import java.util.Locale
 
@@ -67,14 +88,24 @@ import java.util.Locale
 fun SettingsScreen(
     viewModel: SettingsViewModel,
     onOpenPermissionsScreen: () -> Unit = {},
-    onSignOut: () -> Unit = {}
+    onKeyRemoved: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val settings by viewModel.settings.collectAsStateWithLifecycle()
-    val isOfflineVoiceActive by viewModel.isOfflineVoiceActive.collectAsStateWithLifecycle()
+    val maskedApiKey by viewModel.maskedApiKey.collectAsStateWithLifecycle()
+    val keyStatusMessage by viewModel.keyStatusMessage.collectAsStateWithLifecycle()
+    val isVerifyingKey by viewModel.isVerifyingKey.collectAsStateWithLifecycle()
+    val availableVoices by viewModel.availableDeviceVoices.collectAsStateWithLifecycle()
     val diagnostics by viewModel.voiceDiagnostics.collectAsStateWithLifecycle()
-    val isWakeConfigured = viewModel.isWakeWordConfigured
     val previewPhrase = stringResource(R.string.settings_voice_preview_phrase)
+
+    var showChangeKeyDialog by remember { mutableStateOf(false) }
+    var newKeyDraft by remember { mutableStateOf("") }
+    var modelDropdownExpanded by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        viewModel.refreshMaskedKey()
+    }
 
     AuroraBackground {
         Column(
@@ -88,24 +119,12 @@ fun SettingsScreen(
                 title = stringResource(R.string.settings_title),
                 subtitle = stringResource(R.string.settings_subtitle),
                 trailing = {
-                    Button(
+                    AuroraPrimaryButton(
+                        text = stringResource(R.string.nav_permissions),
+                        leadingIcon = Icons.Default.Shield,
                         onClick = onOpenPermissionsScreen,
-                        colors = ButtonDefaults.buttonColors(containerColor = AuroraColors.Violet500),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-                        modifier = Modifier
-                            .height(48.dp)
-                            .testTag("open_permissions_screen_button")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Shield,
-                            contentDescription = stringResource(R.string.settings_permissions_button)
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = stringResource(R.string.nav_permissions),
-                            style = MaterialTheme.typography.labelLarge
-                        )
-                    }
+                        testTag = "open_permissions_screen_button"
+                    )
                 }
             )
 
@@ -118,7 +137,155 @@ fun SettingsScreen(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
                 contentPadding = PaddingValues(bottom = 24.dp)
             ) {
-                // 1. Speech Recognition Locale (English-only: en-IN / en-US / en-GB)
+                // 1. Gemini AI Key & Model Card
+                item {
+                    AuroraGlassCard(elevated = true) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Key,
+                                    contentDescription = stringResource(R.string.settings_ai_title),
+                                    tint = AuroraColors.Aqua
+                                )
+                                Text(
+                                    text = stringResource(R.string.settings_ai_title),
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = AuroraColors.TextPrimary
+                                )
+                            }
+                            Text(
+                                text = maskedApiKey.ifBlank { "••••••••" },
+                                style = JarvisMonoStyle,
+                                color = AuroraColors.Lavender,
+                                modifier = Modifier.testTag("settings_masked_api_key")
+                            )
+                        }
+
+                        if (!keyStatusMessage.isNullOrBlank()) {
+                            Text(
+                                text = keyStatusMessage.orEmpty(),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (keyStatusMessage?.startsWith("Verified") == true) {
+                                    AuroraColors.EmeraldSuccess
+                                } else {
+                                    AuroraColors.CoralDanger
+                                },
+                                modifier = Modifier.testTag("settings_key_status_message")
+                            )
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            AuroraSecondaryButton(
+                                text = stringResource(R.string.settings_ai_change_key),
+                                leadingIcon = Icons.Default.Edit,
+                                onClick = {
+                                    newKeyDraft = ""
+                                    showChangeKeyDialog = true
+                                },
+                                modifier = Modifier.weight(1f),
+                                testTag = "settings_change_key_button"
+                            )
+
+                            AuroraSecondaryButton(
+                                text = stringResource(R.string.settings_ai_verify_again),
+                                leadingIcon = Icons.Default.Refresh,
+                                loading = isVerifyingKey,
+                                onClick = viewModel::reverifyCurrentKey,
+                                modifier = Modifier.weight(1f),
+                                testTag = "settings_reverify_key_button"
+                            )
+
+                            AuroraDangerButton(
+                                text = stringResource(R.string.settings_ai_remove_key),
+                                leadingIcon = Icons.Default.DeleteForever,
+                                onClick = {
+                                    viewModel.removeApiKey(onRemoved = onKeyRemoved)
+                                },
+                                modifier = Modifier.weight(1f),
+                                testTag = "settings_remove_key_button"
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = stringResource(R.string.setup_model_label),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = AuroraColors.TextSecondary
+                        )
+
+                        Box(modifier = Modifier.fillMaxWidth()) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(48.dp)
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .background(AuroraColors.SurfacePrimary)
+                                    .border(1.dp, AuroraColors.GlassBorderStrong, RoundedCornerShape(14.dp))
+                                    .clickable { modelDropdownExpanded = true }
+                                    .padding(horizontal = 14.dp)
+                                    .testTag("settings_model_selector"),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = settings.selectedModelId,
+                                    style = JarvisMonoStyle,
+                                    color = AuroraColors.TextPrimary
+                                )
+                                Icon(
+                                    imageVector = Icons.Default.ArrowDropDown,
+                                    contentDescription = stringResource(R.string.setup_model_label),
+                                    tint = AuroraColors.TextSecondary
+                                )
+                            }
+
+                            DropdownMenu(
+                                expanded = modelDropdownExpanded,
+                                onDismissRequest = { modelDropdownExpanded = false },
+                                modifier = Modifier.background(AuroraColors.SurfaceElevated)
+                            ) {
+                                settings.availableModels.forEach { modelId ->
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(
+                                                text = modelId,
+                                                style = JarvisMonoStyle,
+                                                color = AuroraColors.TextPrimary
+                                            )
+                                        },
+                                        onClick = {
+                                            viewModel.setSelectedModelId(modelId)
+                                            modelDropdownExpanded = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+
+                        Text(
+                            text = stringResource(
+                                R.string.settings_ai_usage_stats,
+                                settings.requestsToday,
+                                settings.tokensToday
+                            ),
+                            style = JarvisMonoStyle,
+                            color = AuroraColors.TextSecondary,
+                            modifier = Modifier.testTag("settings_usage_stats")
+                        )
+                    }
+                }
+
+                // 2. Speech Recognition Locale (English-only: en-IN / en-US / en-GB)
                 item {
                     AuroraGlassCard {
                         Row(
@@ -166,7 +333,7 @@ fun SettingsScreen(
                     }
                 }
 
-                // 2. Assistant Voice Profile, Speed (0.8x..1.2x), Device/Cloud Chip, Preview & Install Better Voice
+                // 3. Assistant Device Voice, Speed (0.8x..1.3x), Test Voice & Get Better Voices
                 item {
                     AuroraGlassCard {
                         Row(
@@ -189,20 +356,12 @@ fun SettingsScreen(
                                     color = AuroraColors.TextPrimary
                                 )
                             }
-                            if (isOfflineVoiceActive) {
-                                AuroraStatusPill(
-                                    text = stringResource(R.string.home_offline_voice_chip),
-                                    color = AuroraColors.Lavender,
-                                    icon = Icons.Default.VolumeUp,
-                                    modifier = Modifier.testTag("settings_offline_voice_chip")
-                                )
-                            } else {
-                                AuroraStatusPill(
-                                    text = stringResource(R.string.home_neural_voice_chip),
-                                    color = AuroraColors.Violet500,
-                                    icon = Icons.Default.GraphicEq
-                                )
-                            }
+                            AuroraStatusPill(
+                                text = stringResource(R.string.home_offline_voice_chip),
+                                color = AuroraColors.Lavender,
+                                icon = Icons.Default.VolumeUp,
+                                modifier = Modifier.testTag("settings_offline_voice_chip")
+                            )
                         }
 
                         Text(
@@ -211,25 +370,33 @@ fun SettingsScreen(
                             color = AuroraColors.TextSecondary
                         )
 
-                        VoiceProfile.entries.forEach { profile ->
-                            FilterChip(
-                                selected = settings.voiceProfile == profile,
-                                onClick = { viewModel.setVoiceProfile(profile) },
-                                label = {
-                                    Text(
-                                        text = "${profile.displayName} — ${profile.subtitle}",
-                                        style = MaterialTheme.typography.bodySmall
-                                    )
-                                },
-                                colors = FilterChipDefaults.filterChipColors(
-                                    selectedContainerColor = AuroraColors.Aqua.copy(alpha = 0.22f),
-                                    selectedLabelColor = AuroraColors.TextPrimary
-                                ),
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(48.dp)
-                                    .testTag("voice_chip_${profile.id}")
+                        if (availableVoices.isEmpty()) {
+                            Text(
+                                text = stringResource(R.string.settings_voice_default_label),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = AuroraColors.Lavender
                             )
+                        } else {
+                            availableVoices.take(6).forEach { voiceOpt ->
+                                FilterChip(
+                                    selected = settings.selectedVoiceName == voiceOpt.id,
+                                    onClick = { viewModel.setSelectedVoiceName(voiceOpt.id) },
+                                    label = {
+                                        Text(
+                                            text = "${voiceOpt.displayName} (${voiceOpt.localeTag})",
+                                            style = MaterialTheme.typography.bodySmall
+                                        )
+                                    },
+                                    colors = FilterChipDefaults.filterChipColors(
+                                        selectedContainerColor = AuroraColors.Aqua.copy(alpha = 0.22f),
+                                        selectedLabelColor = AuroraColors.TextPrimary
+                                    ),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(48.dp)
+                                        .testTag("voice_chip_${voiceOpt.id}")
+                                )
+                            }
                         }
 
                         Spacer(modifier = Modifier.height(4.dp))
@@ -242,7 +409,7 @@ fun SettingsScreen(
                         Slider(
                             value = settings.speechSpeed,
                             onValueChange = { viewModel.setSpeechSpeed(it) },
-                            valueRange = 0.8f..1.2f,
+                            valueRange = 0.8f..1.3f,
                             colors = SliderDefaults.colors(
                                 thumbColor = AuroraColors.Aqua,
                                 activeTrackColor = AuroraColors.Aqua
@@ -254,152 +421,88 @@ fun SettingsScreen(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            OutlinedButton(
+                            AuroraSecondaryButton(
+                                text = stringResource(R.string.settings_voice_preview),
+                                leadingIcon = Icons.Default.PlayArrow,
+                                iconTint = AuroraColors.Aqua,
                                 onClick = { viewModel.previewVoice(previewPhrase) },
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .height(48.dp)
-                                    .testTag("settings_voice_preview_button")
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.PlayArrow,
-                                    contentDescription = stringResource(R.string.settings_voice_preview),
-                                    tint = AuroraColors.Aqua
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(
-                                    text = stringResource(R.string.settings_voice_preview),
-                                    color = AuroraColors.TextPrimary
-                                )
-                            }
+                                modifier = Modifier.weight(1f),
+                                testTag = "settings_voice_preview_button"
+                            )
 
-                            OutlinedButton(
+                            AuroraSecondaryButton(
+                                text = stringResource(R.string.settings_voice_install_better),
+                                leadingIcon = Icons.Default.Download,
+                                iconTint = AuroraColors.Lavender,
                                 onClick = {
                                     runCatching {
                                         context.startActivity(
-                                            Intent("com.android.settings.TTS_SETTINGS").apply {
+                                            Intent(TextToSpeech.Engine.ACTION_INSTALL_TTS_DATA).apply {
                                                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                                             }
                                         )
                                     }.onFailure {
                                         runCatching {
                                             context.startActivity(
-                                                Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
+                                                Intent("com.android.settings.TTS_SETTINGS").apply {
                                                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                                                 }
                                             )
+                                        }.onFailure {
+                                            runCatching {
+                                                context.startActivity(
+                                                    Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
+                                                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                                    }
+                                                )
+                                            }
                                         }
                                     }
                                 },
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .height(48.dp)
-                                    .testTag("settings_install_voice_button")
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Download,
-                                    contentDescription = stringResource(R.string.settings_voice_install_better),
-                                    tint = AuroraColors.Lavender
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(
-                                    text = stringResource(R.string.settings_voice_install_better),
-                                    color = AuroraColors.TextPrimary
-                                )
-                            }
+                                modifier = Modifier.weight(1f),
+                                testTag = "settings_install_voice_button"
+                            )
                         }
                     }
                 }
 
-                // 3. Wake Word ("Hey Jarvis") + Clear "Wake word not configured" state
+                // 4. Memory & Auto-Learning + Floating Overlay Orb
                 item {
                     AuroraGlassCard {
                         Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Hearing,
-                                    contentDescription = stringResource(R.string.settings_wake_title),
-                                    tint = AuroraColors.EmeraldSuccess
-                                )
-                                Text(
-                                    text = stringResource(R.string.settings_wake_title),
-                                    style = MaterialTheme.typography.titleMedium,
-                                    color = AuroraColors.TextPrimary
-                                )
-                            }
-                            if (!isWakeConfigured) {
-                                AuroraStatusPill(
-                                    text = stringResource(R.string.settings_wake_not_configured),
-                                    color = AuroraColors.AmberWarning,
-                                    modifier = Modifier.testTag("settings_wake_not_configured_badge")
-                                )
-                            }
-                        }
-
-                        if (!isWakeConfigured) {
+                            Icon(
+                                imageVector = Icons.Default.Memory,
+                                contentDescription = stringResource(R.string.settings_memory_title),
+                                tint = AuroraColors.EmeraldSuccess
+                            )
                             Text(
-                                text = stringResource(R.string.settings_wake_not_configured_desc),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = AuroraColors.AmberWarning
+                                text = stringResource(R.string.settings_memory_title),
+                                style = MaterialTheme.typography.titleMedium,
+                                color = AuroraColors.TextPrimary
                             )
                         }
 
                         SettingSwitchRow(
-                            title = stringResource(R.string.settings_wake_enable),
-                            subtitle = stringResource(R.string.fgs_notification_text_active),
-                            checked = settings.wakeWordEnabled && isWakeConfigured,
-                            enabled = isWakeConfigured,
-                            onCheckedChange = viewModel::setWakeWordEnabled,
-                            tag = "wake_word_toggle"
+                            title = stringResource(R.string.settings_auto_learn_title),
+                            subtitle = stringResource(R.string.settings_auto_learn_desc),
+                            checked = settings.autoLearnEnabled,
+                            enabled = true,
+                            onCheckedChange = viewModel::setAutoLearnEnabled,
+                            tag = "settings_auto_learn_toggle"
                         )
 
                         HorizontalDivider(color = AuroraColors.GlassBorder)
 
                         SettingSwitchRow(
-                            title = stringResource(R.string.settings_wake_pause),
-                            subtitle = stringResource(R.string.fgs_notification_text_paused),
-                            checked = settings.wakeWordPaused,
-                            enabled = isWakeConfigured && settings.wakeWordEnabled,
-                            onCheckedChange = viewModel::setWakeWordPaused,
-                            tag = "wake_word_pause_toggle"
-                        )
-
-                        Text(
-                            text = stringResource(
-                                R.string.settings_wake_sensitivity,
-                                (settings.wakeWordSensitivity * 100).toInt()
-                            ),
-                            style = MaterialTheme.typography.labelMedium,
-                            color = AuroraColors.TextSecondary
-                        )
-                        Slider(
-                            value = settings.wakeWordSensitivity,
-                            onValueChange = viewModel::setWakeWordSensitivity,
-                            valueRange = 0.2f..0.95f,
-                            enabled = isWakeConfigured,
-                            colors = SliderDefaults.colors(
-                                thumbColor = AuroraColors.EmeraldSuccess,
-                                activeTrackColor = AuroraColors.EmeraldSuccess
-                            ),
-                            modifier = Modifier.testTag("wake_sensitivity_slider")
-                        )
-
-                        HorizontalDivider(color = AuroraColors.GlassBorder)
-
-                        SettingSwitchRow(
-                            title = stringResource(R.string.settings_boot_autostart),
-                            subtitle = stringResource(R.string.boot_resume_text),
-                            checked = settings.bootAutoStartEnabled,
-                            enabled = isWakeConfigured,
-                            onCheckedChange = viewModel::setBootAutoStartEnabled,
-                            tag = "boot_autostart_toggle"
+                            title = stringResource(R.string.settings_ask_before_save_title),
+                            subtitle = stringResource(R.string.settings_ask_before_save_desc),
+                            checked = settings.askBeforeSavingFact,
+                            enabled = settings.autoLearnEnabled,
+                            onCheckedChange = viewModel::setAskBeforeSavingFact,
+                            tag = "settings_ask_before_saving_toggle"
                         )
 
                         HorizontalDivider(color = AuroraColors.GlassBorder)
@@ -415,7 +518,7 @@ fun SettingsScreen(
                     }
                 }
 
-                // 4. Safety Gate & KillSwitch
+                // 5. Safety Gate & KillSwitch
                 item {
                     AuroraGlassCard {
                         Row(
@@ -463,7 +566,7 @@ fun SettingsScreen(
                     }
                 }
 
-                // 5. Dev-only Voice Diagnostics Section (hidden in release builds)
+                // 6. Dev-only Voice Diagnostics Section (hidden in release builds)
                 if (BuildConfig.DEBUG) {
                     item {
                         AuroraGlassCard(
@@ -495,11 +598,7 @@ fun SettingsScreen(
                             Text(
                                 text = stringResource(
                                     R.string.settings_diagnostics_tts,
-                                    if (diagnostics.isOfflineTtsActive) {
-                                        stringResource(R.string.home_offline_voice_chip)
-                                    } else {
-                                        "${stringResource(R.string.home_neural_voice_chip)} (${diagnostics.activeVoiceId})"
-                                    }
+                                    "${stringResource(R.string.home_offline_voice_chip)} (${diagnostics.activeVoiceId})"
                                 ),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = AuroraColors.TextSecondary
@@ -526,6 +625,65 @@ fun SettingsScreen(
                     }
                 }
             }
+        }
+
+        if (showChangeKeyDialog) {
+            AlertDialog(
+                onDismissRequest = { showChangeKeyDialog = false },
+                containerColor = AuroraColors.SurfaceElevated,
+                title = {
+                    Text(
+                        text = stringResource(R.string.settings_ai_change_key),
+                        color = AuroraColors.TextPrimary
+                    )
+                },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            text = stringResource(R.string.setup_step1_desc),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = AuroraColors.TextSecondary
+                        )
+                        OutlinedTextField(
+                            value = newKeyDraft,
+                            onValueChange = { newKeyDraft = it },
+                            placeholder = {
+                                Text(
+                                    text = stringResource(R.string.setup_key_hint),
+                                    style = JarvisMonoStyle,
+                                    color = AuroraColors.TextMuted
+                                )
+                            },
+                            textStyle = JarvisMonoStyle.copy(color = AuroraColors.TextPrimary),
+                            visualTransformation = PasswordVisualTransformation(),
+                            singleLine = true,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("settings_new_key_input")
+                        )
+                    }
+                },
+                confirmButton = {
+                    AuroraPrimaryButton(
+                        text = stringResource(R.string.setup_verify_key),
+                        loading = isVerifyingKey,
+                        enabled = newKeyDraft.isNotBlank(),
+                        onClick = {
+                            viewModel.verifyAndSaveNewKey(newKeyDraft) {
+                                showChangeKeyDialog = false
+                            }
+                        },
+                        testTag = "settings_confirm_new_key_button"
+                    )
+                },
+                dismissButton = {
+                    AuroraTextButton(
+                        text = stringResource(R.string.safety_confirm_deny),
+                        onClick = { showChangeKeyDialog = false },
+                        testTag = "settings_cancel_new_key_button"
+                    )
+                }
+            )
         }
     }
 }

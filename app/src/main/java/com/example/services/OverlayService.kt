@@ -1,5 +1,6 @@
 package com.example.services
 
+import android.annotation.SuppressLint
 import android.app.Service
 import android.content.Context
 import android.content.Intent
@@ -15,22 +16,28 @@ import android.view.View
 import android.view.WindowManager
 import android.widget.LinearLayout
 import android.widget.TextView
-import androidx.core.content.ContextCompat
 import com.example.JarvisApplication
-import com.example.MainActivity
 import com.example.R
-import com.example.di.AndroidEntryPoint
+import com.example.domain.model.AssistantOrbState
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+import kotlin.math.abs
 
 /**
- * Floating draggable Aurora Violet Glass orb overlay over other apps.
- * Only starts when `Settings.canDrawOverlays(context)` is granted and user enables it.
- * Uses the Aurora violet glass style (#0E0A1F glass fill + #8B5CF6 stroke) and #FF6B87 STOP pill.
+ * Floating draggable JARVIS orb & 1-tap STOP kill-switch pill over other apps.
+ * Enforces the Setup Gate: refuses to run if the Gemini API key is missing or setup is incomplete.
  */
-@AndroidEntryPoint
 class OverlayService : Service() {
 
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var windowManager: WindowManager? = null
-    private var floatingView: View? = null
+    private var overlayView: View? = null
+    private var orbStatusDot: View? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -39,13 +46,19 @@ class OverlayService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
-        if (floatingView == null) {
-            showFloatingOrb()
+        val app = application as? JarvisApplication
+        if (app == null || !app.appContainer.apiKeyStore.exists()) {
+            stopSelf()
+            return START_NOT_STICKY
+        }
+        if (overlayView == null) {
+            attachFloatingOrb()
         }
         return START_STICKY
     }
 
-    private fun showFloatingOrb() {
+    @SuppressLint("ClickableViewAccessibility")
+    private fun attachFloatingOrb() {
         val wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
         windowManager = wm
 
@@ -66,78 +79,118 @@ class OverlayService : Service() {
         ).apply {
             gravity = Gravity.TOP or Gravity.START
             x = 24
-            y = 260
+            y = 280
         }
 
-        val density = resources.displayMetrics.density
-        val padH = (14 * density).toInt()
-        val padV = (8 * density).toInt()
-
-        val container = LinearLayout(this).apply {
+        val root = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(padH, padV, padH, padV)
+            setPadding(24, 16, 24, 16)
             background = GradientDrawable().apply {
                 shape = GradientDrawable.RECTANGLE
-                cornerRadius = 999f
-                setColor(Color.parseColor("#E60E0A1F")) // Aurora Surface #0E0A1F with glass alpha
-                setStroke((1.5f * density).toInt(), Color.parseColor("#8B5CF6")) // Violet #8B5CF6 stroke
+                cornerRadius = 64f
+                setColor(Color.parseColor("#E6101726"))
+                setStroke(2, Color.parseColor("#552DE2E6"))
             }
-            elevation = 12f * density
         }
 
-        val orbChip = TextView(this).apply {
+        val dot = View(this).apply {
+            layoutParams = LinearLayout.LayoutParams(24, 24).apply {
+                marginEnd = 16
+            }
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(Color.parseColor("#8B5CF6"))
+            }
+        }
+        orbStatusDot = dot
+
+        val titleView = TextView(this).apply {
             text = getString(R.string.overlay_chip_label)
-            setTextColor(Color.parseColor("#F5F3FF")) // Aurora TextPrimary #F5F3FF
-            textSize = 12f
-            setPadding(0, 0, (10 * density).toInt(), 0)
-            setOnClickListener {
-                val launchIntent = Intent(this@OverlayService, MainActivity::class.java).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-                }
-                startActivity(launchIntent)
-            }
+            setTextColor(Color.parseColor("#F5F3FF"))
+            textSize = 13f
+            setPadding(0, 0, 20, 0)
         }
 
-        val stopButton = TextView(this).apply {
+        val stopBtn = TextView(this).apply {
             text = getString(R.string.overlay_stop_button)
-            setTextColor(Color.parseColor("#07050F"))
-            textSize = 12f
-            setPadding((10 * density).toInt(), (4 * density).toInt(), (10 * density).toInt(), (4 * density).toInt())
+            setTextColor(Color.WHITE)
+            textSize = 11f
+            setPadding(20, 8, 20, 8)
             background = GradientDrawable().apply {
                 shape = GradientDrawable.RECTANGLE
-                cornerRadius = 999f
-                setColor(Color.parseColor("#FF6B87")) // Aurora Danger #FF6B87 STOP pill
+                cornerRadius = 36f
+                setColor(Color.parseColor("#FF6B87"))
             }
             setOnClickListener {
-                val app = applicationContext as? JarvisApplication
+                val app = application as? JarvisApplication
                 app?.appContainer?.killSwitch?.trigger("Floating overlay STOP pressed")
-                VoiceForegroundService.stopService(this@OverlayService)
-                stopSelf()
+                app?.appContainer?.voiceSessionManager?.stopAll()
+                app?.appContainer?.agentOrchestrator?.cancelActiveTurn()
             }
         }
 
-        container.addView(orbChip)
-        container.addView(stopButton)
+        root.addView(dot)
+        root.addView(titleView)
+        root.addView(stopBtn)
 
         var initialX = 0
         var initialY = 0
         var initialTouchX = 0f
         var initialTouchY = 0f
 
-        container.setOnTouchListener { _, event ->
+        root.setOnTouchListener { _, event ->
             when (event.action) {
                 MotionEvent.ACTION_DOWN -> {
                     initialX = params.x
                     initialY = params.y
                     initialTouchX = event.rawX
                     initialTouchY = event.rawY
-                    false
+                    true
                 }
                 MotionEvent.ACTION_MOVE -> {
                     params.x = initialX + (event.rawX - initialTouchX).toInt()
                     params.y = initialY + (event.rawY - initialTouchY).toInt()
-                    runCatching { wm.updateViewLayout(container, params) }
+                    runCatching { wm.updateViewLayout(root, params) }
+                    true
+                }
+                MotionEvent.ACTION_UP -> {
+                    val dx = abs(event.rawX - initialTouchX)
+                    val dy = abs(event.rawY - initialTouchY)
+                    if (dx < 12 && dy < 12) {
+                        val app = application as? JarvisApplication
+                        val container = app?.appContainer
+                        if (container != null &&
+                            !container.killSwitch.isKilled.value &&
+                            container.apiKeyStore.exists()
+                        ) {
+                            serviceScope.launch {
+                                val currentSettings = container.settingsRepository.settingsFlow.first()
+                                if (!currentSettings.setupComplete) return@launch
+                                container.voiceSessionManager.startListening(
+                                    language = currentSettings.language,
+                                    onFinalTranscript = { transcript ->
+                                        if (transcript.isNotBlank()) {
+                                            serviceScope.launch {
+                                                val reply = container.agentOrchestrator.handleUserCommand(transcript)
+                                                if (!container.killSwitch.isKilled.value) {
+                                                    container.voiceSessionManager.speakReply(
+                                                        rawText = reply,
+                                                        language = currentSettings.language,
+                                                        selectedVoiceName = currentSettings.selectedVoiceName,
+                                                        speed = currentSettings.speechSpeed
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    },
+                                    onError = {
+                                        container.voiceSessionManager.transitionToIdle()
+                                    }
+                                )
+                            }
+                        }
+                    }
                     true
                 }
                 else -> false
@@ -145,27 +198,43 @@ class OverlayService : Service() {
         }
 
         runCatching {
-            wm.addView(container, params)
-            floatingView = container
+            wm.addView(root, params)
+            overlayView = root
+        }
+
+        val app = application as? JarvisApplication
+        app?.appContainer?.agentOrchestrator?.orbState?.let { stateFlow ->
+            serviceScope.launch {
+                stateFlow.collectLatest { state ->
+                    val colorHex = when (state) {
+                        AssistantOrbState.IDLE -> "#8B5CF6"
+                        AssistantOrbState.LISTENING -> "#2DE2E6"
+                        AssistantOrbState.THINKING -> "#B388FF"
+                        AssistantOrbState.SPEAKING -> "#3DDC97"
+                        AssistantOrbState.PAUSED_KILLSWITCH -> "#FF6B87"
+                    }
+                    (orbStatusDot?.background as? GradientDrawable)?.setColor(Color.parseColor(colorHex))
+                }
+            }
         }
     }
 
     override fun onDestroy() {
-        floatingView?.let { view ->
+        overlayView?.let { view ->
             runCatching { windowManager?.removeView(view) }
         }
-        floatingView = null
+        overlayView = null
+        serviceScope.cancel()
         super.onDestroy()
     }
 
     companion object {
         fun startIfPermitted(context: Context) {
-            if (Settings.canDrawOverlays(context)) {
-                ContextCompat.startForegroundService(
-                    context,
-                    Intent(context, OverlayService::class.java)
-                )
-            }
+            if (!Settings.canDrawOverlays(context)) return
+            val app = context.applicationContext as? JarvisApplication
+            if (app != null && !app.appContainer.apiKeyStore.exists()) return
+            val intent = Intent(context, OverlayService::class.java)
+            context.startService(intent)
         }
 
         fun stop(context: Context) {

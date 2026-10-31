@@ -1,13 +1,9 @@
 package com.example.services.voice
 
 import com.example.domain.model.AppLanguage
-import com.example.domain.model.VoiceProfile
+import com.example.domain.model.DeviceVoiceOption
 import kotlinx.coroutines.flow.StateFlow
 
-/**
- * Contract for 16kHz mono PCM microphone capture used ONLY by on-device wake word engine
- * while VoiceSession is IDLE. Never used concurrently with SpeechRecognizer.
- */
 interface PcmAudioRecorder {
     val isRecording: StateFlow<Boolean>
     val rmsEnergyLevel: StateFlow<Float>
@@ -20,10 +16,6 @@ interface PcmAudioRecorder {
     fun stopRecording()
 }
 
-/**
- * Contract for Speech-to-Text (STT) with live partial transcripts, RMS level from recognizer,
- * and explicit error code reporting.
- */
 interface SpeechRecognizerWrapper {
     val isListening: StateFlow<Boolean>
     val partialTranscript: StateFlow<String>
@@ -44,18 +36,21 @@ interface SpeechRecognizerWrapper {
 }
 
 /**
- * Contract for Text-to-Speech (TTS) supporting sentence-chunked neural backend playback
- * with offline high-quality Android TTS fallback.
+ * On-device Android `TextToSpeech` contract.
+ * Exposes real installed device voices from `TextToSpeech.getVoices()`.
  */
 interface TtsEngineWrapper {
     val isSpeaking: StateFlow<Boolean>
     val firstAudioLatencyMs: StateFlow<Long>
     val isUsingOfflineFallback: StateFlow<Boolean>
+    val availableVoices: StateFlow<List<DeviceVoiceOption>>
+
+    fun refreshAvailableVoices(language: AppLanguage = AppLanguage.EN_IN)
 
     fun speak(
         text: String,
         language: AppLanguage,
-        voiceProfile: VoiceProfile = VoiceProfile.EN_IN_NEURAL2_D,
+        selectedVoiceName: String = "",
         speed: Float = 1.0f,
         pitch: Float = 1.0f,
         onComplete: () -> Unit = {}
@@ -65,10 +60,6 @@ interface TtsEngineWrapper {
     fun shutdown()
 }
 
-/**
- * Contract for on-device wake word detection ("Hey Jarvis").
- * Active ONLY when VoiceSession is IDLE and both Porcupine access key and .ppn model are present.
- */
 interface WakeWordEngine {
     val isWakeWordConfigured: Boolean
     val isMonitoring: StateFlow<Boolean>

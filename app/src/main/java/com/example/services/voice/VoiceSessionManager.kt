@@ -3,7 +3,6 @@ package com.example.services.voice
 import com.example.di.Inject
 import com.example.di.Singleton
 import com.example.domain.model.AppLanguage
-import com.example.domain.model.VoiceProfile
 import com.example.domain.model.VoiceSessionState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -21,13 +20,6 @@ import kotlin.math.max
  *
  * State machine:
  *   IDLE -> LISTENING -> THINKING -> SPEAKING -> (IDLE | LISTENING if follow-up)
- *
- * Invariants:
- * 1. Half-duplex: Microphone is NEVER open while state == THINKING or SPEAKING.
- * 2. Before TTS starts: stopListening() + cancel() recognizer and release any AudioRecord / wake-word mic.
- * 3. After TTS ends: wait [SPEAKER_TAIL_DELAY_MS] (500ms) before reopening the microphone.
- * 4. Barge-in: tapping the orb while SPEAKING immediately stops TTS and transitions to LISTENING.
- * 5. Self-echo filter: ignores any recognition result >= 70% similar to the last assistant reply.
  */
 @Singleton
 class VoiceSessionManager @Inject constructor(
@@ -44,7 +36,8 @@ class VoiceSessionManager @Inject constructor(
             "\\b(call_contact|send_sms|send_whatsapp_or_telegram|open_app_and_find|open_app|" +
                 "read_screen|tap_element|type_text|scroll_screen|wait_for_element|set_alarm|" +
                 "set_timer|adjust_volume|toggle_flashlight|play_media|navigate_maps|web_search|" +
-                "open_url|notification_action|system_navigation)\\b",
+                "open_url|notification_action|system_navigation|save_memory|forget_memory|" +
+                "search_memory|search_history)\\b",
             RegexOption.IGNORE_CASE
         )
         private val CODE_FENCE_REGEX = Regex("```[\\s\\S]*?```")
@@ -55,9 +48,6 @@ class VoiceSessionManager @Inject constructor(
         private val EMOJI_REGEX = Regex("[\\p{So}\\p{Cn}\\u2600-\\u27BF\\uD83C-\\uDBFF\\uDC00-\\uDFFF]+")
         private val MULTI_SPACE_REGEX = Regex("\\s+")
 
-        /**
-         * Strips markdown, URLs, JSON blocks, emojis, and raw tool names before speaking.
-         */
         fun sanitizeTextForTts(raw: String): String {
             if (raw.isBlank()) return ""
             var cleaned = raw
@@ -74,10 +64,6 @@ class VoiceSessionManager @Inject constructor(
             return cleaned
         }
 
-        /**
-         * Returns true if [candidateTranscript] is >= 70% similar to [lastAssistantReply],
-         * preventing the microphone from feeding speaker echo back into the agent loop.
-         */
         fun isEchoOfAssistantReply(candidateTranscript: String, lastAssistantReply: String): Boolean {
             val normCandidate = normalizeForComparison(candidateTranscript)
             val normReply = normalizeForComparison(lastAssistantReply)
@@ -111,7 +97,6 @@ class VoiceSessionManager @Inject constructor(
             val intersection = setA.intersect(setB).size.toDouble()
             val union = setA.union(setB).size.toDouble()
             val jaccard = if (union > 0) intersection / union else 0.0
-            // Also check containment of candidate tokens inside assistant reply tokens
             val candidateContainment = intersection / setA.size.toDouble()
             return max(jaccard, if (tokensA.size >= 3) candidateContainment else jaccard)
         }
@@ -169,16 +154,12 @@ class VoiceSessionManager @Inject constructor(
         syncWakeWordWithSessionState()
     }
 
-    /**
-     * Starts a half-duplex listening turn. Stops any active TTS or wake-word mic first.
-     */
     fun startListening(
         language: AppLanguage,
         onFinalTranscript: (String) -> Unit,
         onError: (String) -> Unit
     ) {
         tailTransitionJob?.cancel()
-        // Release speaker & wake word mic before opening SpeechRecognizer
         ttsEngine.stop()
         audioRecorder?.stopRecording()
         wakeWordEngine.stopMonitoring()
@@ -194,7 +175,6 @@ class VoiceSessionManager @Inject constructor(
                     return@startListening
                 }
                 if (isEchoOfAssistantReply(trimmed, lastSpokenAssistantText)) {
-                    // Self-echo detected: ignore silently and return to IDLE
                     transitionToIdle()
                     return@startListening
                 }
@@ -208,24 +188,17 @@ class VoiceSessionManager @Inject constructor(
         )
     }
 
-    /**
-     * Transitions into THINKING and guarantees the microphone is closed.
-     */
     fun enterThinking() {
         tailTransitionJob?.cancel()
         closeMicrophoneImmediately()
         _state.value = VoiceSessionState.THINKING
     }
 
-    /**
-     * Speaks [rawText] after closing the microphone. Waits [SPEAKER_TAIL_DELAY_MS] after
-     * playback completes before either opening follow-up listening or returning to IDLE.
-     */
     fun speakReply(
         rawText: String,
         language: AppLanguage,
-        voiceProfile: VoiceProfile,
-        speed: Float,
+        selectedVoiceName: String = "",
+        speed: Float = 1.0f,
         followUpListening: Boolean = false,
         onFollowUpReady: () -> Unit = {},
         onFinished: () -> Unit = {}
@@ -246,7 +219,7 @@ class VoiceSessionManager @Inject constructor(
         ttsEngine.speak(
             text = sanitized,
             language = language,
-            voiceProfile = voiceProfile,
+            selectedVoiceName = selectedVoiceName,
             speed = speed,
             pitch = 1.0f,
             onComplete = {
@@ -265,9 +238,6 @@ class VoiceSessionManager @Inject constructor(
         )
     }
 
-    /**
-     * Barge-in handler: if currently SPEAKING, stops TTS immediately and starts listening.
-     */
     fun bargeInAndListen(
         language: AppLanguage,
         onFinalTranscript: (String) -> Unit,
@@ -278,9 +248,6 @@ class VoiceSessionManager @Inject constructor(
         startListening(language, onFinalTranscript, onError)
     }
 
-    /**
-     * Immediately stops all mic capture and speaker output and resets state to IDLE.
-     */
     fun stopAll() {
         tailTransitionJob?.cancel()
         closeMicrophoneImmediately()

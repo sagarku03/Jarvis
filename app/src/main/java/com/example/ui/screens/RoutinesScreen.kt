@@ -9,8 +9,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -18,14 +16,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Switch
@@ -48,6 +41,9 @@ import com.example.domain.model.RoutineItem
 import com.example.domain.model.RoutineTriggerType
 import com.example.ui.components.AuroraBackground
 import com.example.ui.components.AuroraGlassCard
+import com.example.ui.components.AuroraIconButton
+import com.example.ui.components.AuroraPrimaryButton
+import com.example.ui.components.AuroraSecondaryButton
 import com.example.ui.components.AuroraSectionHeader
 import com.example.ui.components.AuroraStatusPill
 import com.example.ui.theme.AuroraColors
@@ -176,7 +172,12 @@ fun RoutinesScreen(viewModel: RoutinesViewModel) {
                             )
                         )
 
-                        Button(
+                        AuroraPrimaryButton(
+                            text = stringResource(R.string.routines_save_button),
+                            leadingIcon = Icons.Default.Add,
+                            enabled = titleDraft.isNotBlank() &&
+                                triggerValueDraft.isNotBlank() &&
+                                actionsDraft.isNotBlank(),
                             onClick = {
                                 viewModel.saveRoutine(
                                     title = titleDraft,
@@ -188,22 +189,9 @@ fun RoutinesScreen(viewModel: RoutinesViewModel) {
                                 triggerValueDraft = ""
                                 actionsDraft = ""
                             },
-                            enabled = titleDraft.isNotBlank() &&
-                                triggerValueDraft.isNotBlank() &&
-                                actionsDraft.isNotBlank(),
-                            colors = ButtonDefaults.buttonColors(containerColor = AuroraColors.Violet500),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(48.dp)
-                                .testTag("save_routine_button")
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Add,
-                                contentDescription = stringResource(R.string.routines_save_button)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(stringResource(R.string.routines_save_button))
-                        }
+                            modifier = Modifier.fillMaxWidth(),
+                            testTag = "save_routine_button"
+                        )
                     }
                 }
 
@@ -278,37 +266,21 @@ private fun RoutineItemCard(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            OutlinedButton(
+            AuroraSecondaryButton(
+                text = stringResource(R.string.routines_run_now),
+                leadingIcon = Icons.Default.PlayArrow,
+                iconTint = AuroraColors.Aqua,
                 onClick = onRunNow,
-                modifier = Modifier
-                    .height(48.dp)
-                    .testTag("run_routine_${item.id}")
-            ) {
-                Icon(
-                    imageVector = Icons.Default.PlayArrow,
-                    contentDescription = stringResource(R.string.routines_run_now),
-                    tint = AuroraColors.Aqua,
-                    modifier = Modifier.size(18.dp)
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    text = stringResource(R.string.routines_run_now),
-                    color = AuroraColors.TextPrimary
-                )
-            }
+                testTag = "run_routine_${item.id}"
+            )
 
-            IconButton(
-                onClick = onDelete,
-                modifier = Modifier
-                    .size(48.dp)
-                    .testTag("delete_routine_${item.id}")
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Delete,
-                    contentDescription = stringResource(R.string.routines_delete),
-                    tint = AuroraColors.CoralDanger
-                )
-            }
+            AuroraIconButton(
+                icon = Icons.Default.Delete,
+                contentDescription = stringResource(R.string.routines_delete),
+                testTag = "delete_routine_${item.id}",
+                tint = AuroraColors.CoralDanger,
+                onClick = onDelete
+            )
         }
     }
 }

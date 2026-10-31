@@ -8,6 +8,7 @@ import androidx.activity.enableEdgeToEdge
 import com.example.di.AndroidEntryPoint
 import com.example.di.AppContainer
 import com.example.services.BootCompletedReceiver
+import com.example.services.JarvisTileService
 import com.example.services.VoiceForegroundService
 import com.example.ui.navigation.JarvisRootApp
 import com.example.ui.theme.JarvisTheme
@@ -45,6 +46,10 @@ class MainActivity : ComponentActivity() {
         intent ?: return
         if (intent.getBooleanExtra(BootCompletedReceiver.EXTRA_RESUME_WAKE_WORD_FROM_BOOT, false)) {
             intent.removeExtra(BootCompletedReceiver.EXTRA_RESUME_WAKE_WORD_FROM_BOOT)
+            VoiceForegroundService.startService(this)
+        }
+        if (intent.getBooleanExtra(JarvisTileService.EXTRA_START_PUSH_TO_TALK, false)) {
+            intent.removeExtra(JarvisTileService.EXTRA_START_PUSH_TO_TALK)
             VoiceForegroundService.startService(this)
         }
     }

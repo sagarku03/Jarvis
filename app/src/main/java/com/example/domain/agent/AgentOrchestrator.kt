@@ -8,7 +8,6 @@ import com.example.domain.model.AssistantOrbState
 import com.example.domain.model.ChatMessage
 import com.example.domain.model.MessageRole
 import com.example.domain.model.ScreenContextSnapshot
-import com.example.domain.model.ToolCallSpec
 import com.example.domain.model.ToolExecutionResult
 import com.example.domain.repository.ActivityLogRepository
 import com.example.domain.repository.AgentBackendRepository
@@ -20,8 +19,14 @@ import com.example.domain.safety.KillSwitch
 import com.example.domain.safety.SafetyGate
 import com.example.domain.tool.ToolRegistry
 import com.example.services.JarvisAccessibilityService
+import com.squareup.moshi.Moshi
+import com.squareup.moshi.Types
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
@@ -31,10 +36,11 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Multi-step Agent Orchestrator loop:
- * User speech/text -> Routine check -> Context assembly -> Backend /v1/agent/step ->
+ * User speech/text -> Routine check -> Context assembly -> Gemini :generateContent ->
  * Tool Call(s) -> SafetyGate -> Tool Execution -> (Read Screen if follow-up required) ->
  * Feed Tool Result back -> Repeat (max 6 steps, 60s active execution budget excluding human confirmation wait) -> Final Reply.
  */
@@ -48,7 +54,8 @@ class AgentOrchestrator @Inject constructor(
     private val settingsRepository: SettingsRepository,
     private val toolRegistry: ToolRegistry,
     private val safetyGate: SafetyGate,
-    private val killSwitch: KillSwitch
+    private val killSwitch: KillSwitch,
+    private val memoryLearner: MemoryLearner? = null
 ) {
     companion object {
         const val MAX_STEPS_PER_TURN = 6
@@ -60,12 +67,19 @@ class AgentOrchestrator @Inject constructor(
             "send_sms",
             "send_whatsapp_or_telegram",
             "tap_element",
-            "type_text"
+            "type_text",
+            "forget_memory"
         )
 
         fun isNonIdempotentTool(toolName: String): Boolean =
             toolName in NON_IDEMPOTENT_TOOLS
     }
+
+    private val backgroundLearnScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val moshi = Moshi.Builder().build()
+    private val argsAdapter = moshi.adapter<Map<String, String>>(
+        Types.newParameterizedType(Map::class.java, String::class.java, String::class.java)
+    )
 
     private val _orbState = MutableStateFlow(AssistantOrbState.IDLE)
     val orbState: StateFlow<AssistantOrbState> = _orbState.asStateFlow()
@@ -76,7 +90,14 @@ class AgentOrchestrator @Inject constructor(
     private val _lastAgentStepLatencyMs = MutableStateFlow(0L)
     val lastAgentStepLatencyMs: StateFlow<Long> = _lastAgentStepLatencyMs.asStateFlow()
 
+    private val _keyRejectedBanner = MutableStateFlow(false)
+    val keyRejectedBanner: StateFlow<Boolean> = _keyRejectedBanner.asStateFlow()
+
     private var activeJob: Job? = null
+
+    fun clearKeyRejectedBanner() {
+        _keyRejectedBanner.value = false
+    }
 
     fun setOrbState(state: AssistantOrbState) {
         if (killSwitch.isKilled.value) {
@@ -108,7 +129,6 @@ class AgentOrchestrator @Inject constructor(
             return@coroutineScope msg
         }
 
-        // Check if user command triggers a saved Voice Routine
         val matchedRoutine = try {
             routineRepository.findMatchingVoiceRoutine(userText)
         } catch (ce: CancellationException) {
@@ -147,21 +167,30 @@ class AgentOrchestrator @Inject constructor(
                 )
             } catch (_: TurnTimeoutException) {
                 val timeoutMsg = "Turn timed out after 60 seconds. Stopping safely."
-                chatRepository.appendMessage(
-                    ChatMessage(role = MessageRole.ASSISTANT, content = timeoutMsg)
-                )
+                withContext(NonCancellable) {
+                    chatRepository.appendMessage(
+                        ChatMessage(role = MessageRole.ASSISTANT, content = timeoutMsg)
+                    )
+                }
                 _lastResponseText.value = timeoutMsg
                 _orbState.value = AssistantOrbState.IDLE
                 finalOutput = timeoutMsg
             } catch (_: TimeoutCancellationException) {
                 val timeoutMsg = "Turn timed out after 60 seconds. Stopping safely."
-                chatRepository.appendMessage(
-                    ChatMessage(role = MessageRole.ASSISTANT, content = timeoutMsg)
-                )
+                withContext(NonCancellable) {
+                    chatRepository.appendMessage(
+                        ChatMessage(role = MessageRole.ASSISTANT, content = timeoutMsg)
+                    )
+                }
                 _lastResponseText.value = timeoutMsg
                 _orbState.value = AssistantOrbState.IDLE
                 finalOutput = timeoutMsg
             } catch (ce: CancellationException) {
+                withContext(NonCancellable) {
+                    chatRepository.appendMessage(
+                        ChatMessage(role = MessageRole.ASSISTANT, content = "[Cancelled]")
+                    )
+                }
                 throw ce
             }
         }
@@ -177,16 +206,23 @@ class AgentOrchestrator @Inject constructor(
         val settings = settingsRepository.settingsFlow.first()
         var activeExecutionElapsedMs = 0L
 
-        // Save user message
+        val conversationId = chatRepository.getOrCreateActiveConversationId()
+
+        // Immediately write user message to messages table
         chatRepository.appendMessage(
             ChatMessage(
+                conversationId = conversationId,
                 role = MessageRole.USER,
                 content = userText
             )
         )
 
-        // Opportunistically extract "remember that X is Y" into local Memory
-        extractMemoryIfRequested(userText)
+        // Opportunistically extract explicit "remember that X is Y" / "my favourite X is Y" immediately
+        // so same-turn or immediate next-turn tests see it even before background job finishes
+        memoryLearner?.extractExplicitHeuristicFacts(
+            userText = userText,
+            isSensitiveScreen = SafetyGate.isSensitiveScreen(initialScreenContext)
+        ) ?: extractFallbackRememberDirective(userText)
 
         _orbState.value = AssistantOrbState.THINKING
 
@@ -208,7 +244,12 @@ class AgentOrchestrator @Inject constructor(
 
             stepCount++
             val recentMessages = chatRepository.getRecentContextMessages(limit = 20)
-            val memories = memoryRepository.getAllMemoriesSnapshot()
+            val memories = memoryRepository.searchTopFactsForContext(userText, limit = 15)
+                .let { matched ->
+                    val all = memoryRepository.getAllMemoriesSnapshot()
+                    (all.filter { it.pinned } + matched + all).distinctBy { it.id }.take(25)
+                }
+            val summaries = chatRepository.getRecentSummaries(limit = 2)
             val availableTools = toolRegistry.getAvailableDescriptors(
                 fullControlMode = BuildConfig.FULL_CONTROL_MODE,
                 storeSafeMode = BuildConfig.STORE_SAFE_MODE
@@ -220,15 +261,19 @@ class AgentOrchestrator @Inject constructor(
                 tools = availableTools,
                 memories = memories,
                 screenContext = currentScreenSnapshot,
-                language = settings.language
+                language = settings.language,
+                summaries = summaries
             )
             val stepDurationMs = (System.currentTimeMillis() - stepStartMs).coerceAtLeast(1L)
             activeExecutionElapsedMs += stepDurationMs
             _lastAgentStepLatencyMs.value = stepDurationMs
 
+            if (stepDecision.keyRejected) {
+                _keyRejectedBanner.value = true
+            }
+
             if (stepDecision.toolCalls.isEmpty()) {
-                finalReply = stepDecision.assistantText
-                    ?: "Done."
+                finalReply = stepDecision.assistantText ?: "Done."
                 break
             }
 
@@ -242,13 +287,17 @@ class AgentOrchestrator @Inject constructor(
                 }
 
                 val tool = toolRegistry.getTool(toolCall.name)
+                val serializedArgs = runCatching { argsAdapter.toJson(toolCall.args) }.getOrNull()
+
                 if (tool == null) {
                     val missingOutput = "Tool '${toolCall.name}' is not registered."
                     chatRepository.appendMessage(
                         ChatMessage(
+                            conversationId = conversationId,
                             role = MessageRole.TOOL,
                             content = missingOutput,
-                            toolName = toolCall.name
+                            toolName = toolCall.name,
+                            toolArgsJson = serializedArgs
                         )
                     )
                     stepOutputs.add(missingOutput)
@@ -267,7 +316,6 @@ class AgentOrchestrator @Inject constructor(
                 var effectiveToolCall = toolCall
                 if (!decision.allowedImmediately) {
                     if (decision.requiresConfirmation) {
-                        // Confirmation wait time is EXCLUDED from the 60s active execution timeout
                         val approval = safetyGate.requestUserApproval(
                             toolCall = toolCall,
                             tool = tool,
@@ -288,9 +336,11 @@ class AgentOrchestrator @Inject constructor(
                             )
                             chatRepository.appendMessage(
                                 ChatMessage(
+                                    conversationId = conversationId,
                                     role = MessageRole.TOOL,
                                     content = deniedMsg,
-                                    toolName = toolCall.name
+                                    toolName = toolCall.name,
+                                    toolArgsJson = serializedArgs
                                 )
                             )
                             finalReply = deniedMsg
@@ -322,10 +372,9 @@ class AgentOrchestrator @Inject constructor(
                     }
                 }
 
-                // Execute tool: NEVER retry non-idempotent tools (calls, SMS, WhatsApp, taps, text input)
                 val startMs = System.currentTimeMillis()
                 val maxAttempts = if (isNonIdempotentTool(tool.name)) 1 else 2
-                var execResult: ToolExecutionResult = ToolExecutionResult(
+                var execResult = ToolExecutionResult(
                     toolName = tool.name,
                     success = false,
                     outputEn = "Not executed"
@@ -363,17 +412,19 @@ class AgentOrchestrator @Inject constructor(
                     )
                 )
 
+                val effectiveArgsJson = runCatching { argsAdapter.toJson(effectiveToolCall.args) }.getOrNull()
                 chatRepository.appendMessage(
                     ChatMessage(
+                        conversationId = conversationId,
                         role = MessageRole.TOOL,
                         content = localizedResult,
-                        toolName = tool.name
+                        toolName = tool.name,
+                        toolArgsJson = effectiveArgsJson
                     )
                 )
 
                 stepOutputs.add(localizedResult)
 
-                // Refresh screen snapshot after UI automation tools
                 if (execResult.requiresFollowUpScreenRead || tool.requiresFullControlMode) {
                     val refreshed = JarvisAccessibilityService.captureCurrentScreenSnapshot()
                     if (refreshed != null) {
@@ -401,6 +452,7 @@ class AgentOrchestrator @Inject constructor(
 
         chatRepository.appendMessage(
             ChatMessage(
+                conversationId = conversationId,
                 role = MessageRole.ASSISTANT,
                 content = finalReply
             )
@@ -413,10 +465,22 @@ class AgentOrchestrator @Inject constructor(
             AssistantOrbState.IDLE
         }
 
+        val capturedScreen = currentScreenSnapshot
+        backgroundLearnScope.launch {
+            runCatching {
+                memoryLearner?.extractFactsFromTurn(
+                    userText = userText,
+                    assistantReply = finalReply,
+                    screenContext = capturedScreen
+                )
+                memoryLearner?.summarizeConversationIfNeeded(conversationId = conversationId)
+            }
+        }
+
         return@coroutineScope finalReply
     }
 
-    private suspend fun extractMemoryIfRequested(userText: String) {
+    private suspend fun extractFallbackRememberDirective(userText: String) {
         val lower = userText.lowercase()
         if (lower.startsWith("remember ") || lower.contains("remember that ")) {
             val cleaned = userText
@@ -424,10 +488,10 @@ class AgentOrchestrator @Inject constructor(
                 .trim()
             if (cleaned.isNotEmpty()) {
                 val parts = cleaned.split(" is ", " = ", limit = 2)
-                val key = parts.firstOrNull()?.trim()?.take(40) ?: "Note"
+                val key = parts.firstOrNull()?.trim()?.take(40) ?: "note"
                 val value = parts.getOrNull(1)?.trim() ?: cleaned
                 memoryRepository.upsertMemory(
-                    category = "USER_PREFERENCE",
+                    category = "PREFERENCE",
                     key = key,
                     value = value
                 )

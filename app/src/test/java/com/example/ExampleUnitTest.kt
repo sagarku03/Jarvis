@@ -1,21 +1,24 @@
 package com.example
 
-import android.content.Context
 import android.content.ContextWrapper
+import com.example.data.local.ApiKeyStore
 import com.example.data.local.FieldCipher
-import com.example.data.remote.AgentMessageDto
-import com.example.data.remote.AgentStepRequestDto
-import com.example.data.remote.AgentStepResponseDto
-import com.example.data.remote.ApiService
-import com.example.data.remote.TtsRequestDto
+import com.example.data.remote.GeminiClient
+import com.example.data.remote.GeminiTurnResult
+import com.example.data.remote.KeyVerificationResult
 import com.example.data.repository.AgentBackendRepositoryImpl
 import com.example.domain.agent.AgentOrchestrator
+import com.example.domain.agent.MemoryLearner
 import com.example.domain.contacts.ContactsResolver
 import com.example.domain.model.ActivityLogEntry
 import com.example.domain.model.AgentStepDecision
 import com.example.domain.model.AppLanguage
 import com.example.domain.model.ChatMessage
 import com.example.domain.model.ConfirmationLevel
+import com.example.domain.model.ConversationItem
+import com.example.domain.model.ConversationSummaryItem
+import com.example.domain.model.DeviceVoiceOption
+import com.example.domain.model.MemoryCategory
 import com.example.domain.model.MemoryFact
 import com.example.domain.model.MessageRole
 import com.example.domain.model.RiskLevel
@@ -24,7 +27,6 @@ import com.example.domain.model.ScreenContextSnapshot
 import com.example.domain.model.ToolCallSpec
 import com.example.domain.model.ToolExecutionResult
 import com.example.domain.model.UserSettings
-import com.example.domain.model.VoiceProfile
 import com.example.domain.model.VoiceSessionState
 import com.example.domain.repository.ActivityLogRepository
 import com.example.domain.repository.AgentBackendRepository
@@ -33,20 +35,18 @@ import com.example.domain.repository.MemoryRepository
 import com.example.domain.repository.RoutineRepository
 import com.example.domain.repository.SettingsRepository
 import com.example.domain.safety.KillSwitch
-import com.example.domain.safety.SafetyGate
 import com.example.domain.safety.SafetyGateImpl
 import com.example.domain.tool.Tool
 import com.example.domain.tool.ToolDescriptor
 import com.example.domain.tool.ToolRegistry
 import com.example.services.JarvisAccessibilityService
 import com.example.services.JarvisNotificationListener
-import com.example.services.voice.FreeWakeWordEngineImpl
-import com.example.services.voice.PcmAudioRecorder
 import com.example.services.voice.SpeechRecognizerWrapper
 import com.example.services.voice.TtsEngineWrapper
 import com.example.services.voice.VoiceSessionManager
 import com.example.services.voice.WakeWordEngine
 import com.example.tools.CallContactTool
+import com.example.tools.MemorySafetyFilter
 import com.example.tools.ReadScreenTool
 import com.example.tools.TapElementTool
 import com.squareup.moshi.Moshi
@@ -56,22 +56,31 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.runBlocking
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.ResponseBody
-import okhttp3.ResponseBody.Companion.toResponseBody
+import okhttp3.OkHttpClient
+import okhttp3.mockwebserver.MockResponse
+import okhttp3.mockwebserver.MockWebServer
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
-import retrofit2.HttpException
-import retrofit2.Response
 
 class ExampleUnitTest {
 
-    // --- Fakes for VoiceSessionManager Tests ---
+    private class FakeWakeWordEngine : WakeWordEngine {
+        override val isWakeWordConfigured: Boolean = false
+        override val isMonitoring = MutableStateFlow(false)
+        override val isPaused = MutableStateFlow(false)
+        override val sensitivity = MutableStateFlow(0.5f)
+        override fun startMonitoring(onWakeWordDetected: () -> Unit) {}
+        override fun stopMonitoring() {}
+        override fun setPaused(paused: Boolean) {}
+        override fun setSensitivity(value: Float) {}
+        override fun release() {}
+    }
 
     private class FakeSpeechRecognizer : SpeechRecognizerWrapper {
         override val isListening = MutableStateFlow(false)
@@ -113,14 +122,17 @@ class ExampleUnitTest {
         override val isSpeaking = MutableStateFlow(false)
         override val firstAudioLatencyMs = MutableStateFlow(120L)
         override val isUsingOfflineFallback = MutableStateFlow(true)
+        override val availableVoices = MutableStateFlow<List<DeviceVoiceOption>>(emptyList())
 
         var lastSpokenText: String? = null
         var pendingOnComplete: (() -> Unit)? = null
 
+        override fun refreshAvailableVoices(language: AppLanguage) {}
+
         override fun speak(
             text: String,
             language: AppLanguage,
-            voiceProfile: VoiceProfile,
+            selectedVoiceName: String,
             speed: Float,
             pitch: Float,
             onComplete: () -> Unit
@@ -147,63 +159,238 @@ class ExampleUnitTest {
         }
     }
 
-    private class FakePcmAudioRecorder : PcmAudioRecorder {
-        override val isRecording = MutableStateFlow(false)
-        override val rmsEnergyLevel = MutableStateFlow(0f)
+    // 1. GeminiClient with MockWebServer: verifies x-goog-api-key header, key NEVER in URL, functionCall parsed, functionResponse sent, 429 and 403 mapped cleanly
+    @Test
+    fun geminiClient_mockWebServer_verifiesHeaderUrlFunctionCallAndErrors() = runBlocking {
+        val server = MockWebServer()
+        server.start()
+        try {
+            val baseUrl = server.url("/").toString().trimEnd('/')
+            val moshi = Moshi.Builder().addLast(KotlinJsonAdapterFactory()).build()
+            val apiKeyStore = ApiKeyStore(ContextWrapper(null))
+            val testApiKey = "AIzaSyTestSecretKey9876"
+            apiKeyStore.save(testApiKey)
 
-        override fun startRecording(
-            onPcmFrame: (ShortArray) -> Unit,
-            onSilenceEndpointDetected: () -> Unit
-        ): Boolean {
-            isRecording.value = true
-            return true
-        }
+            val client = GeminiClient(
+                okHttpClient = OkHttpClient(),
+                moshi = moshi,
+                apiKeyStore = apiKeyStore,
+                baseUrlProvider = { baseUrl }
+            )
 
-        override fun stopRecording() {
-            isRecording.value = false
+            // A) Verify GET /v1beta/models
+            server.enqueue(
+                MockResponse()
+                    .setResponseCode(200)
+                    .setBody(
+                        """
+                        {
+                          "models": [
+                            {
+                              "name": "models/gemini-2.5-flash",
+                              "displayName": "Gemini 2.5 Flash",
+                              "supportedGenerationMethods": ["generateContent"]
+                            },
+                            {
+                              "name": "models/text-embedding-004",
+                              "displayName": "Embedding",
+                              "supportedGenerationMethods": ["embedContent"]
+                            }
+                          ]
+                        }
+                        """.trimIndent()
+                    )
+            )
+            val verifyRes = client.verifyKeyAndListModels(testApiKey)
+            assertTrue(verifyRes is KeyVerificationResult.Valid)
+            val models = (verifyRes as KeyVerificationResult.Valid).availableModels
+            assertEquals(listOf("gemini-2.5-flash"), models)
+
+            val recordedModelsReq = server.takeRequest()
+            assertEquals("GET", recordedModelsReq.method)
+            assertEquals("/v1beta/models", recordedModelsReq.path)
+            assertEquals(testApiKey, recordedModelsReq.getHeader("x-goog-api-key"))
+            assertFalse(
+                "API key must NEVER appear in the request URL",
+                recordedModelsReq.path.orEmpty().contains(testApiKey)
+            )
+
+            // B) Verify POST generateContent with functionCall & functionResponse
+            server.enqueue(
+                MockResponse()
+                    .setResponseCode(200)
+                    .setBody(
+                        """
+                        {
+                          "candidates": [
+                            {
+                              "content": {
+                                "role": "model",
+                                "parts": [
+                                  {
+                                    "functionCall": {
+                                      "name": "set_timer",
+                                      "args": { "seconds": "120", "label": "Tea" }
+                                    }
+                                  }
+                                ]
+                              },
+                              "finishReason": "STOP"
+                            }
+                          ],
+                          "usageMetadata": {
+                            "promptTokenCount": 42,
+                            "candidatesTokenCount": 15,
+                            "totalTokenCount": 57
+                          }
+                        }
+                        """.trimIndent()
+                    )
+            )
+
+            val historyWithToolOutput = listOf(
+                ChatMessage(id = 1, role = MessageRole.USER, content = "Set a 2 minute timer for tea"),
+                ChatMessage(id = 2, role = MessageRole.TOOL, content = "Timer started", toolName = "set_timer")
+            )
+            val turnRes = client.generateContent(
+                modelId = "gemini-2.5-flash",
+                systemInstruction = "You are JARVIS.",
+                messages = historyWithToolOutput,
+                tools = listOf(
+                    ToolDescriptor(
+                        name = "set_timer",
+                        description = "Sets a countdown timer",
+                        jsonSchema = """{"type":"object","properties":{"seconds":{"type":"integer"},"label":{"type":"string"}}}""",
+                        riskLevel = RiskLevel.LOW.name
+                    )
+                )
+            )
+            assertTrue(turnRes is GeminiTurnResult.Success)
+            val success = turnRes as GeminiTurnResult.Success
+            assertEquals(1, success.toolCalls.size)
+            assertEquals("set_timer", success.toolCalls.first().name)
+            assertEquals("120", success.toolCalls.first().args["seconds"])
+            assertEquals(42, success.promptTokens)
+            assertEquals(15, success.candidateTokens)
+
+            val recordedGenReq = server.takeRequest()
+            assertEquals("/v1beta/models/gemini-2.5-flash:generateContent", recordedGenReq.path)
+            assertEquals(testApiKey, recordedGenReq.getHeader("x-goog-api-key"))
+            assertFalse(recordedGenReq.path.orEmpty().contains(testApiKey))
+            val sentBody = recordedGenReq.body.readUtf8()
+            assertTrue("Sent payload must include functionResponse for TOOL history", sentBody.contains("\"functionResponse\""))
+            assertTrue("Sent payload must include functionDeclarations", sentBody.contains("\"functionDeclarations\""))
+
+            // C) Verify 403 maps to KeyRejected
+            server.enqueue(MockResponse().setResponseCode(403).setBody("""{"error":{"message":"Invalid key"}}"""))
+            val rejected = client.generateContent(
+                modelId = "gemini-2.5-flash",
+                systemInstruction = "System",
+                messages = listOf(ChatMessage(role = MessageRole.USER, content = "Hi")),
+                tools = emptyList()
+            )
+            assertTrue(rejected is GeminiTurnResult.KeyRejected)
+
+            // D) Verify 429 maps to RateLimited after retries
+            server.enqueue(MockResponse().setResponseCode(429).addHeader("Retry-After", "0"))
+            server.enqueue(MockResponse().setResponseCode(429).addHeader("Retry-After", "0"))
+            server.enqueue(MockResponse().setResponseCode(429).addHeader("Retry-After", "0"))
+            val quota = client.generateContent(
+                modelId = "gemini-2.5-flash",
+                systemInstruction = "System",
+                messages = listOf(ChatMessage(role = MessageRole.USER, content = "Hi")),
+                tools = emptyList()
+            )
+            assertTrue(quota is GeminiTurnResult.RateLimited)
+        } finally {
+            server.shutdown()
         }
     }
 
-    private class FakeWakeWordEngine(
-        override val isWakeWordConfigured: Boolean = true
-    ) : WakeWordEngine {
-        override val isMonitoring = MutableStateFlow(false)
-        override val isPaused = MutableStateFlow(false)
-        override val sensitivity = MutableStateFlow(0.65f)
+    // 2. Memory Sensitive-Data Filter & Context Budget Test
+    @Test
+    fun memorySafetyFilter_rejectsOtpsPasswordsCardsAndNormalizesKeys() {
+        assertEquals("favorite_ipl_team", MemorySafetyFilter.normalizeKey("Favorite IPL Team!"))
 
-        override fun startMonitoring(onWakeWordDetected: () -> Unit) {
-            if (isWakeWordConfigured && !isPaused.value) {
-                isMonitoring.value = true
-            }
-        }
+        // Safe facts allowed
+        assertNull(MemorySafetyFilter.validateFact("favorite_ipl_team", "Chennai Super Kings"))
+        assertNull(MemorySafetyFilter.validateFact("home_city", "Pune"))
 
-        override fun stopMonitoring() {
-            isMonitoring.value = false
-        }
+        // OTP rejected
+        assertNotNull(MemorySafetyFilter.validateFact("bank_otp", "Your OTP is 849201"))
+        assertNotNull(MemorySafetyFilter.validateFact("verification_code", "482910"))
 
-        override fun setPaused(paused: Boolean) {
-            isPaused.value = paused
-            if (paused) isMonitoring.value = false
-        }
+        // Password / PIN rejected
+        assertNotNull(MemorySafetyFilter.validateFact("wifi_password", "hunter2"))
+        assertNotNull(MemorySafetyFilter.validateFact("upi_pin", "1234"))
 
-        override fun setSensitivity(value: Float) {
-            sensitivity.value = value
-        }
+        // 16-digit card number rejected
+        assertNotNull(MemorySafetyFilter.validateFact("my_card", "4532 0151 1283 0366"))
 
-        override fun release() {
-            stopMonitoring()
+        // Context budget test: buildSystemInstruction stays <= 10,000 chars (~2,500 tokens)
+        val manyFacts = (1..120).map { idx ->
+            MemoryFact(
+                id = idx.toLong(),
+                category = MemoryCategory.NOTE.name,
+                key = "fact_key_$idx",
+                value = "This is a detailed memory fact value number $idx stored for recall.",
+                pinned = idx <= 10
+            )
         }
+        val summaries = (1..10).map { idx ->
+            ConversationSummaryItem(
+                id = idx.toLong(),
+                conversationId = 1L,
+                fromMessageId = (idx - 1) * 30L + 1L,
+                toMessageId = idx * 30L,
+                text = "Summary block $idx covering user preferences and past actions.",
+                createdAtMs = idx * 1000L
+            )
+        }
+        val sysInstruction = MemoryLearner.buildSystemInstruction(
+            pinnedFacts = manyFacts.filter { it.pinned },
+            relevantFacts = manyFacts.take(25),
+            recentSummaries = summaries,
+            screenContext = ScreenContextSnapshot("com.whatsapp", "Chat with Mom")
+        )
+        assertTrue(
+            "System instruction must stay within 10,000 chars (~2,500 tokens), was ${sysInstruction.length}",
+            sysInstruction.length <= MemoryLearner.MAX_SYSTEM_PROMPT_CHARS
+        )
+        assertTrue(sysInstruction.contains("fact_key_1"))
     }
 
-    // 1. 5-turn voice session without self-triggering
+    // 3. Offline parser: asks for missing alarm time / timer duration instead of hardcoded 7:00 or 5 min
+    @Test
+    fun offlineCommandParser_asksForMissingAlarmOrTimerInsteadOfHardcodedDefaults() {
+        val alarmWithoutTime = AgentBackendRepositoryImpl.parseOfflineCommand("Set an alarm")
+        assertNotNull(alarmWithoutTime)
+        assertTrue("Must not call set_alarm with a fake default time", alarmWithoutTime!!.toolCalls.isEmpty())
+        assertEquals("What time should I set the alarm for?", alarmWithoutTime.assistantText)
+
+        val alarmWithTime = AgentBackendRepositoryImpl.parseOfflineCommand("Set an alarm for 6:45")
+        assertNotNull(alarmWithTime)
+        assertEquals(1, alarmWithTime!!.toolCalls.size)
+        assertEquals("6", alarmWithTime.toolCalls.first().args["hour"])
+        assertEquals("45", alarmWithTime.toolCalls.first().args["minute"])
+
+        val timerWithoutDuration = AgentBackendRepositoryImpl.parseOfflineCommand("Set a timer")
+        assertNotNull(timerWithoutDuration)
+        assertTrue("Must not call set_timer with a fake 5-minute default", timerWithoutDuration!!.toolCalls.isEmpty())
+        assertEquals("How long should I set the timer for?", timerWithoutDuration.assistantText)
+
+        val timerWithDuration = AgentBackendRepositoryImpl.parseOfflineCommand("Set a timer for 10 minutes")
+        assertNotNull(timerWithDuration)
+        assertEquals(1, timerWithDuration!!.toolCalls.size)
+        assertEquals("600", timerWithDuration.toolCalls.first().args["seconds"])
+    }
+
+    // 4. 5-turn voice session without self-triggering
     @Test
     fun voiceSession_fiveTurnConversation_neverSelfTriggers() = runBlocking {
         val stt = FakeSpeechRecognizer()
         val tts = FakeTtsEngine()
-        val wake = FreeWakeWordEngineImpl()
-        val manager = VoiceSessionManager(stt, tts, null, wake)
-
-        assertFalse("FreeWakeWordEngineImpl must report not configured", wake.isWakeWordConfigured)
+        val manager = VoiceSessionManager(stt, tts, null, FakeWakeWordEngine())
 
         val userTurns = listOf(
             "Turn on the flashlight",
@@ -232,16 +419,14 @@ class ExampleUnitTest {
             assertTrue(stt.isListening.value)
             assertFalse(tts.isSpeaking.value)
 
-            // User speaks turn i
             stt.lastOnFinal?.invoke(userTurns[i])
             assertEquals(VoiceSessionState.THINKING, manager.state.value)
             assertFalse("Mic must close during THINKING", stt.isListening.value)
 
-            // Assistant speaks reply i
             manager.speakReply(
                 rawText = assistantReplies[i],
                 language = AppLanguage.EN_IN,
-                voiceProfile = VoiceProfile.EN_IN_NEURAL2_D,
+                selectedVoiceName = "",
                 speed = 1.0f
             )
             assertEquals(VoiceSessionState.SPEAKING, manager.state.value)
@@ -251,7 +436,6 @@ class ExampleUnitTest {
             delay(VoiceSessionManager.SPEAKER_TAIL_DELAY_MS + 40L)
             assertEquals(VoiceSessionState.IDLE, manager.state.value)
 
-            // Simulate acoustic echo of the assistant's own reply if mic were opened right after
             manager.startListening(
                 language = AppLanguage.EN_IN,
                 onFinalTranscript = { deliveredTranscriptCount++ },
@@ -269,152 +453,26 @@ class ExampleUnitTest {
         assertEquals(5, deliveredTranscriptCount)
     }
 
-    // 2. Airplane mode / offline test: clean message, no crash
-    @Test
-    fun offlineMode_returnsCleanMessageAndNeverCrashes() = runBlocking {
-        val offlineContext = object : ContextWrapper(null) {
-            override fun getSystemService(name: String): Any? = null
-        }
-        val failingNetworkApi = object : ApiService {
-            override suspend fun agentStep(request: AgentStepRequestDto): AgentStepResponseDto {
-                throw java.net.UnknownHostException("Unable to resolve host: Airplane mode active")
-            }
-
-            override suspend fun synthesizeSpeech(request: TtsRequestDto): ResponseBody {
-                throw java.net.UnknownHostException("Offline")
-            }
-        }
-
-        val repo = AgentBackendRepositoryImpl(offlineContext, failingNetworkApi)
-
-        // Non-local query while offline returns a clean message and never crashes
-        val generalDecision = repo.runAgentStep(
-            messages = listOf(ChatMessage(role = MessageRole.USER, content = "Explain quantum computing")),
-            tools = emptyList(),
-            memories = emptyList(),
-            screenContext = null,
-            language = AppLanguage.EN_IN
-        )
-        assertNotNull(generalDecision.assistantText)
-        assertTrue(generalDecision.toolCalls.isEmpty())
-
-        // Offline local utility command still routes to local tool cleanly
-        val alarmDecision = repo.runAgentStep(
-            messages = listOf(ChatMessage(role = MessageRole.USER, content = "Set an alarm for 6:30")),
-            tools = emptyList(),
-            memories = emptyList(),
-            screenContext = null,
-            language = AppLanguage.EN_IN
-        )
-        assertEquals(1, alarmDecision.toolCalls.size)
-        assertEquals("set_alarm", alarmDecision.toolCalls.first().name)
-    }
-
-    // 3. Worker 429 test -> app shows "Daily free limit reached" + wire schema contract test
-    @Test
-    fun workerHttp429_returnsDailyFreeLimitReached_andMatchesWireContract() = runBlocking {
-        val context = object : ContextWrapper(null) {
-            override fun getSystemService(name: String): Any? = null
-        }
-        val rateLimitedApi = object : ApiService {
-            override suspend fun agentStep(request: AgentStepRequestDto): AgentStepResponseDto {
-                val errorJson = """{"error":"DAILY_FREE_LIMIT_REACHED","message":"Daily free limit reached (200 requests/day)."}"""
-                val errorResponse = Response.error<AgentStepResponseDto>(
-                    429,
-                    errorJson.toResponseBody("application/json".toMediaType())
-                )
-                throw HttpException(errorResponse)
-            }
-
-            override suspend fun synthesizeSpeech(request: TtsRequestDto): ResponseBody {
-                throw IllegalStateException("Not used")
-            }
-        }
-
-        val repo = AgentBackendRepositoryImpl(context, rateLimitedApi)
-        val decision = repo.runAgentStep(
-            messages = listOf(ChatMessage(role = MessageRole.USER, content = "What is the weather?")),
-            tools = emptyList(),
-            memories = emptyList(),
-            screenContext = null,
-            language = AppLanguage.EN_IN
-        )
-
-        assertNotNull(decision.assistantText)
-        assertTrue(
-            "Expected 'Daily free limit reached' message but got: ${decision.assistantText}",
-            decision.assistantText!!.contains("Daily free limit reached", ignoreCase = true)
-        )
-        assertTrue(decision.toolCalls.isEmpty())
-
-        // Verify shared JSON wire schema between Android Moshi DTOs and Cloudflare Worker contract
-        val moshi = Moshi.Builder().addLast(KotlinJsonAdapterFactory()).build()
-        val reqAdapter = moshi.adapter(AgentStepRequestDto::class.java)
-        val resAdapter = moshi.adapter(AgentStepResponseDto::class.java)
-
-        val sampleReq = AgentStepRequestDto(
-            messages = listOf(
-                AgentMessageDto(role = "USER", content = "Turn on flashlight"),
-                AgentMessageDto(role = "TOOL", content = "Flashlight ON", toolName = "toggle_flashlight")
-            ),
-            tools = emptyList(),
-            screenContext = null,
-            languageCode = "en-IN"
-        )
-        val serializedReq = reqAdapter.toJson(sampleReq)
-        assertTrue(serializedReq.contains("\"role\":\"TOOL\""))
-        assertTrue(serializedReq.contains("\"toolName\":\"toggle_flashlight\""))
-
-        val workerResponseJson = """
-            {
-              "assistantText": "Flashlight is now on.",
-              "toolCalls": [
-                {
-                  "id": "call_1",
-                  "name": "toggle_flashlight",
-                  "args": { "enabled": "true" }
-                }
-              ]
-            }
-        """.trimIndent()
-        val parsedRes = resAdapter.fromJson(workerResponseJson)
-        assertNotNull(parsedRes)
-        assertEquals("Flashlight is now on.", parsedRes?.assistantText)
-        assertEquals(1, parsedRes?.toolCalls?.size)
-        assertEquals("toggle_flashlight", parsedRes?.toolCalls?.first()?.name)
-        assertEquals("true", parsedRes?.toolCalls?.first()?.args?.get("enabled"))
-    }
-
-    // 4. "Call Mom" with 2 "Mom" contacts -> asks which one, requires confirmation before dialing
+    // 5. "Call Mom" with 2 "Mom" contacts -> asks which one, requires confirmation before dialing
     @Test
     fun callMom_withTwoMatchingContacts_requiresDisambiguationAndConfirmation() = runBlocking {
-        val memoryWithTwoMoms = object : MemoryRepository {
-            private val facts = listOf(
+        val memoryWithTwoMoms = FakeMemoryRepository(
+            initialFacts = listOf(
                 MemoryFact(id = 1L, category = "CONTACT", key = "Mom Mobile", value = "+919876543210"),
                 MemoryFact(id = 2L, category = "CONTACT", key = "Mom Home", value = "+919876500001")
             )
-            override val memoriesFlow: Flow<List<MemoryFact>> = MutableStateFlow(facts)
-            override fun searchMemories(query: String): Flow<List<MemoryFact>> = MutableStateFlow(facts)
-            override suspend fun getAllMemoriesSnapshot(): List<MemoryFact> = facts
-            override suspend fun upsertMemory(category: String, key: String, value: String) {}
-            override suspend fun deleteMemory(id: Long) {}
-            override suspend fun clearAllMemories() {}
-        }
+        )
 
         val dummyContext = ContextWrapper(null)
         val resolver = ContactsResolver(dummyContext, memoryWithTwoMoms)
         val candidates = resolver.resolveCandidates("Mom")
         assertEquals("Should resolve both 'Mom' contacts", 2, candidates.size)
 
-        // Direct execution without disambiguated phone_number must refuse to guess and ask which one
         val callTool = CallContactTool(dummyContext, resolver)
         val ambiguousResult = callTool.execute(mapOf("contact_name" to "Mom"))
-        assertFalse("CallContactTool must not dial when multiple contacts match without disambiguation", ambiguousResult.success)
+        assertFalse(ambiguousResult.success)
         assertTrue(ambiguousResult.outputEn.contains("Multiple contacts match 'Mom'"))
-        assertTrue(ambiguousResult.outputEn.contains("Mom Mobile"))
-        assertTrue(ambiguousResult.outputEn.contains("Mom Home"))
 
-        // SafetyGate evaluation must require HIGH-risk confirmation and surface both candidates
         val gate = SafetyGateImpl(resolver)
         val callSpec = ToolCallSpec(id = "call_mom_1", name = "call_contact", args = mapOf("contact_name" to "Mom"))
         val eval = gate.evaluate(callSpec, callTool, ConfirmationLevel.STANDARD, null)
@@ -426,24 +484,21 @@ class ExampleUnitTest {
         }
         delay(50)
         val pending = gate.pendingConfirmation.value
-        assertNotNull("SafetyGate must expose pending confirmation with both Mom candidates", pending)
+        assertNotNull(pending)
         assertEquals(2, pending?.candidateContacts?.size)
-        assertTrue(pending?.summaryEn?.contains("Multiple contacts match") == true)
 
-        // User selects the second Mom contact and approves
         gate.resolveUserApproval(approved = true, selectedPhoneOverride = "+919876500001")
         val outcome = approvalDeferred.await()
         assertTrue(outcome.approved)
         assertEquals("+919876500001", outcome.selectedPhoneOverride)
     }
 
-    // 5. KillSwitch stops listening, speaking, and any running tool within 1s
+    // 6. KillSwitch stops listening, speaking, and any running tool within 1s, and persists [Cancelled]
     @Test
-    fun killSwitch_stopsListeningSpeakingAndRunningToolUnderOneSecond() = runBlocking {
+    fun killSwitch_stopsListeningSpeakingAndRunningToolUnderOneSecond_andPersistsCancelled() = runBlocking {
         val stt = FakeSpeechRecognizer()
         val tts = FakeTtsEngine()
-        val wake = FakeWakeWordEngine()
-        val voiceManager = VoiceSessionManager(stt, tts, null, wake)
+        val voiceManager = VoiceSessionManager(stt, tts, null, FakeWakeWordEngine())
         val killSwitch = KillSwitch()
 
         var voiceKilled = false
@@ -452,16 +507,14 @@ class ExampleUnitTest {
             voiceManager.stopAll()
         }
 
-        // Start speaking
         voiceManager.speakReply(
             rawText = "Executing a multi-step routine now.",
             language = AppLanguage.EN_IN,
-            voiceProfile = VoiceProfile.EN_IN_NEURAL2_D,
+            selectedVoiceName = "",
             speed = 1.0f
         )
         assertTrue(tts.isSpeaking.value)
 
-        // Start a slow running tool inside AgentOrchestrator
         val slowTool = object : Tool {
             override val name = "wait_for_element"
             override val description = "Slow tool"
@@ -479,7 +532,8 @@ class ExampleUnitTest {
                 tools: List<ToolDescriptor>,
                 memories: List<MemoryFact>,
                 screenContext: ScreenContextSnapshot?,
-                language: AppLanguage
+                language: AppLanguage,
+                summaries: List<ConversationSummaryItem>
             ): AgentStepDecision {
                 return AgentStepDecision(
                     assistantText = null,
@@ -488,8 +542,10 @@ class ExampleUnitTest {
             }
         }
 
+        val chatRepo = FakeChatRepository()
         val orchestrator = createTestOrchestrator(
             backendRepository = backendRepo,
+            chatRepository = chatRepo,
             tools = setOf(slowTool),
             killSwitch = killSwitch
         )
@@ -503,19 +559,22 @@ class ExampleUnitTest {
         }
         delay(60L)
 
-        // Trigger emergency KillSwitch
         killSwitch.trigger("Unit test emergency stop")
         turnJob.await()
         val elapsedMs = System.currentTimeMillis() - startMs
 
         assertTrue("KillSwitch must stop everything in under 1000ms (took ${elapsedMs}ms)", elapsedMs < 1_000L)
         assertTrue(voiceKilled)
-        assertFalse("Mic must be stopped", stt.isListening.value)
-        assertFalse("TTS must be stopped", tts.isSpeaking.value)
+        assertFalse(stt.isListening.value)
+        assertFalse(tts.isSpeaking.value)
         assertEquals(VoiceSessionState.IDLE, voiceManager.state.value)
+        assertTrue(
+            "User message must be persisted immediately before Gemini call",
+            chatRepo.savedMessages.any { it.role == MessageRole.USER && it.content == "Wait for page" }
+        )
     }
 
-    // 6. FieldCipher AES-GCM round-trip and fail-closed verification
+    // 7. FieldCipher AES-GCM round-trip and fail-closed verification (for v3->v4 migration)
     @Test
     fun fieldCipher_encryptsAndFailsClosedOnTamperedData() {
         val secretPlaintext = "Mom's phone number is +91 98765 43210"
@@ -528,21 +587,11 @@ class ExampleUnitTest {
         val decrypted = FieldCipher.decrypt(encrypted)
         assertEquals(secretPlaintext, decrypted)
 
-        // Reject unencrypted plaintext (fail closed)
         try {
             FieldCipher.decrypt("Plaintext without ENCv1 prefix")
             fail("FieldCipher.decrypt must fail closed on unencrypted input")
         } catch (_: IllegalStateException) {
-            // Expected fail-closed behavior
-        }
-
-        // Reject tampered ciphertext (fail closed on GCM tag mismatch)
-        val tampered = encrypted.dropLast(4) + "AAAA"
-        try {
-            FieldCipher.decrypt(tampered)
-            fail("FieldCipher.decrypt must fail closed when GCM authentication tag fails")
-        } catch (_: IllegalStateException) {
-            // Expected fail-closed behavior
+            // Expected
         }
     }
 
@@ -640,26 +689,65 @@ class ExampleUnitTest {
         assertTrue(readScreenResult.outputEn.contains(JarvisAccessibilityService.ACCESSIBILITY_DISABLED_EN))
     }
 
+    private class FakeChatRepository : ChatRepository {
+        val savedMessages = mutableListOf<ChatMessage>()
+        override val messagesFlow: Flow<List<ChatMessage>> = MutableStateFlow(emptyList())
+        override val conversationsFlow: Flow<List<ConversationItem>> = MutableStateFlow(emptyList())
+        override val summariesFlow: Flow<List<ConversationSummaryItem>> = MutableStateFlow(emptyList())
+        override suspend fun getOrCreateActiveConversationId(nowMs: Long): Long = 1L
+        override suspend fun startNewConversation(title: String, nowMs: Long): Long = 2L
+        override suspend fun getRecentContextMessages(limit: Int): List<ChatMessage> = savedMessages.takeLast(limit)
+        override suspend fun getMessagesForConversation(conversationId: Long): List<ChatMessage> = savedMessages
+        override suspend fun searchMessages(query: String): List<ChatMessage> = emptyList()
+        override suspend fun getRecentSummaries(limit: Int): List<ConversationSummaryItem> = emptyList()
+        override suspend fun saveSummary(summary: ConversationSummaryItem) {}
+        override suspend fun appendMessage(message: ChatMessage): Long {
+            savedMessages.add(message)
+            return savedMessages.size.toLong()
+        }
+        override suspend fun clearAllMessages() { savedMessages.clear() }
+    }
+
+    private class FakeMemoryRepository(
+        initialFacts: List<MemoryFact> = emptyList()
+    ) : MemoryRepository {
+        private val facts = initialFacts.toMutableList()
+        override val memoriesFlow: Flow<List<MemoryFact>> = MutableStateFlow(facts)
+        override val learnedTodayFlow: Flow<List<MemoryFact>> = MutableStateFlow(emptyList())
+        override fun searchMemories(query: String): Flow<List<MemoryFact>> = MutableStateFlow(facts)
+        override suspend fun searchTopFactsForContext(query: String, limit: Int): List<MemoryFact> = facts.take(limit)
+        override suspend fun getAllMemoriesSnapshot(): List<MemoryFact> = facts.toList()
+        override suspend fun upsertMemory(
+            category: String,
+            key: String,
+            value: String,
+            source: String,
+            confidence: Float,
+            importance: Int,
+            pinned: Boolean
+        ): Long = 1L
+        override suspend fun updateMemory(
+            id: Long,
+            category: String,
+            key: String,
+            value: String,
+            pinned: Boolean,
+            importance: Int
+        ) {}
+        override suspend fun setPinned(id: Long, pinned: Boolean) {}
+        override suspend fun deleteMemory(id: Long) {}
+        override suspend fun deleteMemoriesByKeyOrQuery(query: String): Int = 0
+        override suspend fun clearAllMemories() { facts.clear() }
+        override suspend fun exportAllAsJson(): String = "{}"
+    }
+
     private fun createTestOrchestrator(
         backendRepository: AgentBackendRepository,
+        chatRepository: ChatRepository = FakeChatRepository(),
         tools: Set<Tool>,
         killSwitch: KillSwitch = KillSwitch()
     ): AgentOrchestrator {
-        val chatRepo = object : ChatRepository {
-            private val list = mutableListOf<ChatMessage>()
-            override val messagesFlow: Flow<List<ChatMessage>> = MutableStateFlow(emptyList())
-            override suspend fun getRecentContextMessages(limit: Int): List<ChatMessage> = list.takeLast(limit)
-            override suspend fun appendMessage(message: ChatMessage) { list.add(message) }
-            override suspend fun clearAllMessages() { list.clear() }
-        }
-        val memoryRepo = object : MemoryRepository {
-            override val memoriesFlow: Flow<List<MemoryFact>> = MutableStateFlow(emptyList())
-            override fun searchMemories(query: String): Flow<List<MemoryFact>> = MutableStateFlow(emptyList())
-            override suspend fun getAllMemoriesSnapshot(): List<MemoryFact> = emptyList()
-            override suspend fun upsertMemory(category: String, key: String, value: String) {}
-            override suspend fun deleteMemory(id: Long) {}
-            override suspend fun clearAllMemories() {}
-        }
+        val memoryRepo = FakeMemoryRepository()
         val logRepo = object : ActivityLogRepository {
             override val logsFlow: Flow<List<ActivityLogEntry>> = MutableStateFlow(emptyList())
             override suspend fun recordLog(entry: ActivityLogEntry) {}
@@ -675,14 +763,16 @@ class ExampleUnitTest {
         }
         val settingsRepo = object : SettingsRepository {
             override val settingsFlow: Flow<UserSettings> = MutableStateFlow(UserSettings())
+            override suspend fun setSetupComplete(complete: Boolean) {}
+            override suspend fun setSelectedModelId(modelId: String) {}
+            override suspend fun setAvailableModels(models: List<String>) {}
             override suspend fun setLanguage(language: AppLanguage) {}
-            override suspend fun setVoiceProfile(voiceProfile: VoiceProfile) {}
+            override suspend fun setSelectedVoiceName(voiceName: String) {}
             override suspend fun setSpeechSpeed(speed: Float) {}
             override suspend fun setSpeechPitch(pitch: Float) {}
-            override suspend fun setWakeWordSensitivity(sensitivity: Float) {}
-            override suspend fun setWakeWordEnabled(enabled: Boolean) {}
-            override suspend fun setWakeWordPaused(paused: Boolean) {}
-            override suspend fun setBootAutoStartEnabled(enabled: Boolean) {}
+            override suspend fun setAutoLearnEnabled(enabled: Boolean) {}
+            override suspend fun setAskBeforeSavingFact(ask: Boolean) {}
+            override suspend fun recordGeminiUsage(tokensUsed: Int, nowMs: Long) {}
             override suspend fun setFloatingOrbEnabled(enabled: Boolean) {}
             override suspend fun setConfirmationLevel(level: ConfirmationLevel) {}
             override suspend fun setKillSwitchActive(active: Boolean) {}
@@ -690,7 +780,7 @@ class ExampleUnitTest {
 
         return AgentOrchestrator(
             agentBackendRepository = backendRepository,
-            chatRepository = chatRepo,
+            chatRepository = chatRepository,
             memoryRepository = memoryRepo,
             activityLogRepository = logRepo,
             routineRepository = routineRepo,

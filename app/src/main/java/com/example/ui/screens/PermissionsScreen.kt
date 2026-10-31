@@ -28,12 +28,8 @@ import androidx.compose.material.icons.filled.BatteryChargingFull
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Security
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -54,6 +50,9 @@ import com.example.domain.model.OemBatteryGuide
 import com.example.domain.model.PermissionItemStatus
 import com.example.ui.components.AuroraBackground
 import com.example.ui.components.AuroraGlassCard
+import com.example.ui.components.AuroraIconButton
+import com.example.ui.components.AuroraPrimaryButton
+import com.example.ui.components.AuroraSecondaryButton
 import com.example.ui.components.AuroraStatusPill
 import com.example.ui.theme.AuroraColors
 import com.example.ui.viewmodel.PermissionsViewModel
@@ -97,18 +96,12 @@ fun PermissionsScreen(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                IconButton(
-                    onClick = onNavigateBack,
-                    modifier = Modifier
-                        .size(48.dp)
-                        .testTag("permissions_back_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = stringResource(R.string.permissions_back_button),
-                        tint = AuroraColors.TextPrimary
-                    )
-                }
+                AuroraIconButton(
+                    icon = Icons.AutoMirrored.Filled.ArrowBack,
+                    contentDescription = stringResource(R.string.permissions_back_button),
+                    testTag = "permissions_back_button",
+                    onClick = onNavigateBack
+                )
                 Spacer(modifier = Modifier.width(8.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
@@ -273,19 +266,11 @@ private fun PermissionCard(
                     color = AuroraColors.EmeraldSuccess
                 )
             } else {
-                Button(
+                AuroraPrimaryButton(
+                    text = stringResource(R.string.permissions_grant_button),
                     onClick = onGrantClick,
-                    colors = ButtonDefaults.buttonColors(containerColor = AuroraColors.Violet500),
-                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
-                    modifier = Modifier
-                        .height(48.dp)
-                        .testTag("grant_permission_${item.id}")
-                ) {
-                    Text(
-                        text = stringResource(R.string.permissions_grant_button),
-                        style = MaterialTheme.typography.labelLarge
-                    )
-                }
+                    testTag = "grant_permission_${item.id}"
+                )
             }
         }
 
@@ -325,17 +310,11 @@ private fun OemBatteryCard(
                     fontWeight = FontWeight.Bold
                 )
             }
-            OutlinedButton(
+            AuroraSecondaryButton(
+                text = stringResource(R.string.permissions_open_battery_settings),
                 onClick = onOpenSettings,
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-                modifier = Modifier.height(48.dp)
-            ) {
-                Text(
-                    text = stringResource(R.string.permissions_open_battery_settings),
-                    style = MaterialTheme.typography.labelMedium,
-                    color = AuroraColors.TextPrimary
-                )
-            }
+                testTag = "oem_battery_settings_${guide.oemName.take(6).lowercase()}"
+            )
         }
         Text(
             text = guide.stepsEn,

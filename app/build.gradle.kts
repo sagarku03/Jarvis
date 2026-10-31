@@ -134,17 +134,17 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
 
-    // Room Local Database (memory, chat, activity log, routines)
+    // Room Local Database + SQLCipher encryption at rest
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
+    implementation(libs.androidx.sqlite.ktx)
+    implementation(libs.sqlcipher.android)
     ksp(libs.androidx.room.compiler)
 
     // DataStore Preferences (settings, language, voice speed, safety level)
     implementation(libs.androidx.datastore.preferences)
 
-    // Networking & JSON (OkHttp + Moshi + Retrofit)
-    implementation(libs.retrofit)
-    implementation(libs.converter.moshi)
+    // Networking & JSON (OkHttp + Moshi)
     implementation(libs.okhttp)
     implementation(libs.logging.interceptor)
     implementation(libs.moshi.kotlin)
@@ -159,6 +159,7 @@ dependencies {
     testImplementation(libs.androidx.core)
     testImplementation(libs.androidx.runner)
     testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(libs.mockwebserver)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(platform(libs.androidx.compose.bom))

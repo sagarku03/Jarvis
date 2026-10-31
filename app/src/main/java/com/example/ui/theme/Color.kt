@@ -37,7 +37,7 @@ object AuroraColors {
     val Aqua = Color(0xFF2DE2E6)
     val Lime = Color(0xFFC8F53C)
 
-    // Alias kept for compatibility, mapped to Aurora Aqua (#2DE2E6) — zero #00E5FF anywhere
+    // Alias kept for compatibility, mapped to Aurora Aqua (#2DE2E6)
     val CyanGlow = Aqua
 
     val EmeraldSuccess = Color(0xFF3DDC97)

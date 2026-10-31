@@ -7,11 +7,9 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.preferencesDataStoreFile
 import androidx.room.Room
 import com.example.BuildConfig
+import com.example.data.local.ApiKeyStore
 import com.example.data.local.JarvisDatabase
-import com.example.data.remote.AgentStepRequestDto
-import com.example.data.remote.AgentStepResponseDto
-import com.example.data.remote.ApiService
-import com.example.data.remote.TtsRequestDto
+import com.example.data.remote.GeminiClient
 import com.example.data.repository.ActivityLogRepositoryImpl
 import com.example.data.repository.AgentBackendRepositoryImpl
 import com.example.data.repository.ChatRepositoryImpl
@@ -19,6 +17,7 @@ import com.example.data.repository.MemoryRepositoryImpl
 import com.example.data.repository.RoutineRepositoryImpl
 import com.example.data.repository.SettingsRepositoryImpl
 import com.example.domain.agent.AgentOrchestrator
+import com.example.domain.agent.MemoryLearner
 import com.example.domain.contacts.ContactsResolver
 import com.example.domain.repository.ActivityLogRepository
 import com.example.domain.repository.AgentBackendRepository
@@ -39,6 +38,7 @@ import com.example.services.voice.VoiceSessionManager
 import com.example.services.voice.WakeWordEngine
 import com.example.tools.CallContactTool
 import com.example.tools.FlashlightTool
+import com.example.tools.ForgetMemoryTool
 import com.example.tools.NavigateTool
 import com.example.tools.NotificationActionTool
 import com.example.tools.OpenAppAndFindTool
@@ -46,7 +46,10 @@ import com.example.tools.OpenAppTool
 import com.example.tools.OpenUrlTool
 import com.example.tools.PlayMediaTool
 import com.example.tools.ReadScreenTool
+import com.example.tools.SaveMemoryTool
 import com.example.tools.ScrollTool
+import com.example.tools.SearchHistoryTool
+import com.example.tools.SearchMemoryTool
 import com.example.tools.SendSmsTool
 import com.example.tools.SetAlarmTool
 import com.example.tools.SetTimerTool
@@ -59,9 +62,10 @@ import com.example.tools.WebSearchTool
 import com.example.tools.WhatsAppTelegramTool
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
+import net.zetetic.database.sqlcipher.SupportOpenHelperFactory
 import okhttp3.OkHttpClient
-import okhttp3.ResponseBody
 import okhttp3.logging.HttpLoggingInterceptor
+import java.io.File
 import java.util.concurrent.TimeUnit
 
 @Target(AnnotationTarget.CONSTRUCTOR, AnnotationTarget.FIELD, AnnotationTarget.FUNCTION)
@@ -82,13 +86,18 @@ annotation class AndroidEntryPoint
 
 /**
  * Application dependency container providing constructor-injected singletons across all layers.
- * Bring-Your-Own-Key edition: no Firebase Auth, no backend proxy, and no scripted FakeBackend.
+ * Bring-Your-Own-Key edition: direct Gemini API client, Keystore AES-256-GCM ApiKeyStore,
+ * and SQLCipher encrypted Room database.
  */
 class AppContainer(context: Context) {
 
     private val appContext = context.applicationContext
 
     val killSwitch: KillSwitch = KillSwitch()
+
+    val apiKeyStore: ApiKeyStore by lazy {
+        ApiKeyStore(appContext)
+    }
 
     val dataStore: DataStore<Preferences> by lazy {
         PreferenceDataStoreFactory.create(
@@ -97,13 +106,33 @@ class AppContainer(context: Context) {
     }
 
     val database: JarvisDatabase by lazy {
-        Room.databaseBuilder(
+        val builder = Room.databaseBuilder(
             appContext,
             JarvisDatabase::class.java,
             "jarvis_assistant.db"
+        ).addMigrations(
+            JarvisDatabase.MIGRATION_1_2,
+            JarvisDatabase.MIGRATION_2_3,
+            JarvisDatabase.MIGRATION_3_4
         )
-            .addMigrations(JarvisDatabase.MIGRATION_1_2, JarvisDatabase.MIGRATION_2_3)
-            .build()
+
+        // Load SQLCipher native library on Android device; fall back cleanly on host JVM unit tests
+        runCatching {
+            System.loadLibrary("sqlcipher")
+            val passphrase = apiKeyStore.getOrCreateDatabasePassphrase()
+            builder.openHelperFactory(SupportOpenHelperFactory(passphrase))
+        }
+
+        builder.build()
+    }
+
+    fun getDatabaseStorageSizeBytes(): Long {
+        val dbFile: File = appContext.getDatabasePath("jarvis_assistant.db") ?: return 0L
+        val walFile = File(dbFile.path + "-wal")
+        val shmFile = File(dbFile.path + "-shm")
+        return (if (dbFile.exists()) dbFile.length() else 0L) +
+            (if (walFile.exists()) walFile.length() else 0L) +
+            (if (shmFile.exists()) shmFile.length() else 0L)
     }
 
     val moshi: Moshi by lazy {
@@ -130,31 +159,27 @@ class AppContainer(context: Context) {
             .build()
     }
 
-    /**
-     * Unconfigured fail-closed ApiService until GeminiClient replaces AgentBackendRepositoryImpl in Phase 3.
-     * Never returns scripted or fake AI replies.
-     */
-    val apiService: ApiService by lazy {
-        object : ApiService {
-            override suspend fun agentStep(request: AgentStepRequestDto): AgentStepResponseDto {
-                return AgentStepResponseDto(
-                    assistantText = "Gemini API key is not configured yet. Please add your Gemini API key in Setup.",
-                    toolCalls = emptyList()
-                )
-            }
-
-            override suspend fun synthesizeSpeech(request: TtsRequestDto): ResponseBody {
-                throw IllegalStateException("Cloud TTS is not configured.")
-            }
-        }
+    val geminiClient: GeminiClient by lazy {
+        GeminiClient(
+            okHttpClient = okHttpClient,
+            moshi = moshi,
+            apiKeyStore = apiKeyStore
+        )
     }
 
     val chatRepository: ChatRepository by lazy {
-        ChatRepositoryImpl(database.chatMessageDao())
+        ChatRepositoryImpl(
+            conversationDao = database.conversationDao(),
+            messageDao = database.messageDao(),
+            summaryDao = database.summaryDao()
+        )
     }
 
     val memoryRepository: MemoryRepository by lazy {
-        MemoryRepositoryImpl(database.memoryDao())
+        MemoryRepositoryImpl(
+            memoryDao = database.memoryDao(),
+            moshi = moshi
+        )
     }
 
     val activityLogRepository: ActivityLogRepository by lazy {
@@ -199,14 +224,36 @@ class AppContainer(context: Context) {
                 TypeTextTool(),
                 ScrollTool(),
                 WaitForElementTool(),
-                SystemNavigationTool()
+                SystemNavigationTool(),
+                SaveMemoryTool(memoryRepository),
+                ForgetMemoryTool(memoryRepository),
+                SearchMemoryTool(memoryRepository),
+                SearchHistoryTool(chatRepository)
             )
+        )
+    }
+
+    val agentBackendRepository: AgentBackendRepository by lazy {
+        AgentBackendRepositoryImpl(
+            context = appContext,
+            geminiClient = geminiClient,
+            settingsRepository = settingsRepository
+        )
+    }
+
+    val memoryLearner: MemoryLearner by lazy {
+        MemoryLearner(
+            geminiClient = geminiClient,
+            memoryRepository = memoryRepository,
+            chatRepository = chatRepository,
+            settingsRepository = settingsRepository,
+            moshi = moshi
         )
     }
 
     val agentOrchestrator: AgentOrchestrator by lazy {
         AgentOrchestrator(
-            agentBackendRepository = AgentBackendRepositoryImpl(appContext, apiService),
+            agentBackendRepository = agentBackendRepository,
             chatRepository = chatRepository,
             memoryRepository = memoryRepository,
             activityLogRepository = activityLogRepository,
@@ -214,7 +261,8 @@ class AppContainer(context: Context) {
             settingsRepository = settingsRepository,
             toolRegistry = toolRegistry,
             safetyGate = safetyGate,
-            killSwitch = killSwitch
+            killSwitch = killSwitch,
+            memoryLearner = memoryLearner
         )
     }
 

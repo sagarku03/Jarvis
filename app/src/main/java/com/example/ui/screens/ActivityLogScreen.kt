@@ -11,7 +11,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -21,7 +20,6 @@ import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -37,6 +35,7 @@ import com.example.R
 import com.example.domain.model.ActivityLogEntry
 import com.example.ui.components.AuroraBackground
 import com.example.ui.components.AuroraGlassCard
+import com.example.ui.components.AuroraSecondaryButton
 import com.example.ui.components.AuroraSectionHeader
 import com.example.ui.components.AuroraStatusPill
 import com.example.ui.components.RiskLevelBadge
@@ -64,26 +63,12 @@ fun ActivityLogScreen(viewModel: ActivityLogViewModel) {
                 subtitle = stringResource(R.string.activity_subtitle),
                 trailing = {
                     if (logs.isNotEmpty()) {
-                        OutlinedButton(
+                        AuroraSecondaryButton(
+                            text = stringResource(R.string.activity_clear_all),
+                            leadingIcon = Icons.Default.DeleteSweep,
                             onClick = viewModel::clearLogs,
-                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-                            modifier = Modifier
-                                .height(48.dp)
-                                .testTag("clear_activity_logs_button")
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.DeleteSweep,
-                                contentDescription = stringResource(R.string.activity_clear_all),
-                                tint = AuroraColors.TextSecondary,
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = stringResource(R.string.activity_clear_all),
-                                style = MaterialTheme.typography.labelLarge,
-                                color = AuroraColors.TextPrimary
-                            )
-                        }
+                            testTag = "clear_activity_logs_button"
+                        )
                     }
                 }
             )

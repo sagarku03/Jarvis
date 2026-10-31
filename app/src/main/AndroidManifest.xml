@@ -2,41 +2,34 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- Network & Backend Proxy -->
+    <!-- Network & Voice Input -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-
-    <!-- Voice Input, Wake Word & Foreground Service -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+
+    <!-- Foreground Service (Microphone + Boot + Battery Optimization) -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <uses-permission android:name="android.permission.WAKE_LOCK" />
-
-    <!-- Boot Auto-Start & Battery Optimization Exemption -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
-    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
 
-    <!-- Phone Control Tools (Contacts, Calls, Alarms, Bluetooth, Vibrate, Flashlight) -->
+    <!-- Phone, Contacts, Alarms & Utilities -->
     <uses-permission android:name="android.permission.READ_CONTACTS" />
     <uses-permission android:name="android.permission.CALL_PHONE" />
     <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.FLASHLIGHT" />
     <uses-permission android:name="android.permission.BLUETOOTH" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
 
-    <!-- Floating Orb Overlay (opt-in) -->
+    <!-- Floating Overlay Orb -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
-    <uses-feature
-        android:name="android.hardware.telephony"
-        android:required="false" />
-    <uses-feature
-        android:name="android.hardware.microphone"
-        android:required="false" />
-
-    <!-- Queries so OpenAppTool / PlayMediaTool / NavigateTool / WhatsAppTelegramTool can resolve installed packages on Android 11+ -->
+    <!-- Package Visibility for OpenAppTool & Messaging Intents on Android 11+ -->
     <queries>
         <intent>
             <action android:name="android.intent.action.MAIN" />
@@ -51,6 +44,7 @@
         <package android:name="com.whatsapp" />
         <package android:name="org.telegram.messenger" />
         <package android:name="com.google.android.youtube" />
+        <package android:name="com.spotify.music" />
         <package android:name="com.google.android.apps.maps" />
     </queries>
 
@@ -61,7 +55,6 @@
         android:fullBackupContent="@xml/backup_rules"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
-        android:networkSecurityConfig="@xml/network_security_config"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.MyApplication"
@@ -70,6 +63,7 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:label="@string/app_name"
             android:launchMode="singleTop"
             android:theme="@style/Theme.MyApplication"
             android:windowSoftInputMode="adjustResize">
@@ -77,27 +71,37 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.ASSIST" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
         </activity>
 
-        <!-- Foreground Voice Service (Wake Word + Active Listening Indicator) -->
+        <!-- Foreground Voice Service -->
         <service
             android:name=".services.VoiceForegroundService"
             android:enabled="true"
             android:exported="false"
             android:foregroundServiceType="microphone" />
 
-        <!-- Floating Draggable Orb Service -->
+        <!-- Quick Settings Tile Service for Push-to-Talk -->
         <service
-            android:name=".services.OverlayService"
-            android:enabled="true"
-            android:exported="false" />
+            android:name=".services.JarvisTileService"
+            android:exported="true"
+            android:icon="@android:drawable/ic_btn_speak_now"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
 
-        <!-- Jarvis Accessibility Service (Active ONLY in FULL_CONTROL_MODE) -->
+        <!-- Accessibility Service for Full-Control Mode (disabled automatically when STORE_SAFE_MODE=true) -->
         <service
             android:name=".services.JarvisAccessibilityService"
             android:enabled="@bool/enable_accessibility_automation"
             android:exported="false"
-            android:label="@string/app_name"
+            android:label="@string/accessibility_service_label"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
             <intent-filter>
                 <action android:name="android.accessibilityservice.AccessibilityService" />
@@ -107,41 +111,46 @@
                 android:resource="@xml/accessibility_service_config" />
         </service>
 
-        <!-- Notification Listener Service (Reads & replies to notifications with OTP redaction) -->
+        <!-- Notification Listener for Reading & Replying to Notifications -->
         <service
             android:name=".services.JarvisNotificationListener"
             android:enabled="true"
             android:exported="false"
-            android:label="@string/app_name"
+            android:label="@string/notification_listener_label"
             android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
             <intent-filter>
                 <action android:name="android.service.notification.NotificationListenerService" />
             </intent-filter>
         </service>
 
-        <!-- Boot Completed Receiver (Posts tap-to-resume notification + reschedules daily routines) -->
+        <!-- Floating Overlay Orb Service -->
+        <service
+            android:name=".services.OverlayService"
+            android:enabled="true"
+            android:exported="false" />
+
+        <!-- Boot Receiver -->
         <receiver
             android:name=".services.BootCompletedReceiver"
             android:enabled="true"
-            android:exported="false">
+            android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="android.intent.action.QUICKBOOT_POWERON" />
             </intent-filter>
         </receiver>
 
-        <!-- Routine Trigger Receiver (Daily alarm, Bluetooth ACL connected, Charging started) -->
+        <!-- Routine Trigger Receiver for Scheduled Time, Bluetooth Headset & Charging -->
         <receiver
             android:name=".services.RoutineTriggerReceiver"
             android:enabled="true"
             android:exported="false">
             <intent-filter>
                 <action android:name="com.example.jarvis.ACTION_DAILY_ROUTINE_ALARM" />
-                <action android:name="android.bluetooth.device.action.ACL_CONNECTED" />
                 <action android:name="android.intent.action.ACTION_POWER_CONNECTED" />
+                <action android:name="android.bluetooth.device.action.ACL_CONNECTED" />
             </intent-filter>
         </receiver>
-
     </application>
 
 </manifest>

@@ -6,6 +6,9 @@ import android.bluetooth.BluetoothDevice
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
+import android.os.Build
+import androidx.core.content.ContextCompat
 import com.example.JarvisApplication
 import com.example.domain.model.RoutineTriggerType
 import kotlinx.coroutines.CoroutineScope
@@ -16,9 +19,11 @@ import java.util.Calendar
 
 /**
  * Executes multi-action Routines when triggered by:
- * 1. Scheduled Daily Time Alarm (`ACTION_DAILY_ROUTINE_ALARM`) — and reschedules for the next day.
- * 2. Bluetooth Headset Connected (`BluetoothDevice.ACTION_ACL_CONNECTED` or runtime `ACTION_HEADSET_PLUG`)
+ * 1. Scheduled Daily Time Alarm (`ACTION_DAILY_ROUTINE_ALARM`) via `setExactAndAllowWhileIdle` — and reschedules for the next day.
+ * 2. Headset / Bluetooth Connected (`Intent.ACTION_HEADSET_PLUG` or `BluetoothDevice.ACTION_ACL_CONNECTED`)
  * 3. Charging Started (`Intent.ACTION_POWER_CONNECTED`)
+ *
+ * Enforces the Setup Gate: never runs routines if the Gemini API key is missing or setup is incomplete.
  */
 class RoutineTriggerReceiver : BroadcastReceiver() {
 
@@ -28,10 +33,14 @@ class RoutineTriggerReceiver : BroadcastReceiver() {
         val container = app.appContainer
 
         if (container.killSwitch.isKilled.value) return
+        if (!container.apiKeyStore.exists()) return
 
         val pendingResult = goAsync()
         CoroutineScope(Dispatchers.IO).launch {
             try {
+                val settings = container.settingsRepository.settingsFlow.first()
+                if (!settings.setupComplete || settings.killSwitchActive) return@launch
+
                 val routines = container.routineRepository.routinesFlow.first()
                     .filter { it.enabled }
 
@@ -40,7 +49,6 @@ class RoutineTriggerReceiver : BroadcastReceiver() {
                         val routineId = intent.getLongExtra(EXTRA_ROUTINE_ID, -1L)
                         val matched = routines.firstOrNull { it.id == routineId }
                         if (matched != null) {
-                            // Reschedule the next day's alarm immediately so daily routines keep firing
                             if (matched.triggerType == RoutineTriggerType.TIME_DAILY) {
                                 scheduleDailyRoutineAlarm(
                                     context = context,
@@ -96,6 +104,35 @@ class RoutineTriggerReceiver : BroadcastReceiver() {
         const val ACTION_DAILY_ROUTINE_ALARM = "com.example.jarvis.ACTION_DAILY_ROUTINE_ALARM"
         const val EXTRA_ROUTINE_ID = "extra_routine_id"
 
+        @Volatile
+        private var dynamicReceiver: RoutineTriggerReceiver? = null
+
+        @Synchronized
+        fun syncDynamicReceivers(context: Context, hasEnabledHardwareRoutines: Boolean) {
+            val appCtx = context.applicationContext
+            if (hasEnabledHardwareRoutines && dynamicReceiver == null) {
+                val receiver = RoutineTriggerReceiver()
+                val filter = IntentFilter().apply {
+                    addAction(Intent.ACTION_HEADSET_PLUG)
+                    addAction(Intent.ACTION_POWER_CONNECTED)
+                }
+                runCatching {
+                    ContextCompat.registerReceiver(
+                        appCtx,
+                        receiver,
+                        filter,
+                        ContextCompat.RECEIVER_EXPORTED
+                    )
+                    dynamicReceiver = receiver
+                }
+            } else if (!hasEnabledHardwareRoutines && dynamicReceiver != null) {
+                runCatching {
+                    appCtx.unregisterReceiver(dynamicReceiver)
+                }
+                dynamicReceiver = null
+            }
+        }
+
         fun scheduleDailyRoutineAlarm(
             context: Context,
             routineId: Long,
@@ -130,11 +167,24 @@ class RoutineTriggerReceiver : BroadcastReceiver() {
             }
 
             runCatching {
-                alarmManager.setAndAllowWhileIdle(
-                    AlarmManager.RTC_WAKEUP,
-                    calendar.timeInMillis,
-                    pendingIntent
-                )
+                val canExact = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    alarmManager.canScheduleExactAlarms()
+                } else {
+                    true
+                }
+                if (canExact) {
+                    alarmManager.setExactAndAllowWhileIdle(
+                        AlarmManager.RTC_WAKEUP,
+                        calendar.timeInMillis,
+                        pendingIntent
+                    )
+                } else {
+                    alarmManager.setAndAllowWhileIdle(
+                        AlarmManager.RTC_WAKEUP,
+                        calendar.timeInMillis,
+                        pendingIntent
+                    )
+                }
             }
         }
     }
