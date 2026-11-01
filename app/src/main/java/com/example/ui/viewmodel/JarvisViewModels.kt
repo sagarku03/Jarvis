@@ -1213,7 +1213,7 @@ class SettingsViewModel(
     fun setSelectedVoiceGender(gender: String) {
         viewModelScope.launch {
             settingsRepository.setSelectedVoiceGender(gender)
-            val currentLive = settings.value.selectedLiveVoiceName
+            val currentLive = settingsRepository.settingsFlow.first().selectedLiveVoiceName
             val validVoices = GeminiVoice.getVoicesForGender(gender)
             if (validVoices.none { it.voiceName.equals(currentLive, ignoreCase = true) }) {
                 val defaultVoice = validVoices.firstOrNull()?.voiceName ?: if (gender.equals("FEMALE", ignoreCase = true)) "Aoede" else "Puck"

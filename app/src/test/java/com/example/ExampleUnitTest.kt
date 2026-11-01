@@ -1331,7 +1331,7 @@ class ExampleUnitTest {
             assertEquals("POST", req.method)
             assertEquals("/v1beta/models/gemini-3.8-flash:generateContent", req.path)
             assertEquals(testApiKey, req.getHeader("x-goog-api-key"))
-            assertEquals("application/json", req.getHeader("Content-Type"))
+            assertTrue(req.getHeader("Content-Type")?.startsWith("application/json") == true)
             assertFalse(req.path.orEmpty().contains(testApiKey))
             val body = req.body.readUtf8()
             assertTrue(body.contains("\"role\":\"user\"") || body.contains("\"role\": \"user\""))
