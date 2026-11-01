@@ -12,6 +12,7 @@ import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import com.example.data.local.ActivityLogDao
+import com.example.data.local.DiagnosticsLogger
 import com.example.data.local.ActivityLogEntity
 import com.example.data.local.ConversationDao
 import com.example.data.local.ConversationEntity

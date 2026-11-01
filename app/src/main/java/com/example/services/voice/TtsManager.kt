@@ -243,7 +243,7 @@ class TtsManager @Inject constructor(
                 _isUsingFallbackChip.value = true
                 speakDeviceVoice(
                     sentence = sampleText,
-                    language = AppLanguage.HINGLISH,
+                    language = settings.language,
                     voiceName = voiceName,
                     speed = settings.speechSpeed,
                     onAudioStarted = {
