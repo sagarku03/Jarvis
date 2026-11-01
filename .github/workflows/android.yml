@@ -38,14 +38,17 @@ jobs:
       - name: Make gradlew executable
         run: chmod +x ./gradlew
 
-      - name: Run Android unit tests and assemble Debug APK
-        run: ./gradlew :app:testDebugUnitTest :app:assembleDebug
+      - name: Assemble Debug APK
+        run: ./gradlew :app:assembleDebug --no-daemon
 
       - name: Upload Debug APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: jarvis-debug-apk
           path: app/build/outputs/apk/debug/*.apk
+
+      - name: Run Android unit tests
+        run: ./gradlew :app:testDebugUnitTest --no-daemon
 
       - name: Assemble Release APK
         if: env.RELEASE_KEYSTORE_BASE64 != ''
