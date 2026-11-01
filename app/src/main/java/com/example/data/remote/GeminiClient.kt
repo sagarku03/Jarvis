@@ -1,6 +1,7 @@
 package com.example.data.remote
 
 import com.example.data.local.ApiKeyStore
+import com.example.data.local.DiagnosticsLogger
 import com.example.di.Inject
 import com.example.di.Singleton
 import com.example.domain.model.ChatMessage
@@ -17,8 +18,15 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import java.io.BufferedReader
 import java.io.IOException
+import java.io.InputStreamReader
+import java.net.ConnectException
+import java.net.SocketTimeoutException
+import java.net.UnknownHostException
+import java.util.Locale
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
 sealed class KeyVerificationResult {
@@ -37,12 +45,15 @@ sealed class GeminiTurnResult {
         val assistantText: String?,
         val toolCalls: List<ToolCallSpec>,
         val promptTokens: Int = 0,
-        val candidateTokens: Int = 0
+        val candidateTokens: Int = 0,
+        val rawPartsJson: String? = null
     ) : GeminiTurnResult()
 
     data class KeyRejected(val message: String) : GeminiTurnResult()
-    data class RateLimited(val message: String) : GeminiTurnResult()
+    data class BadRequest(val message: String) : GeminiTurnResult()
+    data class RateLimited(val message: String, val retryAfterSec: Long? = null) : GeminiTurnResult()
     data class ServerError(val message: String) : GeminiTurnResult()
+    data class Timeout(val message: String) : GeminiTurnResult()
     data class Offline(val message: String) : GeminiTurnResult()
 }
 
@@ -52,7 +63,7 @@ sealed class GeminiTurnResult {
  * Security invariants:
  * - Always sends the user's API key in the `x-goog-api-key` HTTP header.
  * - Never appends `?key=` to any URL.
- * - Never logs the API key.
+ * - Never logs the API key or raw user chat texts.
  */
 @Singleton
 class GeminiClient @Inject constructor(
@@ -64,24 +75,51 @@ class GeminiClient @Inject constructor(
     companion object {
         const val DEFAULT_BASE_URL = "https://generativelanguage.googleapis.com"
         const val DEFAULT_FALLBACK_MODEL = "gemini-2.5-flash"
+        const val DEFAULT_LIGHT_FALLBACK_MODEL = "gemini-2.5-flash-lite"
         private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
         private val ALLOWED_SCHEMA_KEYS = setOf("type", "properties", "required", "description", "enum", "items")
+
+        private val EXCLUDED_MODEL_PATTERNS = listOf(
+            "preview", "exp", "experimental", "tts", "image", "live", "embedding", "veo", "imagen", "aqa"
+        )
+
+        fun friendlyModelName(rawId: String): String {
+            val clean = rawId.removePrefix("models/").lowercase(Locale.US)
+            return when {
+                clean.contains("flash-lite") || clean.contains("flash_lite") || clean.contains("8b") ->
+                    "Gemini Flash-Lite — fastest"
+                clean.contains("flash") ->
+                    "Gemini Flash — fast (recommended)"
+                clean.contains("pro") ->
+                    "Gemini Pro — smartest, slower"
+                else -> rawId.removePrefix("models/")
+            }
+        }
 
         fun selectDefaultModel(models: List<String>): String {
             return models.firstOrNull { id ->
                 val lower = id.lowercase()
-                lower.contains("flash") &&
-                    !lower.contains("lite") &&
-                    !lower.contains("tts") &&
-                    !lower.contains("image") &&
-                    !lower.contains("live")
-            } ?: models.firstOrNull() ?: DEFAULT_FALLBACK_MODEL
+                lower.contains("flash") && !lower.contains("lite") && !lower.contains("pro")
+            } ?: models.firstOrNull { it.lowercase().contains("flash") }
+            ?: models.firstOrNull()
+            ?: DEFAULT_FALLBACK_MODEL
+        }
+
+        fun selectFallbackModel(models: List<String>, currentModel: String): String {
+            val others = models.filterNot { it.equals(currentModel, ignoreCase = true) }
+            return others.firstOrNull { it.lowercase().contains("flash-lite") || it.lowercase().contains("lite") }
+                ?: others.firstOrNull { it.lowercase().contains("flash") }
+                ?: others.firstOrNull()
+                ?: DEFAULT_LIGHT_FALLBACK_MODEL
         }
     }
 
     private val mapAdapter = moshi.adapter<Map<String, Any?>>(
         Types.newParameterizedType(Map::class.java, String::class.java, Any::class.java)
     )
+    private val listAdapter = moshi.adapter<List<*>>(List::class.java)
+
+    private val unsupportedThinkingModels = ConcurrentHashMap.newKeySet<String>()
 
     suspend fun verifyKeyAndListModels(rawKey: String): KeyVerificationResult = withContext(Dispatchers.IO) {
         val cleanKey = rawKey.trim()
@@ -92,7 +130,7 @@ class GeminiClient @Inject constructor(
         val baseUrl = baseUrlProvider().trimEnd('/')
         val url = "$baseUrl/v1beta/models"
         val verifyClient = okHttpClient.newBuilder()
-            .connectTimeout(10, TimeUnit.SECONDS)
+            .connectTimeout(8, TimeUnit.SECONDS)
             .readTimeout(10, TimeUnit.SECONDS)
             .build()
 
@@ -104,9 +142,9 @@ class GeminiClient @Inject constructor(
 
         try {
             verifyClient.newCall(request).execute().use { response ->
+                val bodyStr = response.body?.string().orEmpty()
                 when (response.code) {
                     200 -> {
-                        val bodyStr = response.body?.string().orEmpty()
                         val parsed = runCatching { mapAdapter.fromJson(bodyStr) }.getOrNull().orEmpty()
                         val rawModels = (parsed["models"] as? List<*>).orEmpty()
                         val supportedModels = rawModels.mapNotNull { item ->
@@ -116,33 +154,105 @@ class GeminiClient @Inject constructor(
                             val methods = (modelMap["supportedGenerationMethods"] as? List<*>)
                                 ?.mapNotNull { it as? String }
                                 .orEmpty()
-                            if ("generateContent" in methods) name else null
+                            val lowerName = name.lowercase(Locale.US)
+                            val isExcluded = EXCLUDED_MODEL_PATTERNS.any { lowerName.contains(it) }
+                            if ("generateContent" in methods && !isExcluded) name else null
                         }.distinct()
 
-                        val finalModels = supportedModels.ifEmpty { listOf(DEFAULT_FALLBACK_MODEL) }
+                        val finalModels = supportedModels.ifEmpty { listOf(DEFAULT_FALLBACK_MODEL, DEFAULT_LIGHT_FALLBACK_MODEL) }
                         val defaultModel = selectDefaultModel(finalModels)
+                        DiagnosticsLogger.log("GeminiClient", "Key verified. Available stable models: ${finalModels.size}")
                         KeyVerificationResult.Valid(
                             availableModels = finalModels,
                             defaultModelId = defaultModel
                         )
                     }
-                    400, 401, 403 -> {
-                        KeyVerificationResult.Invalid("This key is not valid or not allowed for the Gemini API")
+                    401 -> KeyVerificationResult.Invalid("This key is not valid or not allowed for the Gemini API")
+                    403 -> {
+                        val isKeyError = isKeyAuthError(bodyStr)
+                        if (isKeyError) {
+                            KeyVerificationResult.Invalid("This key is not valid or not allowed for the Gemini API")
+                        } else {
+                            KeyVerificationResult.Invalid("Access denied for this Gemini key")
+                        }
                     }
-                    429 -> {
-                        KeyVerificationResult.RateLimited("Key is valid but its limit is reached")
-                    }
-                    else -> {
-                        KeyVerificationResult.Invalid("This key is not valid or not allowed for the Gemini API")
-                    }
+                    429 -> KeyVerificationResult.RateLimited("Key is valid but its rate limit has been reached")
+                    else -> KeyVerificationResult.Invalid("This key is not valid or not allowed for the Gemini API")
                 }
             }
         } catch (ce: CancellationException) {
             throw ce
+        } catch (_: SocketTimeoutException) {
+            KeyVerificationResult.NetworkError("Verification timed out. Check your internet connection.")
+        } catch (_: UnknownHostException) {
+            KeyVerificationResult.NetworkError("No internet connection")
+        } catch (_: ConnectException) {
+            KeyVerificationResult.NetworkError("No internet connection")
         } catch (_: IOException) {
             KeyVerificationResult.NetworkError("No internet connection")
-        } catch (_: Exception) {
-            KeyVerificationResult.Invalid("This key is not valid or not allowed for the Gemini API")
+        } catch (e: Exception) {
+            KeyVerificationResult.Invalid("Verification failed: ${e.localizedMessage ?: "error"}")
+        }
+    }
+
+    suspend fun generateStructuredJson(
+        modelId: String,
+        systemInstruction: String,
+        userPrompt: String
+    ): String? = withContext(Dispatchers.IO) {
+        val result = generateContent(
+            modelId = modelId,
+            systemInstruction = systemInstruction,
+            messages = listOf(ChatMessage(role = MessageRole.USER, content = userPrompt)),
+            tools = emptyList()
+        )
+        if (result is GeminiTurnResult.Success) {
+            result.assistantText
+        } else {
+            null
+        }
+    }
+
+    suspend fun testConnection(overrideKey: String? = null): Result<String> = withContext(Dispatchers.IO) {
+        val apiKey = overrideKey?.trim() ?: apiKeyStore.get()?.trim()
+        if (apiKey.isNullOrEmpty()) {
+            return@withContext Result.failure(Exception("No API key configured"))
+        }
+
+        val baseUrl = baseUrlProvider().trimEnd('/')
+        val url = "$baseUrl/v1beta/models/$DEFAULT_FALLBACK_MODEL:generateContent"
+        val payload = mapOf(
+            "contents" to listOf(
+                mapOf(
+                    "role" to "user",
+                    "parts" to listOf(mapOf("text" to "Say OK"))
+                )
+            )
+        )
+        val request = Request.Builder()
+            .url(url)
+            .header("x-goog-api-key", apiKey)
+            .header("Content-Type", "application/json")
+            .post(mapAdapter.toJson(payload).toRequestBody(JSON_MEDIA_TYPE))
+            .build()
+
+        val testClient = okHttpClient.newBuilder()
+            .connectTimeout(6, TimeUnit.SECONDS)
+            .readTimeout(8, TimeUnit.SECONDS)
+            .build()
+
+        try {
+            testClient.newCall(request).execute().use { response ->
+                val bodyStr = response.body?.string().orEmpty()
+                if (response.isSuccessful) {
+                    Result.success("Working")
+                } else {
+                    val parsedErr = parseErrorDetails(bodyStr)
+                    Result.failure(Exception(parsedErr.message.ifEmpty { "HTTP ${response.code}" }))
+                }
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
         }
     }
 
@@ -150,27 +260,31 @@ class GeminiClient @Inject constructor(
         modelId: String,
         systemInstruction: String,
         messages: List<ChatMessage>,
-        tools: List<ToolDescriptor>
+        tools: List<ToolDescriptor>,
+        allowThinkingConfig: Boolean = true,
+        includeTools: Boolean = true
     ): GeminiTurnResult = withContext(Dispatchers.IO) {
         val apiKey = apiKeyStore.get()?.trim()
         if (apiKey.isNullOrEmpty()) {
             return@withContext GeminiTurnResult.KeyRejected("Your Gemini key was rejected. Update it in Settings.")
         }
 
-        val resolvedModel = modelId.removePrefix("models/").trim().ifEmpty { DEFAULT_FALLBACK_MODEL }
+        var activeModel = modelId.removePrefix("models/").trim().ifEmpty { DEFAULT_FALLBACK_MODEL }
         val baseUrl = baseUrlProvider().trimEnd('/')
-        val url = "$baseUrl/v1beta/models/$resolvedModel:generateContent"
+        var url = "$baseUrl/v1beta/models/$activeModel:generateContent"
 
+        val effectiveTools = if (includeTools) tools else emptyList()
         val payloadMap = buildGenerateContentPayload(
+            modelId = activeModel,
             systemInstruction = systemInstruction,
             messages = messages,
-            tools = tools
+            tools = effectiveTools,
+            allowThinking = allowThinkingConfig && (activeModel !in unsupportedThinkingModels)
         )
-        val requestJson = mapAdapter.toJson(payloadMap)
+        var requestJson = mapAdapter.toJson(payloadMap)
 
         var attempt = 0
-        val maxRetries429 = 2
-        val maxRetries5xx = 1
+        val maxRetries429 = 1
 
         while (attempt <= maxRetries429) {
             val request = Request.Builder()
@@ -181,48 +295,115 @@ class GeminiClient @Inject constructor(
                 .build()
 
             try {
-                val retryDelayMs: Long? = okHttpClient.newCall(request).execute().use { response ->
+                var retryDelayMs: Long? = null
+                val result: GeminiTurnResult? = okHttpClient.newCall(request).execute().use { response ->
                     val code = response.code
                     val bodyStr = response.body?.string().orEmpty()
 
                     when {
                         code == 200 -> {
-                            return@withContext parseSuccessResponse(bodyStr)
+                            parseSuccessResponse(bodyStr)
                         }
-                        code == 400 || code == 401 || code == 403 -> {
-                            return@withContext GeminiTurnResult.KeyRejected(
-                                "Your Gemini key was rejected. Update it in Settings."
+                        code == 401 -> {
+                            DiagnosticsLogger.log("GeminiClient", "HTTP 401 key rejected")
+                            GeminiTurnResult.KeyRejected("Your Gemini key was rejected. Update it in Settings.")
+                        }
+                        code == 403 -> {
+                            val isKeyRejected = isKeyAuthError(bodyStr)
+                            DiagnosticsLogger.log("GeminiClient", "HTTP 403 key error=$isKeyRejected")
+                            if (isKeyRejected) {
+                                GeminiTurnResult.KeyRejected("Your Gemini key was rejected. Update it in Settings.")
+                            } else {
+                                val err = parseErrorDetails(bodyStr)
+                                GeminiTurnResult.BadRequest("Access denied: ${err.message}")
+                            }
+                        }
+                        code == 404 -> {
+                            // Model not found -> switch to fallback model and retry once
+                            DiagnosticsLogger.log("GeminiClient", "HTTP 404 model not found ($activeModel). Switching to fallback.")
+                            activeModel = DEFAULT_FALLBACK_MODEL
+                            url = "$baseUrl/v1beta/models/$activeModel:generateContent"
+                            val fallbackPayload = buildGenerateContentPayload(
+                                modelId = activeModel,
+                                systemInstruction = systemInstruction,
+                                messages = messages,
+                                tools = effectiveTools,
+                                allowThinking = false
                             )
+                            requestJson = mapAdapter.toJson(fallbackPayload)
+                            retryDelayMs = 100L
+                            null
+                        }
+                        code == 400 -> {
+                            val err = parseErrorDetails(bodyStr)
+                            DiagnosticsLogger.log("GeminiClient", "HTTP 400 INVALID_ARGUMENT: ${err.status} - ${err.message}")
+
+                            // If error was about thinking config, remember that for this model
+                            if (err.message.contains("thinking", ignoreCase = true) || err.message.contains("thinkingConfig", ignoreCase = true)) {
+                                unsupportedThinkingModels.add(activeModel)
+                            }
+
+                            // Retry once with simplified request (no thinking config, then without tools)
+                            if (allowThinkingConfig) {
+                                return@withContext generateContent(
+                                    modelId = activeModel,
+                                    systemInstruction = systemInstruction,
+                                    messages = messages,
+                                    tools = tools,
+                                    allowThinkingConfig = false,
+                                    includeTools = true
+                                )
+                            } else if (includeTools && tools.isNotEmpty()) {
+                                return@withContext generateContent(
+                                    modelId = activeModel,
+                                    systemInstruction = systemInstruction,
+                                    messages = messages,
+                                    tools = tools,
+                                    allowThinkingConfig = false,
+                                    includeTools = false
+                                )
+                            }
+                            GeminiTurnResult.BadRequest("Something went wrong. Please try again.")
                         }
                         code == 429 -> {
-                            if (attempt < maxRetries429) {
-                                val retryAfterSec = response.header("Retry-After")?.toLongOrNull()
-                                if (retryAfterSec != null) {
-                                    (retryAfterSec * 1000L).coerceIn(200L, 5000L)
-                                } else {
-                                    500L * (attempt + 1)
-                                }
+                            val retrySec = response.header("Retry-After")?.toLongOrNull()
+                            if (attempt < maxRetries429 && retrySec != null && retrySec <= 2) {
+                                retryDelayMs = retrySec * 1000L
+                                null
                             } else {
-                                return@withContext GeminiTurnResult.RateLimited(
-                                    "Rate limit reached for your key. Try again in a minute."
+                                GeminiTurnResult.RateLimited(
+                                    "Rate limit reached for your key. Try again in a minute.",
+                                    retryAfterSec = retrySec
                                 )
                             }
                         }
                         code in 500..599 -> {
-                            if (attempt < maxRetries5xx) {
-                                600L
-                            } else {
-                                return@withContext GeminiTurnResult.ServerError(
-                                    "Gemini service is temporarily unavailable (HTTP $code)."
+                            DiagnosticsLogger.log("GeminiClient", "HTTP $code server error on $activeModel")
+                            if (activeModel != DEFAULT_LIGHT_FALLBACK_MODEL) {
+                                activeModel = DEFAULT_LIGHT_FALLBACK_MODEL
+                                url = "$baseUrl/v1beta/models/$activeModel:generateContent"
+                                val fallbackPayload = buildGenerateContentPayload(
+                                    modelId = activeModel,
+                                    systemInstruction = systemInstruction,
+                                    messages = messages,
+                                    tools = effectiveTools,
+                                    allowThinking = false
                                 )
+                                requestJson = mapAdapter.toJson(fallbackPayload)
+                                retryDelayMs = 50L
+                                null
+                            } else {
+                                GeminiTurnResult.ServerError("Google's AI is busy right now. Try again in a moment.")
                             }
                         }
                         else -> {
-                            return@withContext GeminiTurnResult.ServerError(
-                                "Gemini API error (HTTP $code)."
-                            )
+                            GeminiTurnResult.ServerError("Gemini service is temporarily unavailable.")
                         }
                     }
+                }
+
+                if (result != null) {
+                    return@withContext result
                 }
                 attempt++
                 if (retryDelayMs != null) {
@@ -230,148 +411,250 @@ class GeminiClient @Inject constructor(
                 }
             } catch (ce: CancellationException) {
                 throw ce
+            } catch (_: SocketTimeoutException) {
+                DiagnosticsLogger.log("GeminiClient", "Socket timeout")
+                return@withContext GeminiTurnResult.Timeout("That took too long. Try again.")
+            } catch (_: UnknownHostException) {
+                return@withContext GeminiTurnResult.Offline("You appear to be offline.")
+            } catch (_: ConnectException) {
+                return@withContext GeminiTurnResult.Offline("You appear to be offline.")
             } catch (_: IOException) {
                 return@withContext GeminiTurnResult.Offline("You appear to be offline.")
             }
         }
+
         GeminiTurnResult.RateLimited("Rate limit reached for your key. Try again in a minute.")
     }
 
-    suspend fun generateStructuredJson(
+    suspend fun streamGenerateContent(
         modelId: String,
         systemInstruction: String,
-        userPrompt: String
-    ): String? = withContext(Dispatchers.IO) {
-        val apiKey = apiKeyStore.get()?.trim() ?: return@withContext null
-        val resolvedModel = modelId.removePrefix("models/").trim().ifEmpty { DEFAULT_FALLBACK_MODEL }
-        val baseUrl = baseUrlProvider().trimEnd('/')
-        val url = "$baseUrl/v1beta/models/$resolvedModel:generateContent"
+        messages: List<ChatMessage>,
+        tools: List<ToolDescriptor>,
+        onTextChunk: (String) -> Unit
+    ): GeminiTurnResult = withContext(Dispatchers.IO) {
+        val apiKey = apiKeyStore.get()?.trim()
+        if (apiKey.isNullOrEmpty()) {
+            return@withContext GeminiTurnResult.KeyRejected("Your Gemini key was rejected. Update it in Settings.")
+        }
 
-        val payload = mapOf(
-            "systemInstruction" to mapOf(
-                "parts" to listOf(mapOf("text" to systemInstruction))
-            ),
-            "contents" to listOf(
-                mapOf(
-                    "role" to "user",
-                    "parts" to listOf(mapOf("text" to userPrompt))
-                )
-            ),
-            "generationConfig" to mapOf(
-                "temperature" to 0.2,
-                "maxOutputTokens" to 512,
-                "responseMimeType" to "application/json"
-            )
+        val activeModel = modelId.removePrefix("models/").trim().ifEmpty { DEFAULT_FALLBACK_MODEL }
+        val baseUrl = baseUrlProvider().trimEnd('/')
+        val url = "$baseUrl/v1beta/models/$activeModel:streamGenerateContent?alt=sse"
+
+        val payloadMap = buildGenerateContentPayload(
+            modelId = activeModel,
+            systemInstruction = systemInstruction,
+            messages = messages,
+            tools = tools,
+            allowThinking = activeModel !in unsupportedThinkingModels
         )
+        val requestJson = mapAdapter.toJson(payloadMap)
 
         val request = Request.Builder()
             .url(url)
             .header("x-goog-api-key", apiKey)
             .header("Content-Type", "application/json")
-            .post(mapAdapter.toJson(payload).toRequestBody(JSON_MEDIA_TYPE))
+            .post(requestJson.toRequestBody(JSON_MEDIA_TYPE))
             .build()
 
-        return@withContext try {
+        try {
             okHttpClient.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) return@use null
-                val bodyStr = response.body?.string().orEmpty()
-                when (val parsed = parseSuccessResponse(bodyStr)) {
-                    is GeminiTurnResult.Success -> parsed.assistantText
-                    else -> null
+                val code = response.code
+                if (!response.isSuccessful) {
+                    // Fall back to non-streaming generateContent so all recovery and classification rules apply
+                    return@withContext generateContent(
+                        modelId = activeModel,
+                        systemInstruction = systemInstruction,
+                        messages = messages,
+                        tools = tools
+                    )
                 }
+
+                val source = response.body?.byteStream() ?: return@withContext generateContent(
+                    modelId = activeModel,
+                    systemInstruction = systemInstruction,
+                    messages = messages,
+                    tools = tools
+                )
+
+                val reader = BufferedReader(InputStreamReader(source))
+                val accumulatedText = StringBuilder()
+                val toolCalls = mutableListOf<ToolCallSpec>()
+                val allParts = mutableListOf<Any?>()
+                var promptTokens = 0
+                var candidateTokens = 0
+
+                var line = reader.readLine()
+                while (line != null) {
+                    if (line.startsWith("data: ")) {
+                        val json = line.removePrefix("data: ").trim()
+                        if (json.isNotEmpty() && json != "[DONE]") {
+                            val parsed = runCatching { mapAdapter.fromJson(json) }.getOrNull()
+                            if (parsed != null) {
+                                val usage = parsed["usageMetadata"] as? Map<*, *>
+                                if (usage != null) {
+                                    promptTokens = (usage["promptTokenCount"] as? Number)?.toInt() ?: promptTokens
+                                    candidateTokens = (usage["candidatesTokenCount"] as? Number)?.toInt() ?: candidateTokens
+                                }
+                                val candidates = parsed["candidates"] as? List<*>
+                                val first = candidates?.firstOrNull() as? Map<*, *>
+                                val content = first?.get("content") as? Map<*, *>
+                                val parts = (content?.get("parts") as? List<*>).orEmpty()
+                                for (p in parts) {
+                                    allParts.add(p)
+                                    val partMap = p as? Map<*, *> ?: continue
+                                    val text = partMap["text"] as? String
+                                    if (!text.isNullOrEmpty()) {
+                                        accumulatedText.append(text)
+                                        onTextChunk(text)
+                                    }
+                                    val fnCall = partMap["functionCall"] as? Map<*, *>
+                                    if (fnCall != null) {
+                                        val fnName = (fnCall["name"] as? String)?.trim().orEmpty()
+                                        if (fnName.isNotEmpty()) {
+                                            val rawArgs = (fnCall["args"] as? Map<*, *>).orEmpty()
+                                            val stringArgs = mutableMapOf<String, String>()
+                                            for ((k, v) in rawArgs) {
+                                                val keyStr = k as? String ?: continue
+                                                stringArgs[keyStr] = v?.toString().orEmpty()
+                                            }
+                                            toolCalls.add(
+                                                ToolCallSpec(
+                                                    id = "call_${UUID.randomUUID()}",
+                                                    name = fnName,
+                                                    args = stringArgs
+                                                )
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    line = reader.readLine()
+                }
+
+                val finalPartsJson = runCatching { listAdapter.toJson(allParts) }.getOrNull()
+                GeminiTurnResult.Success(
+                    assistantText = accumulatedText.toString().takeIf { it.isNotBlank() },
+                    toolCalls = toolCalls,
+                    promptTokens = promptTokens,
+                    candidateTokens = candidateTokens,
+                    rawPartsJson = finalPartsJson
+                )
             }
         } catch (ce: CancellationException) {
             throw ce
-        } catch (_: Exception) {
-            null
+        } catch (_: SocketTimeoutException) {
+            GeminiTurnResult.Timeout("That took too long. Try again.")
+        } catch (_: UnknownHostException) {
+            GeminiTurnResult.Offline("You appear to be offline.")
+        } catch (_: ConnectException) {
+            GeminiTurnResult.Offline("You appear to be offline.")
+        } catch (_: IOException) {
+            GeminiTurnResult.Offline("You appear to be offline.")
         }
     }
 
     internal fun buildGenerateContentPayload(
+        modelId: String,
         systemInstruction: String,
         messages: List<ChatMessage>,
-        tools: List<ToolDescriptor>
+        tools: List<ToolDescriptor>,
+        allowThinking: Boolean = true
     ): Map<String, Any?> {
         val contents = mutableListOf<MutableMap<String, Any?>>()
 
         for (msg in messages) {
-            val (role, parts) = when (msg.role) {
+            when (msg.role) {
                 MessageRole.USER, MessageRole.SYSTEM -> {
-                    "user" to listOf(mapOf("text" to msg.content))
+                    contents.add(
+                        mutableMapOf(
+                            "role" to "user",
+                            "parts" to mutableListOf<Map<String, Any?>>(mapOf("text" to msg.content))
+                        )
+                    )
                 }
                 MessageRole.ASSISTANT -> {
-                    val assistantParts = mutableListOf<Map<String, Any?>>()
-                    if (msg.content.isNotBlank()) {
-                        assistantParts.add(mapOf("text" to msg.content))
+                    // Exact preservation of raw model parts if present
+                    val rawParts = msg.rawModelPartsJson?.let { json ->
+                        runCatching {
+                            val parsed = listAdapter.fromJson(json) as? List<*>
+                            parsed?.mapNotNull { it as? Map<String, Any?> }
+                        }.getOrNull()
                     }
-                    if (!msg.toolName.isNullOrBlank()) {
-                        val parsedArgs = msg.toolArgsJson?.let { raw ->
-                            runCatching { mapAdapter.fromJson(raw) }.getOrNull()
-                        } ?: emptyMap()
-                        assistantParts.add(
-                            mapOf(
-                                "functionCall" to mapOf(
-                                    "name" to msg.toolName,
-                                    "args" to parsedArgs
-                                )
-                            )
-                        )
-                    }
-                    if (assistantParts.isEmpty()) {
-                        assistantParts.add(mapOf("text" to "Done."))
-                    }
-                    "model" to assistantParts
-                }
-                MessageRole.TOOL -> {
-                    val fnName = msg.toolName?.takeIf { it.isNotBlank() } ?: "tool_result"
-                    // When sending a functionResponse, ensure the previous turn in contents is a model functionCall
-                    // if one wasn't explicitly recorded as an ASSISTANT functionCall turn.
-                    val prev = contents.lastOrNull()
-                    val prevParts = (prev?.get("parts") as? List<*>).orEmpty()
-                    val prevHasFunctionCall = prev?.get("role") == "model" && prevParts.any {
-                        (it as? Map<*, *>)?.containsKey("functionCall") == true
-                    }
-                    if (!prevHasFunctionCall) {
-                        val synthArgs = msg.toolArgsJson?.let { raw ->
-                            runCatching { mapAdapter.fromJson(raw) }.getOrNull()
-                        } ?: emptyMap()
+
+                    if (!rawParts.isNullOrEmpty()) {
                         contents.add(
                             mutableMapOf(
                                 "role" to "model",
-                                "parts" to mutableListOf<Map<String, Any?>>(
-                                    mapOf(
-                                        "functionCall" to mapOf(
-                                            "name" to fnName,
-                                            "args" to synthArgs
-                                        )
+                                "parts" to rawParts.toMutableList()
+                            )
+                        )
+                    } else {
+                        val assistantParts = mutableListOf<Map<String, Any?>>()
+                        if (msg.content.isNotBlank()) {
+                            assistantParts.add(mapOf("text" to msg.content))
+                        }
+                        if (!msg.toolName.isNullOrBlank()) {
+                            val parsedArgs = msg.toolArgsJson?.let { raw ->
+                                runCatching { mapAdapter.fromJson(raw) }.getOrNull()
+                            } ?: emptyMap()
+                            assistantParts.add(
+                                mapOf(
+                                    "functionCall" to mapOf(
+                                        "name" to msg.toolName,
+                                        "args" to parsedArgs
                                     )
                                 )
                             )
-                        )
-                    }
-                    "user" to listOf(
-                        mapOf(
-                            "functionResponse" to mapOf(
-                                "name" to fnName,
-                                "response" to mapOf("result" to msg.content)
+                        }
+                        if (assistantParts.isEmpty()) {
+                            assistantParts.add(mapOf("text" to "Done."))
+                        }
+                        contents.add(
+                            mutableMapOf(
+                                "role" to "model",
+                                "parts" to assistantParts
                             )
                         )
-                    )
+                    }
                 }
-            }
-
-            val lastContent = contents.lastOrNull()
-            if (lastContent != null && lastContent["role"] == role) {
-                @Suppress("UNCHECKED_CAST")
-                val existingParts = lastContent["parts"] as MutableList<Map<String, Any?>>
-                existingParts.addAll(parts)
-            } else {
-                contents.add(
-                    mutableMapOf(
-                        "role" to role,
-                        "parts" to parts.toMutableList()
+                MessageRole.TOOL -> {
+                    val fnName = msg.toolName?.takeIf { it.isNotBlank() } ?: "tool_result"
+                    val fnResponsePart = mapOf(
+                        "functionResponse" to mapOf(
+                            "name" to fnName,
+                            "response" to mapOf("result" to msg.content)
+                        )
                     )
-                )
+
+                    // For parallel tool calls, group all consecutive functionResponse parts into ONE single user turn
+                    val lastTurn = contents.lastOrNull()
+                    if (lastTurn != null && lastTurn["role"] == "user") {
+                        @Suppress("UNCHECKED_CAST")
+                        val existingParts = lastTurn["parts"] as? MutableList<Map<String, Any?>>
+                        val hasFunctionResponse = existingParts?.any { it.containsKey("functionResponse") } == true
+                        if (hasFunctionResponse) {
+                            existingParts.add(fnResponsePart)
+                        } else {
+                            contents.add(
+                                mutableMapOf(
+                                    "role" to "user",
+                                    "parts" to mutableListOf(fnResponsePart)
+                                )
+                            )
+                        }
+                    } else {
+                        contents.add(
+                            mutableMapOf(
+                                "role" to "user",
+                                "parts" to mutableListOf(fnResponsePart)
+                            )
+                        )
+                    }
+                }
             }
         }
 
@@ -394,15 +677,27 @@ class GeminiClient @Inject constructor(
             )
         }
 
+        val generationConfig = mutableMapOf<String, Any?>(
+            "temperature" to 0.4,
+            "maxOutputTokens" to 1024
+        )
+
+        // Minimum thinking configuration per model family
+        if (allowThinking) {
+            val lowerModel = modelId.lowercase(Locale.US)
+            if (lowerModel.contains("2.5") && (lowerModel.contains("flash") || lowerModel.contains("lite"))) {
+                generationConfig["thinkingConfig"] = mapOf("thinkingBudget" to 0)
+            } else if (lowerModel.contains("3-") || lowerModel.contains("gemini-3")) {
+                generationConfig["thinkingConfig"] = mapOf("thinkingLevel" to "LOW")
+            }
+        }
+
         val result = mutableMapOf<String, Any?>(
             "systemInstruction" to mapOf(
                 "parts" to listOf(mapOf("text" to systemInstruction))
             ),
             "contents" to contents,
-            "generationConfig" to mapOf(
-                "temperature" to 0.4,
-                "maxOutputTokens" to 1024
-            )
+            "generationConfig" to generationConfig
         )
 
         if (functionDeclarations.isNotEmpty()) {
@@ -507,6 +802,8 @@ class GeminiClient @Inject constructor(
         val content = firstCandidate["content"] as? Map<*, *>
         val parts = (content?.get("parts") as? List<*>).orEmpty()
 
+        val rawPartsJson = runCatching { listAdapter.toJson(parts) }.getOrNull()
+
         val textChunks = mutableListOf<String>()
         val toolCalls = mutableListOf<ToolCallSpec>()
 
@@ -550,7 +847,39 @@ class GeminiClient @Inject constructor(
             assistantText = combinedText,
             toolCalls = toolCalls,
             promptTokens = promptTokens,
-            candidateTokens = candidateTokens
+            candidateTokens = candidateTokens,
+            rawPartsJson = rawPartsJson
         )
+    }
+
+    private data class ParsedError(
+        val code: Int = 0,
+        val status: String = "",
+        val message: String = "",
+        val reason: String = ""
+    )
+
+    private fun parseErrorDetails(bodyStr: String): ParsedError {
+        val root = runCatching { mapAdapter.fromJson(bodyStr) }.getOrNull()
+        val errMap = root?.get("error") as? Map<*, *> ?: return ParsedError()
+        val code = (errMap["code"] as? Number)?.toInt() ?: 0
+        val status = (errMap["status"] as? String).orEmpty()
+        val message = (errMap["message"] as? String).orEmpty()
+        val details = (errMap["details"] as? List<*>).orEmpty()
+        val reason = details.firstNotNullOfOrNull { item ->
+            val detailMap = item as? Map<*, *>
+            detailMap?.get("reason") as? String
+        }.orEmpty()
+        return ParsedError(code = code, status = status, message = message, reason = reason)
+    }
+
+    private fun isKeyAuthError(bodyStr: String): Boolean {
+        val err = parseErrorDetails(bodyStr)
+        if (err.reason == "API_KEY_INVALID" || err.reason == "API_KEY_SERVICE_BLOCKED") return true
+        val combined = "${err.status} ${err.message} ${err.reason}".lowercase(Locale.US)
+        return combined.contains("api_key_invalid") ||
+            combined.contains("invalid key") ||
+            combined.contains("api key not valid") ||
+            (combined.contains("permission_denied") && (combined.contains("api key") || combined.contains("key invalid") || combined.contains("invalid key")))
     }
 }

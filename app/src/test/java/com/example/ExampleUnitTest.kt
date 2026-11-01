@@ -689,6 +689,46 @@ class ExampleUnitTest {
         assertTrue(readScreenResult.outputEn.contains(JarvisAccessibilityService.ACCESSIBILITY_DISABLED_EN))
     }
 
+    @Test
+    fun localIntentRouter_flashlightAndVolumeDirectMatches() {
+        val onRoute = com.example.domain.agent.LocalIntentRouter.route("turn on flashlight") as? com.example.domain.agent.LocalRouteResult.ToolAction
+        assertNotNull(onRoute)
+        assertEquals("toggle_flashlight", onRoute?.toolName)
+        assertEquals("true", onRoute?.args?.get("enabled"))
+
+        val offRoute = com.example.domain.agent.LocalIntentRouter.route("torch band kar do") as? com.example.domain.agent.LocalRouteResult.ToolAction
+        assertNotNull(offRoute)
+        assertEquals("toggle_flashlight", offRoute?.toolName)
+        assertEquals("false", offRoute?.args?.get("enabled"))
+
+        val volRoute = com.example.domain.agent.LocalIntentRouter.route("set volume to 80 percent") as? com.example.domain.agent.LocalRouteResult.ToolAction
+        assertNotNull(volRoute)
+        assertEquals("adjust_volume", volRoute?.toolName)
+        assertEquals("80", volRoute?.args?.get("level_percent"))
+    }
+
+    @Test
+    fun localIntentRouter_timeAndYouTubeFastPath() {
+        val timeRoute = com.example.domain.agent.LocalIntentRouter.route("what time is it") as? com.example.domain.agent.LocalRouteResult.DirectReply
+        assertNotNull(timeRoute)
+        assertTrue(timeRoute?.reply?.contains("It's") == true)
+
+        val ytRoute = com.example.domain.agent.LocalIntentRouter.route("play jazz on youtube") as? com.example.domain.agent.LocalRouteResult.ToolAction
+        assertNotNull(ytRoute)
+        assertEquals("play_media", ytRoute?.toolName)
+        assertEquals("jazz", ytRoute?.args?.get("query"))
+    }
+
+    @Test
+    fun memorySafetyFilter_blocksAppMetaAndKeyPhrases() {
+        assertNotNull(MemorySafetyFilter.validateFact("my api key", "AIzaSyD..."))
+        assertNotNull(MemorySafetyFilter.validateFact("gemini_key", "secret"))
+        assertNotNull(MemorySafetyFilter.validateFact("note", "key rejected by server"))
+        assertNotNull(MemorySafetyFilter.validateFact("error", "401 unauthorized"))
+        // Valid normal user preference should pass
+        assertNull(MemorySafetyFilter.validateFact("favorite coffee", "oat latte"))
+    }
+
     private class FakeChatRepository : ChatRepository {
         val savedMessages = mutableListOf<ChatMessage>()
         override val messagesFlow: Flow<List<ChatMessage>> = MutableStateFlow(emptyList())
@@ -704,6 +744,9 @@ class ExampleUnitTest {
         override suspend fun appendMessage(message: ChatMessage): Long {
             savedMessages.add(message)
             return savedMessages.size.toLong()
+        }
+        override suspend fun deleteConversation(conversationId: Long) {
+            savedMessages.clear()
         }
         override suspend fun clearAllMessages() { savedMessages.clear() }
     }

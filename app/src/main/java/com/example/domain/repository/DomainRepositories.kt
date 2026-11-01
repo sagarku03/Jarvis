@@ -39,6 +39,7 @@ interface ChatRepository {
     suspend fun appendMessage(message: ChatMessage): Long
     suspend fun saveSummary(summary: ConversationSummaryItem)
     suspend fun getRecentSummaries(limit: Int = 2): List<ConversationSummaryItem>
+    suspend fun deleteConversation(conversationId: Long)
     suspend fun clearAllMessages()
 }
 

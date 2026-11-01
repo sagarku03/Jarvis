@@ -26,6 +26,9 @@ interface ConversationDao {
     @Query("UPDATE conversations SET title = :title, summary = :summary, endedAt = COALESCE(endedAt, :endedAt) WHERE id = :id")
     suspend fun updateTitleAndSummary(id: Long, title: String, summary: String, endedAt: Long)
 
+    @Query("DELETE FROM conversations WHERE id = :id")
+    suspend fun deleteConversation(id: Long)
+
     @Query("DELETE FROM conversations")
     suspend fun clearAll()
 }
@@ -50,6 +53,9 @@ interface MessageDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertMessage(entity: MessageEntity): Long
 
+    @Query("DELETE FROM messages WHERE conversationId = :conversationId")
+    suspend fun deleteMessagesForConversation(conversationId: Long)
+
     @Query("DELETE FROM messages")
     suspend fun clearAll()
 }
@@ -64,6 +70,9 @@ interface SummaryDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertSummary(entity: SummaryEntity): Long
+
+    @Query("DELETE FROM summaries WHERE conversationId = :conversationId")
+    suspend fun deleteSummariesForConversation(conversationId: Long)
 
     @Query("DELETE FROM summaries")
     suspend fun clearAll()

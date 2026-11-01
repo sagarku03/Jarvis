@@ -165,4 +165,23 @@ class ExampleRobolectricTest {
         val routines = app.appContainer.routineRepository.routinesFlow.first()
         assertTrue("Fresh database must have zero seeded routines", routines.isEmpty())
     }
+
+    @Test
+    fun `chatRepository deletesConversationAndAssociatedMessages`() = runBlocking {
+        val convId = chatRepository.startNewConversation("To Delete")
+        chatRepository.appendMessage(
+            ChatMessage(
+                conversationId = convId,
+                role = MessageRole.USER,
+                content = "Test message"
+            )
+        )
+        val msgsBefore = chatRepository.getMessagesForConversation(convId)
+        assertEquals(1, msgsBefore.size)
+
+        chatRepository.deleteConversation(convId)
+
+        val msgsAfter = chatRepository.getMessagesForConversation(convId)
+        assertTrue(msgsAfter.isEmpty())
+    }
 }

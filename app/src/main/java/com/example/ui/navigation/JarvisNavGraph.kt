@@ -129,6 +129,7 @@ fun JarvisRootApp(
                     JarvisDestination.SETTINGS -> SettingsScreen(
                         viewModel = settingsViewModel,
                         onOpenPermissionsScreen = { showPermissionsScreen = true },
+                        onOpenMemory = { currentTab = JarvisDestination.MEMORY },
                         onKeyRemoved = {
                             setupViewModel.refreshPermissionAndKeyState()
                         }

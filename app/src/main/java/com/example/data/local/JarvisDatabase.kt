@@ -15,7 +15,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         ActivityLogEntity::class,
         RoutineEntity::class
     ],
-    version = 4,
+    version = 5,
     exportSchema = true
 )
 abstract class JarvisDatabase : RoomDatabase() {
@@ -203,6 +203,28 @@ abstract class JarvisDatabase : RoomDatabase() {
             private fun decryptIfLegacyEncrypted(value: String): String {
                 if (!value.startsWith("ENCv1:")) return value
                 return runCatching { FieldCipher.decrypt(value) }.getOrDefault(value.removePrefix("ENCv1:"))
+            }
+        }
+
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Add rawModelPartsJson column to messages
+                db.execSQL("ALTER TABLE `messages` ADD COLUMN `rawModelPartsJson` TEXT DEFAULT NULL")
+
+                // F6: Delete existing junk facts whose key/value mention api key / gemini / rejected / token
+                db.execSQL(
+                    """
+                    DELETE FROM `memory_facts` 
+                    WHERE lower(`key`) LIKE '%api%key%' 
+                       OR lower(`key`) LIKE '%gemini%' 
+                       OR lower(`key`) LIKE '%rejected%' 
+                       OR lower(`key`) LIKE '%token%'
+                       OR lower(`value`) LIKE '%api%key%' 
+                       OR lower(`value`) LIKE '%gemini%' 
+                       OR lower(`value`) LIKE '%rejected%' 
+                       OR lower(`value`) LIKE '%token%'
+                    """.trimIndent()
+                )
             }
         }
     }

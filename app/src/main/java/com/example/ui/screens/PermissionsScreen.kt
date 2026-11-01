@@ -34,6 +34,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -82,6 +83,20 @@ fun PermissionsScreen(
         contract = ActivityResultContracts.RequestPermission()
     ) {
         viewModel.refreshStatuses()
+    }
+
+    val manufacturer = Build.MANUFACTURER.lowercase()
+    val sortedGuides = remember(viewModel.oemGuides) {
+        viewModel.oemGuides.sortedByDescending { guide ->
+            val oemLower = guide.oemName.lowercase()
+            when {
+                manufacturer.contains("samsung") && oemLower.contains("samsung") -> 10
+                (manufacturer.contains("xiaomi") || manufacturer.contains("redmi") || manufacturer.contains("poco")) && oemLower.contains("xiaomi") -> 10
+                (manufacturer.contains("oneplus") || manufacturer.contains("oppo") || manufacturer.contains("realme")) && oemLower.contains("oneplus") -> 10
+                manufacturer.contains("vivo") && oemLower.contains("vivo") -> 10
+                else -> 0
+            }
+        }
     }
 
     AuroraBackground {
@@ -208,9 +223,17 @@ fun PermissionsScreen(
                     }
                 }
 
-                items(viewModel.oemGuides, key = { it.oemName }) { guide ->
+                items(sortedGuides, key = { it.oemName }) { guide ->
+                    val isDetected = when {
+                        manufacturer.contains("samsung") && guide.oemName.lowercase().contains("samsung") -> true
+                        (manufacturer.contains("xiaomi") || manufacturer.contains("redmi") || manufacturer.contains("poco")) && guide.oemName.lowercase().contains("xiaomi") -> true
+                        (manufacturer.contains("oneplus") || manufacturer.contains("oppo") || manufacturer.contains("realme")) && guide.oemName.lowercase().contains("oneplus") -> true
+                        manufacturer.contains("vivo") && guide.oemName.lowercase().contains("vivo") -> true
+                        else -> false
+                    }
                     OemBatteryCard(
                         guide = guide,
+                        isDetected = isDetected,
                         onOpenSettings = {
                             runCatching {
                                 context.startActivity(
@@ -285,6 +308,7 @@ private fun PermissionCard(
 @Composable
 private fun OemBatteryCard(
     guide: OemBatteryGuide,
+    isDetected: Boolean = false,
     onOpenSettings: () -> Unit
 ) {
     AuroraGlassCard(modifier = Modifier.fillMaxWidth()) {
@@ -309,6 +333,12 @@ private fun OemBatteryCard(
                     color = AuroraColors.Aqua,
                     fontWeight = FontWeight.Bold
                 )
+                if (isDetected) {
+                    AuroraStatusPill(
+                        text = "Detected",
+                        color = AuroraColors.Success
+                    )
+                }
             }
             AuroraSecondaryButton(
                 text = stringResource(R.string.permissions_open_battery_settings),

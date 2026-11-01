@@ -149,6 +149,18 @@ class AgentBackendRepositoryImpl @Inject constructor(
                         toolCalls = emptyList()
                     )
                 }
+                is GeminiTurnResult.BadRequest -> {
+                    AgentStepDecision(
+                        assistantText = result.message,
+                        toolCalls = emptyList()
+                    )
+                }
+                is GeminiTurnResult.Timeout -> {
+                    AgentStepDecision(
+                        assistantText = result.message,
+                        toolCalls = emptyList()
+                    )
+                }
                 is GeminiTurnResult.Offline -> {
                     val fallback = if (!lastNonUserIsTool) parseOfflineCommand(lastUserMsg) else null
                     fallback ?: AgentStepDecision(
@@ -448,6 +460,7 @@ class ChatRepositoryImpl @Inject constructor(
                 content = message.content,
                 toolName = message.toolName,
                 toolArgsJson = message.toolArgsJson,
+                rawModelPartsJson = message.rawModelPartsJson,
                 timestamp = message.timestampMs
             )
         )
@@ -478,6 +491,15 @@ class ChatRepositoryImpl @Inject constructor(
         return summaryDao.getRecentSummaries(limit).map { it.toDomain() }
     }
 
+    override suspend fun deleteConversation(conversationId: Long) {
+        summaryDao.deleteSummariesForConversation(conversationId)
+        messageDao.deleteMessagesForConversation(conversationId)
+        conversationDao.deleteConversation(conversationId)
+        if (cachedConversationId == conversationId) {
+            cachedConversationId = null
+        }
+    }
+
     override suspend fun clearAllMessages() {
         messageDao.clearAll()
         summaryDao.clearAll()
@@ -492,6 +514,7 @@ class ChatRepositoryImpl @Inject constructor(
         content = content,
         toolName = toolName,
         toolArgsJson = toolArgsJson,
+        rawModelPartsJson = rawModelPartsJson,
         timestampMs = timestamp
     )
 

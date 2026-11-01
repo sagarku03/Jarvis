@@ -9,89 +9,99 @@
     <string name="nav_settings">Settings</string>
     <string name="nav_permissions">Permissions</string>
 
-    <!-- Setup Gate Screen (P1) -->
+    <!-- Setup Gate Screen (F3 3-step wizard) -->
     <string name="setup_gate_title">Welcome to JARVIS</string>
-    <string name="setup_gate_subtitle">Bring-Your-Own-Key personal Android voice assistant</string>
-    <string name="setup_title">Welcome to JARVIS</string>
-    <string name="setup_subtitle">Bring-Your-Own-Key personal Android voice assistant</string>
+    <string name="setup_gate_subtitle">Your private Android AI assistant</string>
     <string name="setup_step_indicator">Step %1$d of 3</string>
-    <string name="setup_step1_title">1. Connect Your Gemini API Key</string>
-    <string name="setup_step1_desc">JARVIS runs directly on your phone using your personal Google AI Studio Gemini key. Your key is encrypted in Android Keystore and never leaves your device except to call Google\'s Gemini API.</string>
-    <string name="setup_step1_explanation">JARVIS runs directly on your phone using your personal Google AI Studio Gemini key. Your key is encrypted in Android Keystore and never leaves your device except to call Google\'s Gemini API.</string>
-    <string name="setup_get_free_key">Get a free key</string>
+
+    <string name="setup_step1_header">Connect your AI</string>
+    <string name="setup_step1_desc">Jarvis runs on Google Gemini. You use your own free API key — you pay nothing, and your key stays on this device.</string>
+    <string name="setup_get_free_key">Get a free key (takes 1 minute)</string>
     <string name="setup_key_hint">AIza...</string>
     <string name="setup_key_input_hint">Paste your Gemini API key (AIza...)</string>
     <string name="setup_paste_key">Paste</string>
     <string name="setup_show_key">Show key</string>
     <string name="setup_hide_key">Hide key</string>
-    <string name="setup_verify_key">Verify key</string>
-    <string name="setup_verifying">Verifying...</string>
-    <string name="setup_verifying_key">Verifying with Google Gemini...</string>
-    <string name="setup_key_verified_badge">Key verified · %1$s</string>
+    <string name="setup_verify_key">Connect</string>
+    <string name="setup_verifying">Connecting to Gemini…</string>
+    <string name="setup_key_verified_badge">Connected! Available models: %1$d</string>
     <string name="setup_model_label">Selected Gemini Model</string>
+    <string name="setup_step1_error_unverified">Verify your key to continue.</string>
     <string name="setup_next_step">Next</string>
     <string name="setup_prev_step">Back</string>
 
-    <string name="setup_step2_title">2. Tell Jarvis About You</string>
-    <string name="setup_step2_desc">Saved to encrypted Pinned Memory so Jarvis addresses you naturally and resolves family contacts.</string>
-    <string name="setup_step2_subtitle">Helps JARVIS address you naturally and resolve family contacts.</string>
-    <string name="setup_user_name_label">What should I call you? (Required)</string>
-    <string name="setup_name_hint">Your name (Required)</string>
-    <string name="setup_user_name_hint">e.g. Aarav</string>
-    <string name="setup_user_city_label">Your City (Optional)</string>
-    <string name="setup_city_hint">Your city (Optional)</string>
-    <string name="setup_user_city_hint">e.g. Bengaluru</string>
-    <string name="setup_contacts_label">Contact Nicknames (Optional — up to 3)</string>
-    <string name="setup_contacts_title">Quick Contact Nicknames (Optional — up to 3)</string>
+    <string name="setup_step2_header">About you</string>
+    <string name="setup_step2_desc">Helps Jarvis address you naturally and resolve family contacts.</string>
+    <string name="setup_user_name_label">What should Jarvis call you? (Required)</string>
+    <string name="setup_user_name_hint">Your name</string>
+    <string name="setup_step2_name_helper">Used for greetings and commands like call my mom.</string>
+    <string name="setup_step2_error_name">Please enter your name.</string>
+    <string name="setup_user_city_label">Your home city (Optional)</string>
+    <string name="setup_user_city_hint">e.g. Bengaluru, New York</string>
+    <string name="setup_contacts_label">Important contacts (Optional — up to 3)</string>
     <string name="setup_contact_nick_hint">Nickname (e.g. Mom)</string>
     <string name="setup_contact_name_hint">Full name (e.g. Sunita Sharma)</string>
-    <string name="setup_contact_alias_hint">Nickname (e.g. Mom, Dad)</string>
-    <string name="setup_contact_phone_hint">Phone (+91...)</string>
 
-    <string name="setup_step3_title">3. Permissions &amp; Privacy</string>
-    <string name="setup_step3_desc">Microphone is required. Other permissions can be granted now or anytime in Settings.</string>
-    <string name="setup_step3_subtitle">Microphone is required. Other permissions can be granted now or anytime in Settings.</string>
+    <string name="setup_step3_header">Permissions</string>
+    <string name="setup_step3_desc">Grant the permissions you need. You can always change them later in Settings.</string>
     <string name="setup_allow_button">Allow</string>
+    <string name="setup_later_button">Later</string>
+    <string name="setup_step3_mic_required">Microphone permission is required to speak.</string>
+    <string name="setup_step3_privacy_required">Please agree to the privacy statement.</string>
     <string name="setup_privacy_card_title">Privacy &amp; Security</string>
-    <string name="setup_privacy_card_body">Your voice transcript, memory facts, and screen text (when you ask about the screen) are sent directly from your phone to Google\'s Gemini API using your key. Nothing passes through any third-party server.</string>
-    <string name="setup_privacy_checkbox">I understand</string>
-    <string name="setup_privacy_checkbox_label">I understand how JARVIS uses my Gemini API key and encrypted local storage.</string>
-    <string name="setup_unlock_button">Unlock JARVIS</string>
-    <string name="setup_finish_button">Unlock JARVIS</string>
+    <string name="setup_privacy_card_body">Your key, voice transcripts, and memories stay private on your phone. Nothing is sold or routed through third-party servers.</string>
+    <string name="setup_privacy_checkbox">I agree that Jarvis runs tools on my device and keeps my data local.</string>
+    <string name="setup_unlock_button">Get started</string>
+
+    <!-- First arrival tutorial dialog -->
+    <string name="setup_tutorial_title">Welcome to JARVIS</string>
+    <string name="setup_tutorial_got_it">Got it</string>
+    <string name="setup_tutorial_card1_title">Tap the mic and speak naturally</string>
+    <string name="setup_tutorial_card1_desc">Speak in plain English or use Hinglish contact names. Jarvis understands context.</string>
+    <string name="setup_tutorial_card2_title">Everyday voice commands</string>
+    <string name="setup_tutorial_card2_desc">Say things like: Set a timer for 10 minutes, Turn on flashlight, Call Mom, or Play jazz on YouTube.</string>
+    <string name="setup_tutorial_card3_title">Emergency STOP is always one tap away</string>
+    <string name="setup_tutorial_card3_desc">A red STOP button appears whenever Jarvis is speaking or working. Tap it anytime to cancel instantly.</string>
 
     <!-- Home Screen -->
     <string name="home_greeting_default">Hi, I\'m Jarvis. How can I help?</string>
+    <string name="home_greeting_named">Hi %1$s, I\'m Jarvis.</string>
     <string name="home_subtitle">Personal Android Voice &amp; Action Assistant</string>
-    <string name="home_tap_to_talk">Tap the Orb to Talk</string>
+    <string name="home_status_ready">Ready</string>
+    <string name="home_status_listening">Listening</string>
+    <string name="home_status_thinking">Thinking</string>
+    <string name="home_status_speaking">Speaking</string>
+    <string name="home_tap_to_talk">Tap the mic to talk</string>
     <string name="home_listening">Listening...</string>
     <string name="home_thinking">Thinking...</string>
     <string name="home_speaking">Speaking...</string>
+    <string name="home_still_working">Still working… (tap to cancel)</string>
     <string name="home_paused_killswitch">Kill Switch Active — All Actions Paused</string>
-    <string name="home_input_hint">Ask Jarvis or type a command...</string>
+    <string name="home_input_hint">Type a command...</string>
     <string name="home_send">Send</string>
-    <string name="home_cancel_turn">Cancel</string>
-    <string name="home_new_chat">New chat</string>
+    <string name="home_cancel_turn">STOP</string>
+    <string name="home_new_chat">+ New chat</string>
     <string name="home_kill_switch_trigger">STOP ALL</string>
     <string name="home_kill_switch_resume">Resume Assistant</string>
     <string name="home_Partial_prefix">Hearing: %1$s</string>
-    <string name="home_Empty_transcript">No messages in this conversation yet. Tap the orb or type below.</string>
-    <string name="home_mic_active_badge">Mic Active</string>
-    <string name="home_offline_voice_chip">Device voice</string>
-    <string name="home_device_voice_chip">Device voice</string>
-    <string name="home_key_rejected_banner">Your Gemini key was rejected. Update it in Settings.</string>
-    <string name="home_update_key_action">Update Key</string>
+    <string name="home_Empty_transcript">Tap the mic or choose an example below:</string>
+    <string name="home_sample_timer">Set a timer for 10 minutes</string>
+    <string name="home_sample_flashlight">Turn on flashlight</string>
+    <string name="home_sample_youtube">Play jazz on YouTube</string>
+    <string name="home_action_try_again">Try again</string>
+    <string name="home_action_open_settings">Open Settings</string>
 
     <!-- Speech Recognizer Error Messages -->
     <string name="stt_error_busy">Microphone is busy. Please try again in a moment.</string>
-    <string name="stt_error_no_match">Didn\'t catch that. Tap the orb to speak again.</string>
-    <string name="stt_error_speech_timeout">No speech detected. Tap the orb when ready.</string>
+    <string name="stt_error_no_match">Didn\'t catch that. Tap the mic to speak again.</string>
+    <string name="stt_error_speech_timeout">No speech detected. Tap the mic when ready.</string>
     <string name="stt_error_unavailable">On-device speech recognition is unavailable on this device.</string>
     <string name="stt_error_network">Speech recognition network error. Check your connection.</string>
     <string name="stt_error_network_timeout">Speech recognition timed out.</string>
     <string name="stt_error_server">Speech recognition service temporarily unavailable.</string>
     <string name="stt_error_audio">Microphone audio error. Check microphone permissions.</string>
     <string name="stt_error_permissions">Microphone permission is required for voice commands.</string>
-    <string name="stt_error_client">Voice input reset. Tap the orb to talk.</string>
+    <string name="stt_error_client">Voice input reset. Tap the mic to talk.</string>
 
     <!-- Safety Confirmation Sheet -->
     <string name="safety_confirm_title">Confirm %1$s Risk Action</string>
@@ -109,52 +119,45 @@
     <string name="activity_args_label">Arguments</string>
     <string name="activity_output_label">Result</string>
 
-    <!-- Memory Screen (P3) -->
-    <string name="memory_title">Assistant Memory</string>
-    <string name="memory_subtitle">Encrypted facts, conversations, and auto-learned preferences</string>
+    <!-- Memory Screen (What I know about you) -->
+    <string name="memory_title">What I know about you</string>
+    <string name="memory_subtitle">Things Jarvis remembers to help you.</string>
     <string name="memory_tab_facts">Facts</string>
     <string name="memory_tab_conversations">Conversations</string>
     <string name="memory_tab_learned_today">Learned today</string>
-    <string name="memory_search_hint">Search memories or past conversations...</string>
-    <string name="memory_add_title">Add or Update Memory Fact</string>
-    <string name="memory_edit_title">Edit Memory Fact</string>
-    <string name="memory_key_hint">Key (e.g. Mom, Favorite IPL Team)</string>
-    <string name="memory_value_hint">Value (e.g. +919876543210, CSK)</string>
-    <string name="memory_save_button">Save Fact</string>
-    <string name="memory_update_button">Update Fact</string>
-    <string name="memory_cancel_edit">Cancel Edit</string>
+    <string name="memory_search_hint">Search what Jarvis remembers...</string>
+    <string name="memory_add_button">+ Add</string>
+    <string name="memory_add_sheet_title">What should I remember?</string>
+    <string name="memory_add_sheet_hint">e.g., My sister\'s name is Priya, or I prefer window seats</string>
+    <string name="memory_edit_title">Edit Memory</string>
+    <string name="memory_key_hint">Topic (e.g. Sister, Favorite coffee)</string>
+    <string name="memory_value_hint">Details (e.g. Priya, Oat latte)</string>
+    <string name="memory_save_button">Save</string>
+    <string name="memory_update_button">Update</string>
+    <string name="memory_cancel_edit">Cancel</string>
     <string name="memory_clear_all">Clear All</string>
-    <string name="memory_empty">No memories saved yet.</string>
+    <string name="memory_empty">No memories saved yet. Tap + Add above.</string>
     <string name="memory_conversations_empty">No conversations recorded yet.</string>
     <string name="memory_learned_today_empty">No facts auto-learned in the last 24 hours.</string>
     <string name="memory_undo_button">Undo</string>
-    <string name="memory_undo_learned">Undo</string>
     <string name="memory_pin_toggle">Toggle Pin</string>
     <string name="memory_pinned_badge">Pinned</string>
     <string name="memory_pin_fact">Pin fact</string>
     <string name="memory_edit_fact">Edit fact</string>
-    <string name="memory_source_explicit">user said</string>
-    <string name="memory_source_inferred">auto-learned</string>
-    <string name="memory_source_setup">from setup</string>
-    <string name="memory_source_tool">tool</string>
-    <string name="memory_cat_profile">Profile</string>
-    <string name="memory_cat_contact">Contact</string>
-    <string name="memory_cat_preference">Preference</string>
-    <string name="memory_cat_routine_hint">Routine</string>
-    <string name="memory_cat_task">Task</string>
-    <string name="memory_cat_note">Note</string>
-    <string name="memory_cat_episode">Episode</string>
+    <string name="memory_source_learned">Learned from chat</string>
+    <string name="memory_source_added">You added</string>
+    <string name="memory_cat_about_you">About you</string>
+    <string name="memory_cat_people">Important people</string>
+    <string name="memory_cat_preferences">Preferences</string>
+    <string name="memory_cat_reminders">Reminders &amp; notes</string>
     <string name="memory_export_json">Export JSON</string>
     <string name="memory_delete_all_data">Delete All Data</string>
     <string name="memory_delete_all_dialog_title">Delete All Assistant Data</string>
     <string name="memory_delete_all_dialog_body">This permanently wipes all conversations, summaries, memories, and activity logs. Type DELETE below to confirm.</string>
-    <string name="memory_delete_all_dialog_desc">This permanently wipes all conversations, summaries, memories, and activity logs. Type DELETE below to confirm.</string>
     <string name="memory_delete_all_hint">Type DELETE</string>
-    <string name="memory_delete_confirm_hint">Type DELETE</string>
     <string name="memory_delete_all_confirm">Delete Everything</string>
-    <string name="memory_storage_size_kb">Encrypted DB storage: %1$s KB</string>
-    <string name="memory_storage_size_label">Encrypted DB storage: %1$s</string>
     <string name="memory_conversation_messages_title">Conversation Transcript</string>
+    <string name="memory_conversation_delete">Delete conversation</string>
     <string name="memory_close_dialog">Close</string>
 
     <!-- Routines Screen -->
@@ -179,47 +182,61 @@
     <string name="permissions_open_battery_settings">Open Battery Settings</string>
     <string name="permissions_back_button">Back</string>
 
-    <!-- Settings Screen -->
-    <string name="settings_title">Assistant Settings</string>
-    <string name="settings_subtitle">Manage AI key, voice, memory learning, and safety controls</string>
-    <string name="settings_ai_title">Gemini AI Key &amp; Model</string>
-    <string name="settings_ai_key_title">Gemini AI Key &amp; Model</string>
+    <!-- Settings Screen (F4 plain English grouped sections) -->
+    <string name="settings_title">Settings</string>
+    <string name="settings_subtitle">Customise Jarvis, your voice, and AI connection</string>
+    <string name="settings_section_ai">AI connection</string>
     <string name="settings_ai_key_masked_label">Stored Key: %1$s</string>
-    <string name="settings_ai_usage_stats">Requests today: %1$d · Tokens today: %2$d</string>
-    <string name="settings_ai_key_usage_today">Requests today: %1$d · Tokens today: %2$d</string>
-    <string name="settings_ai_key_usage_total">Total requests: %1$d · Total tokens: %2$d</string>
     <string name="settings_ai_change_key">Change</string>
-    <string name="settings_ai_key_change">Change</string>
-    <string name="settings_ai_verify_again">Verify again</string>
-    <string name="settings_ai_key_verify_again">Verify again</string>
+    <string name="settings_test_connection">Test connection</string>
+    <string name="settings_test_connection_testing">Testing connection…</string>
+    <string name="settings_test_connection_success">Connected to Gemini successfully</string>
     <string name="settings_ai_remove_key">Remove</string>
-    <string name="settings_ai_key_remove">Remove</string>
     <string name="settings_ai_key_save">Save &amp; Verify</string>
     <string name="settings_ai_key_cancel">Cancel</string>
-    <string name="settings_language_title">Speech Recognition Locale</string>
-    <string name="settings_language_desc">App UI is English-only. Choose your preferred English accent for speech recognition.</string>
-    <string name="settings_voice_title">Assistant Device Voice</string>
-    <string name="settings_voice_desc">On-device Android TextToSpeech voices installed on this phone:</string>
-    <string name="settings_voice_default_label">System Default English Voice (On-device)</string>
-    <string name="settings_voice_speed_label">Speech Speed (%1$sx)</string>
-    <string name="settings_voice_preview">Test voice</string>
-    <string name="settings_voice_preview_phrase">Hi, I\'m Jarvis. How can I help?</string>
-    <string name="settings_voice_install_better">Get better voices</string>
-    <string name="settings_memory_title">Memory &amp; Auto-Learning</string>
-    <string name="settings_auto_learn_title">Auto-learn facts from conversations</string>
-    <string name="settings_auto_learn_desc">Automatically extracts durable preferences and contacts after each turn (never OTPs or passwords).</string>
-    <string name="settings_ask_before_save_title">Ask before saving auto-learned facts</string>
-    <string name="settings_ask_before_save_desc">Require manual review in the Learned Today tab.</string>
-    <string name="settings_ask_before_saving_title">Ask before saving auto-learned facts</string>
-    <string name="settings_ask_before_saving_desc">Require manual review in the Learned Today tab.</string>
-    <string name="settings_overlay_enable">Floating Overlay Orb</string>
-    <string name="settings_safety_title">Safety Gate Confirmation Mode</string>
-    <string name="settings_permissions_button">Permissions &amp; Battery Setup</string>
-    <string name="settings_diagnostics_title">Voice Diagnostics (Debug)</string>
-    <string name="settings_diagnostics_state">Session State: %1$s</string>
-    <string name="settings_diagnostics_tts">Active TTS Engine: %1$s</string>
-    <string name="settings_diagnostics_stt_error">Last STT Error: %1$s</string>
-    <string name="settings_diagnostics_latency">Latency — STT: %1$dms · Agent: %2$dms · TTS: %3$dms</string>
+
+    <string name="settings_section_voice">Voice</string>
+    <string name="settings_voice_title">Jarvis voice</string>
+    <string name="settings_voice_speed_title">Voice speed</string>
+    <string name="settings_speed_slow">Slow</string>
+    <string name="settings_speed_normal">Normal</string>
+    <string name="settings_speed_fast">Fast</string>
+    <string name="settings_voice_preview">Preview voice</string>
+    <string name="settings_voice_preview_phrase">Hi, I\'m Jarvis. How can I help you today?</string>
+
+    <string name="settings_section_language">Language</string>
+    <string name="settings_language_desc">Speech recognition language</string>
+
+    <string name="settings_section_memory">Memory</string>
+    <string name="settings_auto_learn_title">Remember things automatically</string>
+    <string name="settings_auto_learn_desc">Learns preferences and contacts from your conversations</string>
+    <string name="settings_ask_before_save_title">Ask before saving sensitive info</string>
+    <string name="settings_ask_before_save_desc">Require review in Learned Today before saving</string>
+    <string name="settings_manage_memory_button">Manage what I know</string>
+
+    <string name="settings_section_safety">Safety &amp; Permissions</string>
+    <string name="settings_confirm_actions_title">Confirm high-risk actions</string>
+    <string name="settings_confirm_actions_desc">Ask before making calls, sending messages, or modifying data</string>
+    <string name="settings_kill_switch_title">Emergency Kill Switch</string>
+    <string name="settings_kill_switch_desc">Stop all assistant actions immediately</string>
+    <string name="settings_floating_orb_title">Floating overlay orb</string>
+    <string name="settings_floating_orb_desc">Show draggable shortcut over other apps</string>
+    <string name="settings_permissions_button">App permissions</string>
+
+    <string name="settings_section_about">About</string>
+    <string name="settings_about_version">Jarvis v2.0</string>
+    <string name="settings_about_privacy">Your privacy: all data stays local on your device</string>
+    <string name="settings_privacy_policy_link">View privacy policy</string>
+    <string name="settings_privacy_policy_title">Privacy Policy</string>
+    <string name="settings_privacy_policy_body">JARVIS runs on your device. Your Gemini API key is encrypted in Android Keystore. Your conversations, memories, routines, and activity logs are stored locally in Room on this device. When you ask a question or issue a command, your text and relevant memories are sent directly to Google Gemini using your API key. No intermediate servers, third-party proxies, or tracking services are used.</string>
+
+    <string name="settings_section_advanced">Advanced (Troubleshooting)</string>
+    <string name="settings_adv_model_id">Active Model: %1$s</string>
+    <string name="settings_adv_usage">Requests today: %1$d · Tokens: %2$d</string>
+    <string name="settings_adv_latency">Latency — STT: %1$dms · Agent: %2$dms · TTS: %3$dms</string>
+    <string name="settings_adv_stt_err">Last STT error: %1$s</string>
+    <string name="settings_adv_voice_id">Engine voice: %1$s</string>
+    <string name="settings_share_log">Share log</string>
 
     <!-- Services & Notifications -->
     <string name="fgs_channel_name">JARVIS Voice Service</string>

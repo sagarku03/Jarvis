@@ -17,6 +17,13 @@ object MemorySafetyFilter {
         "upi pin", "mpin", "atm pin", "cvv", "cvc", "aadhaar", "pan card", "credit card", "debit card"
     )
 
+    private val APP_META_BLOCKLIST = listOf(
+        "key rejected", "gemini_api_key", "api key", "gemini", "token", "quota",
+        "rate limit", "401", "403", "404", "429", "500", "503", "bad request",
+        "system instruction", "functioncall", "functionresponse", "accessibility disabled",
+        "something went wrong", "google's ai is busy"
+    )
+
     private val OTP_PATTERN = Regex("\\b(?:otp|code|pin)\\b[^0-9]{0,20}\\b\\d{4,8}\\b", RegexOption.IGNORE_CASE)
     private val CARD_NUMBER_PATTERN = Regex("\\b(?:\\d[ -]*?){13,19}\\b")
     private val AADHAAR_PATTERN = Regex("\\b\\d{4}\\s\\d{4}\\s\\d{4}\\b")
@@ -42,11 +49,12 @@ object MemorySafetyFilter {
     }
 
     /**
-     * Never save OTPs, passwords, PINs, card numbers, Aadhaar/PAN, or empty strings.
+     * Never save OTPs, passwords, PINs, card numbers, Aadhaar/PAN, or app metadata.
      */
     fun isSensitiveOrForbidden(key: String, value: String, isSensitiveScreenActive: Boolean = false): Boolean {
         if (isSensitiveScreenActive) return true
         val combined = "${key.replace('_', ' ')} ${value.replace('_', ' ')}".lowercase(Locale.US)
+        if (APP_META_BLOCKLIST.any { combined.contains(it) }) return true
         if (SENSITIVE_KEY_WORDS.any { combined.contains(it) }) return true
         if (OTP_PATTERN.containsMatchIn(combined)) return true
         if (AADHAAR_PATTERN.containsMatchIn(value)) return true

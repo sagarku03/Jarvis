@@ -13,6 +13,7 @@ class JarvisApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        com.example.data.local.DiagnosticsLogger.install(this)
         appContainer = AppContainer(this)
     }
 }

@@ -27,17 +27,22 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.LockOpen
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.TouchApp
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.Checkbox
@@ -76,7 +81,6 @@ import com.example.ui.components.AuroraGlassCard
 import com.example.ui.components.AuroraIconButton
 import com.example.ui.components.AuroraPrimaryButton
 import com.example.ui.components.AuroraSecondaryButton
-import com.example.ui.components.AuroraSectionHeader
 import com.example.ui.components.AuroraStatusPill
 import com.example.ui.theme.AuroraColors
 import com.example.ui.theme.JarvisMonoStyle
@@ -90,6 +94,9 @@ fun SetupGateScreen(
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
+
+    val currentStep by setupViewModel.currentStep.collectAsStateWithLifecycle()
+    val stepError by setupViewModel.stepError.collectAsStateWithLifecycle()
 
     val apiKeyInput by setupViewModel.apiKeyInput.collectAsStateWithLifecycle()
     val isKeyVisible by setupViewModel.isKeyVisible.collectAsStateWithLifecycle()
@@ -105,7 +112,6 @@ fun SetupGateScreen(
     val contactNicknames by setupViewModel.contactNicknames.collectAsStateWithLifecycle()
 
     val privacyAccepted by setupViewModel.privacyAccepted.collectAsStateWithLifecycle()
-    val canUnlockJarvis by setupViewModel.canUnlockJarvis.collectAsStateWithLifecycle()
     val permissionsList by permissionsViewModel.permissionsList.collectAsStateWithLifecycle()
 
     var modelDropdownExpanded by remember { mutableStateOf(false) }
@@ -121,11 +127,23 @@ fun SetupGateScreen(
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    val runtimePermLauncher = rememberLauncherForActivityResult(
+    val micPermLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) {
         permissionsViewModel.refreshStatuses()
         setupViewModel.refreshPermissionAndKeyState()
+    }
+
+    val contactsPermLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) {
+        permissionsViewModel.refreshStatuses()
+    }
+
+    val notifPermLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) {
+        permissionsViewModel.refreshStatuses()
     }
 
     AuroraBackground(modifier = Modifier.imePadding()) {
@@ -134,368 +152,457 @@ fun SetupGateScreen(
                 .fillMaxSize()
                 .widthIn(max = 640.dp)
                 .align(Alignment.TopCenter)
-                .padding(horizontal = 16.dp, vertical = 12.dp)
+                .padding(horizontal = 16.dp, vertical = 16.dp)
                 .testTag("setup_gate_list"),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
             contentPadding = PaddingValues(bottom = 32.dp)
         ) {
+            // Header with Wizard Step Indicator
             item {
-                AuroraSectionHeader(
-                    title = stringResource(R.string.setup_gate_title),
-                    subtitle = stringResource(R.string.setup_gate_subtitle)
-                )
-            }
-
-            // STEP 1: Connect your Gemini API key
-            item {
-                AuroraGlassCard(elevated = true) {
+                Column(modifier = Modifier.fillMaxWidth()) {
                     Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.Key,
-                            contentDescription = stringResource(R.string.setup_step1_title),
-                            tint = AuroraColors.Aqua
-                        )
                         Text(
-                            text = stringResource(R.string.setup_step1_title),
-                            style = MaterialTheme.typography.titleMedium,
-                            color = AuroraColors.TextPrimary
+                            text = stringResource(R.string.setup_gate_title),
+                            style = MaterialTheme.typography.headlineMedium,
+                            color = AuroraColors.TextPrimary,
+                            fontWeight = FontWeight.Bold
+                        )
+                        AuroraStatusPill(
+                            text = stringResource(R.string.setup_step_indicator, currentStep),
+                            color = AuroraColors.Violet
                         )
                     }
                     Text(
-                        text = stringResource(R.string.setup_step1_desc),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = AuroraColors.TextSecondary
+                        text = stringResource(R.string.setup_gate_subtitle),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = AuroraColors.TextSecondary,
+                        modifier = Modifier.padding(top = 4.dp)
                     )
 
+                    // Step progress indicators
                     Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 12.dp),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        OutlinedTextField(
-                            value = apiKeyInput,
-                            onValueChange = setupViewModel::updateApiKeyInput,
-                            modifier = Modifier
-                                .weight(1f)
-                                .testTag("setup_api_key_input"),
-                            placeholder = {
-                                Text(
-                                    text = stringResource(R.string.setup_key_hint),
-                                    style = JarvisMonoStyle,
-                                    color = AuroraColors.TextMuted
-                                )
-                            },
-                            textStyle = JarvisMonoStyle.copy(color = AuroraColors.TextPrimary),
-                            singleLine = true,
-                            visualTransformation = if (isKeyVisible) {
-                                VisualTransformation.None
-                            } else {
-                                PasswordVisualTransformation()
-                            },
-                            trailingIcon = {
-                                AuroraIconButton(
-                                    icon = if (isKeyVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
-                                    contentDescription = if (isKeyVisible) {
-                                        stringResource(R.string.setup_hide_key)
-                                    } else {
-                                        stringResource(R.string.setup_show_key)
-                                    },
-                                    testTag = "setup_key_toggle_visibility",
-                                    onClick = setupViewModel::toggleKeyVisibility
-                                )
-                            },
-                            shape = RoundedCornerShape(14.dp),
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedBorderColor = AuroraColors.Violet500,
-                                unfocusedBorderColor = AuroraColors.GlassBorder,
-                                focusedContainerColor = AuroraColors.SurfacePrimary,
-                                unfocusedContainerColor = AuroraColors.SurfacePrimary,
-                                focusedTextColor = AuroraColors.TextPrimary,
-                                unfocusedTextColor = AuroraColors.TextPrimary
-                            )
-                        )
-
-                        AuroraSecondaryButton(
-                            text = stringResource(R.string.setup_paste_key),
-                            leadingIcon = Icons.Default.ContentPaste,
-                            onClick = {
-                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-                                val pasted = clipboard?.primaryClip?.getItemAt(0)?.coerceToText(context)?.toString()?.trim()
-                                if (!pasted.isNullOrEmpty()) {
-                                    setupViewModel.updateApiKeyInput(pasted)
-                                }
-                            },
-                            testTag = "setup_key_paste_button"
-                        )
-                    }
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        AuroraSecondaryButton(
-                            text = stringResource(R.string.setup_get_free_key),
-                            leadingIcon = Icons.Default.OpenInNew,
-                            onClick = {
-                                runCatching {
-                                    context.startActivity(
-                                        Intent(
-                                            Intent.ACTION_VIEW,
-                                            Uri.parse("https://aistudio.google.com/apikey")
-                                        ).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
-                                    )
-                                }
-                            },
-                            modifier = Modifier.weight(1f),
-                            testTag = "setup_get_free_key_button"
-                        )
-
-                        AuroraPrimaryButton(
-                            text = if (isVerifying) {
-                                stringResource(R.string.setup_verifying)
-                            } else {
-                                stringResource(R.string.setup_verify_key)
-                            },
-                            loading = isVerifying,
-                            enabled = apiKeyInput.isNotBlank(),
-                            onClick = setupViewModel::verifyApiKey,
-                            modifier = Modifier.weight(1f),
-                            testTag = "setup_verify_key_button"
-                        )
-                    }
-
-                    if (isVerifying || !verificationMessage.isNullOrBlank()) {
-                        val isQuota = verificationMessage?.contains("Quota", ignoreCase = true) == true
-                        val statusColor = when {
-                            isVerifying -> AuroraColors.Aqua
-                            verificationSuccess -> AuroraColors.EmeraldSuccess
-                            isQuota -> AuroraColors.AmberWarning
-                            else -> AuroraColors.CoralDanger
-                        }
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(statusColor.copy(alpha = 0.14f))
-                                .border(1.dp, statusColor.copy(alpha = 0.4f), RoundedCornerShape(12.dp))
-                                .padding(horizontal = 12.dp, vertical = 8.dp)
-                                .testTag("setup_verification_status"),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            if (isVerifying) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(16.dp),
-                                    color = statusColor,
-                                    strokeWidth = 2.dp
-                                )
-                            } else {
-                                Icon(
-                                    imageVector = if (verificationSuccess) Icons.Default.CheckCircle else Icons.Default.ErrorOutline,
-                                    contentDescription = null,
-                                    tint = statusColor,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                            }
-                            Text(
-                                text = verificationMessage ?: stringResource(R.string.setup_verifying),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = AuroraColors.TextPrimary,
-                                fontWeight = FontWeight.Medium
-                            )
-                        }
-                    }
-
-                    if (isKeyVerified && availableModels.isNotEmpty()) {
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = stringResource(R.string.setup_model_label),
-                            style = MaterialTheme.typography.labelMedium,
-                            color = AuroraColors.Lavender
-                        )
-                        Box(modifier = Modifier.fillMaxWidth()) {
-                            Row(
+                        for (i in 1..3) {
+                            Box(
                                 modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(48.dp)
-                                    .clip(RoundedCornerShape(14.dp))
-                                    .background(AuroraColors.SurfacePrimary)
-                                    .border(1.dp, AuroraColors.GlassBorderStrong, RoundedCornerShape(14.dp))
-                                    .clickable { modelDropdownExpanded = true }
-                                    .padding(horizontal = 14.dp)
-                                    .testTag("setup_model_selector"),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    text = selectedModelId,
-                                    style = JarvisMonoStyle,
-                                    color = AuroraColors.TextPrimary
-                                )
-                                Icon(
-                                    imageVector = Icons.Default.ArrowDropDown,
-                                    contentDescription = stringResource(R.string.setup_model_label),
-                                    tint = AuroraColors.TextSecondary
-                                )
-                            }
-
-                            DropdownMenu(
-                                expanded = modelDropdownExpanded,
-                                onDismissRequest = { modelDropdownExpanded = false },
-                                modifier = Modifier.background(AuroraColors.SurfaceElevated)
-                            ) {
-                                availableModels.forEach { modelId ->
-                                    DropdownMenuItem(
-                                        text = {
-                                            Text(
-                                                text = modelId,
-                                                style = JarvisMonoStyle,
-                                                color = AuroraColors.TextPrimary
-                                            )
-                                        },
-                                        onClick = {
-                                            setupViewModel.selectModel(modelId)
-                                            modelDropdownExpanded = false
-                                        }
+                                    .weight(1f)
+                                    .height(4.dp)
+                                    .clip(RoundedCornerShape(2.dp))
+                                    .background(
+                                        if (i <= currentStep) AuroraColors.Violet
+                                        else AuroraColors.GlassFillLight
                                     )
-                                }
-                            }
+                            )
                         }
                     }
                 }
             }
 
-            // STEP 2: Tell Jarvis about you
-            item {
-                AuroraGlassCard {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+            // STEP 1: Connect your AI
+            if (currentStep == 1) {
+                item {
+                    AuroraGlassCard(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("setup_step1_card")
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.Person,
-                            contentDescription = stringResource(R.string.setup_step2_title),
-                            tint = AuroraColors.Lavender
+                        Text(
+                            text = stringResource(R.string.setup_step1_header),
+                            style = MaterialTheme.typography.titleLarge,
+                            color = AuroraColors.TextPrimary,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = stringResource(R.string.setup_step1_desc),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = AuroraColors.TextSecondary
+                        )
+
+                        Spacer(modifier = Modifier.height(14.dp))
+
+                        // API key text field
+                        OutlinedTextField(
+                            value = apiKeyInput,
+                            onValueChange = { setupViewModel.updateApiKeyInput(it) },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("setup_key_input"),
+                            placeholder = {
+                                Text(
+                                    stringResource(R.string.setup_key_input_hint),
+                                    color = AuroraColors.TextMuted
+                                )
+                            },
+                            singleLine = true,
+                            visualTransformation = if (isKeyVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                            textStyle = JarvisMonoStyle.copy(color = AuroraColors.TextPrimary),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = AuroraColors.Violet,
+                                unfocusedBorderColor = AuroraColors.GlassBorder,
+                                focusedContainerColor = AuroraColors.GlassFillLight,
+                                unfocusedContainerColor = AuroraColors.GlassFillDark,
+                                cursorColor = AuroraColors.Violet
+                            ),
+                            shape = RoundedCornerShape(12.dp),
+                            trailingIcon = {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    AuroraIconButton(
+                                        icon = if (isKeyVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                        contentDescription = if (isKeyVisible) {
+                                            stringResource(R.string.setup_hide_key)
+                                        } else {
+                                            stringResource(R.string.setup_show_key)
+                                        },
+                                        onClick = { setupViewModel.toggleKeyVisibility() },
+                                        size = 36.dp
+                                    )
+                                    AuroraIconButton(
+                                        icon = Icons.Default.ContentPaste,
+                                        contentDescription = stringResource(R.string.setup_paste_key),
+                                        onClick = {
+                                            val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                                            val clip = cm?.primaryClip?.getItemAt(0)?.text?.toString()
+                                            if (!clip.isNullOrBlank()) {
+                                                setupViewModel.onPasteKey(clip)
+                                            }
+                                        },
+                                        size = 36.dp,
+                                        modifier = Modifier.testTag("setup_paste_button")
+                                    )
+                                }
+                            }
+                        )
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = stringResource(R.string.setup_get_free_key),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = AuroraColors.Lavender,
+                                modifier = Modifier
+                                    .clickable {
+                                        val intent = Intent(
+                                            Intent.ACTION_VIEW,
+                                            Uri.parse("https://aistudio.google.com/app/apikey")
+                                        )
+                                        context.startActivity(intent)
+                                    }
+                                    .testTag("setup_get_key_link")
+                            )
+
+                            AuroraPrimaryButton(
+                                text = if (isVerifying) {
+                                    stringResource(R.string.setup_verifying)
+                                } else {
+                                    stringResource(R.string.setup_verify_key)
+                                },
+                                onClick = { setupViewModel.verifyApiKey() },
+                                enabled = apiKeyInput.isNotBlank() && !isVerifying,
+                                icon = if (isVerifying) null else Icons.Default.Key,
+                                modifier = Modifier.testTag("setup_verify_button")
+                            )
+                        }
+
+                        if (isVerifying) {
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(16.dp),
+                                    strokeWidth = 2.dp,
+                                    color = AuroraColors.Violet
+                                )
+                                Text(
+                                    text = stringResource(R.string.setup_verifying),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = AuroraColors.Lavender
+                                )
+                            }
+                        }
+
+                        if (verificationMessage != null) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Icon(
+                                    imageVector = if (verificationSuccess) Icons.Default.CheckCircle else Icons.Default.ErrorOutline,
+                                    contentDescription = null,
+                                    tint = if (verificationSuccess) AuroraColors.Success else AuroraColors.Danger,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Text(
+                                    text = verificationMessage.orEmpty(),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = if (verificationSuccess) AuroraColors.Success else AuroraColors.Danger
+                                )
+                            }
+                        }
+
+                        if (isKeyVerified && availableModels.isNotEmpty()) {
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Text(
+                                text = stringResource(R.string.setup_model_label),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = AuroraColors.TextSecondary
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Box(modifier = Modifier.fillMaxWidth()) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .background(AuroraColors.GlassFillLight)
+                                        .border(1.dp, AuroraColors.GlassBorder, RoundedCornerShape(10.dp))
+                                        .clickable { modelDropdownExpanded = true }
+                                        .padding(horizontal = 12.dp, vertical = 10.dp)
+                                        .testTag("setup_model_dropdown"),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = selectedModelId,
+                                        style = JarvisMonoStyle.copy(color = AuroraColors.TextPrimary)
+                                    )
+                                    Icon(
+                                        imageVector = Icons.Default.ArrowDropDown,
+                                        contentDescription = null,
+                                        tint = AuroraColors.Lavender
+                                    )
+                                }
+                                DropdownMenu(
+                                    expanded = modelDropdownExpanded,
+                                    onDismissRequest = { modelDropdownExpanded = false }
+                                ) {
+                                    availableModels.forEach { model ->
+                                        DropdownMenuItem(
+                                            text = { Text(model) },
+                                            onClick = {
+                                                setupViewModel.selectModel(model)
+                                                modelDropdownExpanded = false
+                                            }
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        // Validation error notice
+                        if (stepError != null) {
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Text(
+                                text = stepError.orEmpty(),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = AuroraColors.Danger,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.testTag("setup_step1_error")
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        // Next button
+                        AuroraPrimaryButton(
+                            text = stringResource(R.string.setup_next_step),
+                            onClick = { setupViewModel.onNextClicked() },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("setup_next_button")
+                        )
+                    }
+                }
+            }
+
+            // STEP 2: About you
+            if (currentStep == 2) {
+                item {
+                    AuroraGlassCard(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("setup_step2_card")
+                    ) {
+                        Text(
+                            text = stringResource(R.string.setup_step2_header),
+                            style = MaterialTheme.typography.titleLarge,
+                            color = AuroraColors.TextPrimary,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = stringResource(R.string.setup_step2_desc),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = AuroraColors.TextSecondary
+                        )
+
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        // Name (Required)
+                        Text(
+                            text = stringResource(R.string.setup_user_name_label),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = AuroraColors.TextPrimary,
+                            fontWeight = FontWeight.SemiBold
                         )
                         Text(
-                            text = stringResource(R.string.setup_step2_title),
-                            style = MaterialTheme.typography.titleMedium,
-                            color = AuroraColors.TextPrimary
+                            text = stringResource(R.string.setup_step2_name_helper),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = AuroraColors.TextMuted
                         )
-                    }
-                    Text(
-                        text = stringResource(R.string.setup_step2_desc),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = AuroraColors.TextSecondary
-                    )
-
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Spacer(modifier = Modifier.height(6.dp))
                         OutlinedTextField(
                             value = userNameInput,
-                            onValueChange = setupViewModel::updateUserName,
+                            onValueChange = { setupViewModel.updateUserName(it) },
                             modifier = Modifier
-                                .weight(1f)
+                                .fillMaxWidth()
                                 .testTag("setup_name_input"),
-                            placeholder = {
-                                Text(
-                                    text = stringResource(R.string.setup_name_hint),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = AuroraColors.TextMuted
-                                )
-                            },
+                            placeholder = { Text(stringResource(R.string.setup_user_name_hint), color = AuroraColors.TextMuted) },
                             singleLine = true,
-                            shape = RoundedCornerShape(14.dp),
                             colors = OutlinedTextFieldDefaults.colors(
-                                focusedBorderColor = AuroraColors.Violet500,
+                                focusedBorderColor = AuroraColors.Violet,
                                 unfocusedBorderColor = AuroraColors.GlassBorder,
+                                focusedContainerColor = AuroraColors.GlassFillLight,
+                                unfocusedContainerColor = AuroraColors.GlassFillDark,
+                                cursorColor = AuroraColors.Violet,
                                 focusedTextColor = AuroraColors.TextPrimary,
                                 unfocusedTextColor = AuroraColors.TextPrimary
-                            )
+                            ),
+                            shape = RoundedCornerShape(12.dp)
                         )
 
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        // City (Optional)
+                        Text(
+                            text = stringResource(R.string.setup_user_city_label),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = AuroraColors.TextPrimary,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
                         OutlinedTextField(
                             value = userCityInput,
-                            onValueChange = setupViewModel::updateUserCity,
+                            onValueChange = { setupViewModel.updateUserCity(it) },
                             modifier = Modifier
-                                .weight(1f)
+                                .fillMaxWidth()
                                 .testTag("setup_city_input"),
-                            placeholder = {
-                                Text(
-                                    text = stringResource(R.string.setup_city_hint),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = AuroraColors.TextMuted
-                                )
-                            },
+                            placeholder = { Text(stringResource(R.string.setup_user_city_hint), color = AuroraColors.TextMuted) },
                             singleLine = true,
-                            shape = RoundedCornerShape(14.dp),
                             colors = OutlinedTextFieldDefaults.colors(
-                                focusedBorderColor = AuroraColors.Violet500,
+                                focusedBorderColor = AuroraColors.Violet,
                                 unfocusedBorderColor = AuroraColors.GlassBorder,
+                                focusedContainerColor = AuroraColors.GlassFillLight,
+                                unfocusedContainerColor = AuroraColors.GlassFillDark,
+                                cursorColor = AuroraColors.Violet,
                                 focusedTextColor = AuroraColors.TextPrimary,
                                 unfocusedTextColor = AuroraColors.TextPrimary
-                            )
+                            ),
+                            shape = RoundedCornerShape(12.dp)
                         )
-                    }
 
-                    Text(
-                        text = stringResource(R.string.setup_contacts_label),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = AuroraColors.TextSecondary
-                    )
+                        Spacer(modifier = Modifier.height(16.dp))
 
-                    contactNicknames.forEachIndexed { idx, draft ->
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            OutlinedTextField(
-                                value = draft.nickname,
-                                onValueChange = { nick ->
-                                    setupViewModel.updateContactNickname(idx, nick, draft.fullName)
-                                },
+                        // Contacts (Optional, up to 3)
+                        Text(
+                            text = stringResource(R.string.setup_contacts_label),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = AuroraColors.TextPrimary,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        contactNicknames.forEachIndexed { index, draft ->
+                            Row(
                                 modifier = Modifier
-                                    .weight(0.45f)
-                                    .testTag("setup_contact_nick_$idx"),
-                                placeholder = {
-                                    Text(
-                                        text = stringResource(R.string.setup_contact_nick_hint),
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = AuroraColors.TextMuted
-                                    )
-                                },
-                                singleLine = true,
-                                shape = RoundedCornerShape(12.dp),
-                                colors = OutlinedTextFieldDefaults.colors(
-                                    focusedBorderColor = AuroraColors.Violet500,
-                                    unfocusedBorderColor = AuroraColors.GlassBorder,
-                                    focusedTextColor = AuroraColors.TextPrimary,
-                                    unfocusedTextColor = AuroraColors.TextPrimary
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                OutlinedTextField(
+                                    value = draft.nickname,
+                                    onValueChange = { setupViewModel.updateContactNickname(index, it, draft.fullName) },
+                                    modifier = Modifier
+                                        .weight(0.4f)
+                                        .testTag("setup_contact_nick_$index"),
+                                    placeholder = { Text(stringResource(R.string.setup_contact_nick_hint), color = AuroraColors.TextMuted) },
+                                    singleLine = true,
+                                    colors = OutlinedTextFieldDefaults.colors(
+                                        focusedBorderColor = AuroraColors.Violet,
+                                        unfocusedBorderColor = AuroraColors.GlassBorder,
+                                        focusedContainerColor = AuroraColors.GlassFillLight,
+                                        unfocusedContainerColor = AuroraColors.GlassFillDark,
+                                        cursorColor = AuroraColors.Violet,
+                                        focusedTextColor = AuroraColors.TextPrimary,
+                                        unfocusedTextColor = AuroraColors.TextPrimary
+                                    ),
+                                    shape = RoundedCornerShape(10.dp)
                                 )
+                                OutlinedTextField(
+                                    value = draft.fullName,
+                                    onValueChange = { setupViewModel.updateContactNickname(index, draft.nickname, it) },
+                                    modifier = Modifier
+                                        .weight(0.6f)
+                                        .testTag("setup_contact_name_$index"),
+                                    placeholder = { Text(stringResource(R.string.setup_contact_name_hint), color = AuroraColors.TextMuted) },
+                                    singleLine = true,
+                                    colors = OutlinedTextFieldDefaults.colors(
+                                        focusedBorderColor = AuroraColors.Violet,
+                                        unfocusedBorderColor = AuroraColors.GlassBorder,
+                                        focusedContainerColor = AuroraColors.GlassFillLight,
+                                        unfocusedContainerColor = AuroraColors.GlassFillDark,
+                                        cursorColor = AuroraColors.Violet,
+                                        focusedTextColor = AuroraColors.TextPrimary,
+                                        unfocusedTextColor = AuroraColors.TextPrimary
+                                    ),
+                                    shape = RoundedCornerShape(10.dp)
+                                )
+                            }
+                        }
+
+                        if (stepError != null) {
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Text(
+                                text = stepError.orEmpty(),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = AuroraColors.Danger,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.testTag("setup_step2_error")
                             )
+                        }
 
-                            OutlinedTextField(
-                                value = draft.fullName,
-                                onValueChange = { full ->
-                                    setupViewModel.updateContactNickname(idx, draft.nickname, full)
-                                },
+                        Spacer(modifier = Modifier.height(20.dp))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            AuroraSecondaryButton(
+                                text = stringResource(R.string.setup_prev_step),
+                                onClick = { setupViewModel.onBackClicked() },
+                                modifier = Modifier.weight(1f)
+                            )
+                            AuroraPrimaryButton(
+                                text = stringResource(R.string.setup_next_step),
+                                onClick = { setupViewModel.onNextClicked() },
                                 modifier = Modifier
-                                    .weight(0.55f)
-                                    .testTag("setup_contact_full_$idx"),
-                                placeholder = {
-                                    Text(
-                                        text = stringResource(R.string.setup_contact_name_hint),
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = AuroraColors.TextMuted
-                                    )
-                                },
-                                singleLine = true,
-                                shape = RoundedCornerShape(12.dp),
-                                colors = OutlinedTextFieldDefaults.colors(
-                                    focusedBorderColor = AuroraColors.Violet500,
-                                    unfocusedBorderColor = AuroraColors.GlassBorder,
-                                    focusedTextColor = AuroraColors.TextPrimary,
-                                    unfocusedTextColor = AuroraColors.TextPrimary
-                                )
+                                    .weight(1f)
+                                    .testTag("setup_step2_next_button")
                             )
                         }
                     }
@@ -503,164 +610,212 @@ fun SetupGateScreen(
             }
 
             // STEP 3: Permissions & Privacy
-            item {
-                AuroraGlassCard {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Security,
-                            contentDescription = stringResource(R.string.setup_step3_title),
-                            tint = AuroraColors.EmeraldSuccess
-                        )
-                        Text(
-                            text = stringResource(R.string.setup_step3_title),
-                            style = MaterialTheme.typography.titleMedium,
-                            color = AuroraColors.TextPrimary
-                        )
-                    }
-                    Text(
-                        text = stringResource(R.string.setup_step3_desc),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = AuroraColors.TextSecondary
-                    )
-
-                    permissionsList.filter {
-                        it.id in setOf(
-                            "RECORD_AUDIO",
-                            "READ_CONTACTS",
-                            "CALL_PHONE",
-                            "POST_NOTIFICATIONS",
-                            "SYSTEM_ALERT_WINDOW",
-                            "ACCESSIBILITY_SERVICE"
-                        )
-                    }.forEach { perm ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(14.dp))
-                                .background(AuroraColors.SurfacePrimary)
-                                .border(1.dp, AuroraColors.GlassBorder, RoundedCornerShape(14.dp))
-                                .padding(horizontal = 12.dp, vertical = 10.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = perm.titleEn,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = AuroraColors.TextPrimary,
-                                    fontWeight = FontWeight.SemiBold
-                                )
-                                Text(
-                                    text = perm.rationaleEn,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = AuroraColors.TextSecondary
-                                )
-                            }
-                            Spacer(modifier = Modifier.width(8.dp))
-                            if (perm.isGranted) {
-                                AuroraStatusPill(
-                                    text = stringResource(R.string.permissions_status_granted),
-                                    color = AuroraColors.EmeraldSuccess
-                                )
-                            } else {
-                                AuroraSecondaryButton(
-                                    text = stringResource(R.string.setup_allow_button),
-                                    onClick = {
-                                        when (perm.id) {
-                                            "RECORD_AUDIO" -> runtimePermLauncher.launch(Manifest.permission.RECORD_AUDIO)
-                                            "READ_CONTACTS" -> runtimePermLauncher.launch(Manifest.permission.READ_CONTACTS)
-                                            "CALL_PHONE" -> runtimePermLauncher.launch(Manifest.permission.CALL_PHONE)
-                                            "POST_NOTIFICATIONS" -> {
-                                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                                                    runtimePermLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                                                }
-                                            }
-                                            "SYSTEM_ALERT_WINDOW" -> {
-                                                runCatching {
-                                                    context.startActivity(
-                                                        Intent(
-                                                            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                                                            Uri.parse("package:${context.packageName}")
-                                                        ).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
-                                                    )
-                                                }
-                                            }
-                                            "ACCESSIBILITY_SERVICE" -> {
-                                                runCatching {
-                                                    context.startActivity(
-                                                        Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
-                                                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                                        }
-                                                    )
-                                                }
-                                            }
-                                        }
-                                    },
-                                    testTag = "setup_allow_perm_${perm.id}"
-                                )
-                            }
-                        }
-                    }
-
-                    // Privacy disclosure card + required "I understand" checkbox
-                    Column(
+            if (currentStep == 3) {
+                item {
+                    AuroraGlassCard(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(14.dp))
-                            .background(AuroraColors.Violet500.copy(alpha = 0.12f))
-                            .border(1.dp, AuroraColors.Violet500.copy(alpha = 0.35f), RoundedCornerShape(14.dp))
-                            .padding(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                            .testTag("setup_step3_card")
                     ) {
                         Text(
-                            text = stringResource(R.string.setup_privacy_card_title),
-                            style = MaterialTheme.typography.titleMedium,
-                            color = AuroraColors.TextPrimary
+                            text = stringResource(R.string.setup_step3_header),
+                            style = MaterialTheme.typography.titleLarge,
+                            color = AuroraColors.TextPrimary,
+                            fontWeight = FontWeight.Bold
                         )
+                        Spacer(modifier = Modifier.height(6.dp))
                         Text(
-                            text = stringResource(R.string.setup_privacy_card_body),
-                            style = MaterialTheme.typography.bodySmall,
+                            text = stringResource(R.string.setup_step3_desc),
+                            style = MaterialTheme.typography.bodyMedium,
                             color = AuroraColors.TextSecondary
                         )
+
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        // Microphone (REQUIRED)
+                        val micStatus = permissionsList.firstOrNull { it.id == "RECORD_AUDIO" }
+                        val isMicGranted = micStatus?.isGranted == true
+                        PermissionRow(
+                            title = "1. Microphone",
+                            subtitle = "REQUIRED to hear spoken commands",
+                            isGranted = isMicGranted,
+                            onAllow = { micPermLauncher.launch(Manifest.permission.RECORD_AUDIO) }
+                        )
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        // Contacts (RECOMMENDED)
+                        val contactsStatus = permissionsList.firstOrNull { it.id == "READ_CONTACTS" }
+                        PermissionRow(
+                            title = "2. Contacts",
+                            subtitle = "RECOMMENDED to call/message by name",
+                            isGranted = contactsStatus?.isGranted == true,
+                            onAllow = { contactsPermLauncher.launch(Manifest.permission.READ_CONTACTS) },
+                            allowLater = true
+                        )
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        // Notifications (RECOMMENDED)
+                        val notifStatus = permissionsList.firstOrNull { it.id == "POST_NOTIFICATIONS" }
+                        PermissionRow(
+                            title = "3. Notifications",
+                            subtitle = "RECOMMENDED for persistent STOP indicator",
+                            isGranted = notifStatus?.isGranted == true,
+                            onAllow = {
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                    notifPermLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                }
+                            },
+                            allowLater = true
+                        )
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        // Accessibility (OPTIONAL)
+                        val accessStatus = permissionsList.firstOrNull { it.id == "ACCESSIBILITY_SERVICE" }
+                        PermissionRow(
+                            title = "4. Accessibility",
+                            subtitle = "OPTIONAL for screen reading and automation",
+                            isGranted = accessStatus?.isGranted == true,
+                            onAllow = {
+                                val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
+                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                }
+                                context.startActivity(intent)
+                            },
+                            allowLater = true
+                        )
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        // Draw over other apps (OPTIONAL)
+                        val overlayStatus = permissionsList.firstOrNull { it.id == "SYSTEM_ALERT_WINDOW" }
+                        PermissionRow(
+                            title = "5. Draw Over Other Apps",
+                            subtitle = "OPTIONAL for floating shortcut orb",
+                            isGranted = overlayStatus?.isGranted == true,
+                            onAllow = {
+                                val intent = Intent(
+                                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                    Uri.parse("package:${context.packageName}")
+                                ).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+                                context.startActivity(intent)
+                            },
+                            allowLater = true
+                        )
+
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        // Privacy statement checkbox
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(AuroraColors.GlassFillLight)
                                 .clickable { setupViewModel.setPrivacyAccepted(!privacyAccepted) }
-                                .testTag("setup_privacy_checkbox_row"),
+                                .padding(12.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Checkbox(
                                 checked = privacyAccepted,
-                                onCheckedChange = setupViewModel::setPrivacyAccepted,
+                                onCheckedChange = { setupViewModel.setPrivacyAccepted(it) },
                                 colors = CheckboxDefaults.colors(
-                                    checkedColor = AuroraColors.EmeraldSuccess,
-                                    uncheckedColor = AuroraColors.TextSecondary
+                                    checkedColor = AuroraColors.Violet,
+                                    uncheckedColor = AuroraColors.TextMuted,
+                                    checkmarkColor = AuroraColors.TextPrimary
                                 ),
                                 modifier = Modifier.testTag("setup_privacy_checkbox")
                             )
-                            Spacer(modifier = Modifier.width(6.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
                             Text(
                                 text = stringResource(R.string.setup_privacy_checkbox),
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = AuroraColors.TextPrimary,
-                                fontWeight = FontWeight.Medium
+                                style = MaterialTheme.typography.bodySmall,
+                                color = AuroraColors.TextPrimary
+                            )
+                        }
+
+                        if (stepError != null) {
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Text(
+                                text = stepError.orEmpty(),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = AuroraColors.Danger,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.testTag("setup_step3_error")
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(20.dp))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            AuroraSecondaryButton(
+                                text = stringResource(R.string.setup_prev_step),
+                                onClick = { setupViewModel.onBackClicked() },
+                                modifier = Modifier.weight(1f)
+                            )
+                            AuroraPrimaryButton(
+                                text = stringResource(R.string.setup_unlock_button),
+                                onClick = { setupViewModel.onNextClicked() },
+                                icon = Icons.Default.LockOpen,
+                                modifier = Modifier
+                                    .weight(1.2f)
+                                    .testTag("setup_finish_button")
                             )
                         }
                     }
-
-                    AuroraPrimaryButton(
-                        text = stringResource(R.string.setup_unlock_button),
-                        leadingIcon = Icons.Default.LockOpen,
-                        enabled = canUnlockJarvis,
-                        onClick = setupViewModel::completeSetup,
-                        modifier = Modifier.fillMaxWidth(),
-                        testTag = "setup_unlock_button"
-                    )
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun PermissionRow(
+    title: String,
+    subtitle: String,
+    isGranted: Boolean,
+    onAllow: () -> Unit,
+    allowLater: Boolean = false
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(AuroraColors.GlassFillLight)
+            .border(1.dp, AuroraColors.GlassBorder, RoundedCornerShape(10.dp))
+            .padding(12.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodyMedium,
+                color = AuroraColors.TextPrimary,
+                fontWeight = FontWeight.SemiBold
+            )
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = AuroraColors.TextSecondary
+            )
+        }
+
+        if (isGranted) {
+            AuroraStatusPill(
+                text = stringResource(R.string.permissions_status_granted),
+                color = AuroraColors.Success,
+                icon = Icons.Default.Check
+            )
+        } else {
+            AuroraSecondaryButton(
+                text = stringResource(R.string.setup_allow_button),
+                onClick = onAllow
+            )
         }
     }
 }

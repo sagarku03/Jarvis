@@ -44,6 +44,15 @@ object AuroraColors {
     val AmberWarning = Color(0xFFFFB547)
     val CoralDanger = Color(0xFFFF6B87)
 
+    // Semantic aliases
+    val Violet = Violet500
+    val Success = EmeraldSuccess
+    val Warning = AmberWarning
+    val Danger = CoralDanger
+    val GlassFillLight = GlassFill
+    val GlassFillDark = GlassFillStrong
+    val BackgroundStart = BackgroundDeep
+
     val TextPrimary = Color(0xFFF5F3FF)
     val TextSecondary = Color(0xFFC4BEE6)
     val TextMuted = Color(0xFF9A94C0)

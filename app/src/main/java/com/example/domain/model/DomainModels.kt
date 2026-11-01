@@ -114,6 +114,7 @@ data class ChatMessage(
     val content: String,
     val toolName: String? = null,
     val toolArgsJson: String? = null,
+    val rawModelPartsJson: String? = null,
     val timestampMs: Long = System.currentTimeMillis()
 )
 
@@ -222,6 +223,44 @@ data class MemoryFact(
     val lastUsedAtMs: Long = System.currentTimeMillis(),
     val useCount: Int = 0,
     val supersededById: Long? = null
+) {
+    fun readableSentence(): String {
+        val cleanVal = value.trim()
+        val cleanKey = key.trim().lowercase()
+
+        if (cleanVal.length > 18 && (cleanVal.contains(" is ") || cleanVal.contains(" are ") || cleanVal.contains(" prefers ") || cleanVal.contains(" lives "))) {
+            val capitalized = cleanVal.replaceFirstChar { it.uppercase() }
+            return if (capitalized.endsWith(".")) capitalized else "$capitalized."
+        }
+
+        return when {
+            cleanKey == "user_name" || cleanKey == "name" -> "Your name is $cleanVal."
+            cleanKey == "home_city" || cleanKey == "city" -> "You live in $cleanVal."
+            cleanKey.startsWith("contact_") || cleanKey.contains("phone") -> {
+                val who = cleanKey.removePrefix("contact_").replace("_", " ").trim()
+                if (who.isNotEmpty()) "${who.replaceFirstChar { it.uppercase() }}'s contact is $cleanVal."
+                else "Contact number is $cleanVal."
+            }
+            cleanKey.contains("favorite") || cleanKey.contains("favourite") -> {
+                val what = cleanKey.replace("_", " ")
+                "Your $what is $cleanVal."
+            }
+            else -> {
+                val humanKey = cleanKey.replace("_", " ").trim()
+                if (humanKey.isNotEmpty() && cleanVal.isNotEmpty()) {
+                    "${humanKey.replaceFirstChar { it.uppercase() }}: $cleanVal"
+                } else {
+                    cleanVal
+                }
+            }
+        }
+    }
+}
+
+data class UserFacingError(
+    val message: String,
+    val actionLabel: String = "Try again",
+    val isOpenSettings: Boolean = false
 )
 
 data class UserSettings(

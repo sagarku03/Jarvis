@@ -99,6 +99,73 @@ class JarvisAccessibilityService : AccessibilityService() {
             }
             return false to "Timed out after ${timeoutMs}ms waiting for '$targetText'."
         }
+
+        suspend fun clickFirstYouTubeVideoResult(): Pair<Boolean, String> {
+            if (!isFullControlAllowed()) {
+                return false to "Blocked: STORE_SAFE_MODE is active."
+            }
+            val service = _instance.value ?: return false to ACCESSIBILITY_DISABLED_EN
+
+            val deadline = System.currentTimeMillis() + 3500L
+            while (System.currentTimeMillis() < deadline) {
+                val root = runCatching { service.rootInActiveWindow }.getOrNull()
+                if (root != null) {
+                    val pkg = root.packageName?.toString().orEmpty()
+                    if (pkg.contains("youtube") || pkg.contains("chrome") || pkg.contains("browser")) {
+                        val targetNode = findFirstVideoNode(root)
+                        if (targetNode != null) {
+                            val clicked = targetNode.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                            if (clicked) {
+                                delay(700)
+                                val updatedRoot = runCatching { service.rootInActiveWindow }.getOrNull()
+                                val isPlaying = verifyWatchPageOrPlayer(updatedRoot)
+                                if (isPlaying) {
+                                    return true to "Playing video on YouTube."
+                                }
+                                return true to "Selected video on YouTube."
+                            }
+                        }
+                    }
+                }
+                delay(350)
+            }
+            return false to "Could not auto-click video result on YouTube."
+        }
+
+        private fun findFirstVideoNode(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+            if (node.isClickable && !node.contentDescription.isNullOrBlank()) {
+                val cd = node.contentDescription.toString().lowercase()
+                if (cd.contains("ago") || cd.contains("views") || cd.contains("video") || cd.contains("minute") || cd.contains("second")) {
+                    return node
+                }
+            }
+            for (i in 0 until node.childCount) {
+                val child = node.getChild(i) ?: continue
+                val found = findFirstVideoNode(child)
+                if (found != null) return found
+            }
+            if (node.isClickable && !node.contentDescription.isNullOrBlank()) {
+                val text = node.contentDescription.toString().lowercase()
+                if (!text.contains("search") && !text.contains("cast") && !text.contains("account") && !text.contains("notification")) {
+                    return node
+                }
+            }
+            return null
+        }
+
+        private fun verifyWatchPageOrPlayer(node: AccessibilityNodeInfo?): Boolean {
+            if (node == null) return false
+            val text = node.text?.toString().orEmpty().lowercase()
+            val cd = node.contentDescription?.toString().orEmpty().lowercase()
+            if (cd.contains("pause") || cd.contains("play") || cd.contains("player") || text.contains("subscribe") || cd.contains("subscribe")) {
+                return true
+            }
+            for (i in 0 until node.childCount) {
+                val child = node.getChild(i) ?: continue
+                if (verifyWatchPageOrPlayer(child)) return true
+            }
+            return false
+        }
     }
 
     private var lastVolumeDownPressMs: Long = 0L

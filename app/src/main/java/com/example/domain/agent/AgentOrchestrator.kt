@@ -8,7 +8,9 @@ import com.example.domain.model.AssistantOrbState
 import com.example.domain.model.ChatMessage
 import com.example.domain.model.MessageRole
 import com.example.domain.model.ScreenContextSnapshot
+import com.example.domain.model.ToolCallSpec
 import com.example.domain.model.ToolExecutionResult
+import com.example.domain.model.UserFacingError
 import com.example.domain.repository.ActivityLogRepository
 import com.example.domain.repository.AgentBackendRepository
 import com.example.domain.repository.ChatRepository
@@ -19,8 +21,10 @@ import com.example.domain.safety.KillSwitch
 import com.example.domain.safety.SafetyGate
 import com.example.domain.tool.ToolRegistry
 import com.example.services.JarvisAccessibilityService
+import com.example.tools.MemorySafetyFilter
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.Types
+import java.util.Locale
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -71,6 +75,15 @@ class AgentOrchestrator @Inject constructor(
             "forget_memory"
         )
 
+        private val LOW_RISK_ONE_SHOT_TOOLS = setOf(
+            "open_app",
+            "toggle_flashlight",
+            "adjust_volume",
+            "set_alarm",
+            "set_timer",
+            "play_media"
+        )
+
         fun isNonIdempotentTool(toolName: String): Boolean =
             toolName in NON_IDEMPOTENT_TOOLS
     }
@@ -84,6 +97,9 @@ class AgentOrchestrator @Inject constructor(
     private val _orbState = MutableStateFlow(AssistantOrbState.IDLE)
     val orbState: StateFlow<AssistantOrbState> = _orbState.asStateFlow()
 
+    private val _orbCaption = MutableStateFlow<String?>(null)
+    val orbCaption: StateFlow<String?> = _orbCaption.asStateFlow()
+
     private val _lastResponseText = MutableStateFlow(DEFAULT_GREETING)
     val lastResponseText: StateFlow<String> = _lastResponseText.asStateFlow()
 
@@ -93,10 +109,18 @@ class AgentOrchestrator @Inject constructor(
     private val _keyRejectedBanner = MutableStateFlow(false)
     val keyRejectedBanner: StateFlow<Boolean> = _keyRejectedBanner.asStateFlow()
 
+    private val _userFacingError = MutableStateFlow<UserFacingError?>(null)
+    val userFacingError: StateFlow<UserFacingError?> = _userFacingError.asStateFlow()
+
     private var activeJob: Job? = null
 
     fun clearKeyRejectedBanner() {
         _keyRejectedBanner.value = false
+        _userFacingError.value = null
+    }
+
+    fun clearUserFacingError() {
+        _userFacingError.value = null
     }
 
     fun setOrbState(state: AssistantOrbState) {
@@ -111,6 +135,7 @@ class AgentOrchestrator @Inject constructor(
         activeJob?.cancel()
         activeJob = null
         safetyGate.cancelPendingConfirmation()
+        _orbCaption.value = null
         if (!killSwitch.isKilled.value) {
             _orbState.value = AssistantOrbState.IDLE
         }
@@ -166,31 +191,21 @@ class AgentOrchestrator @Inject constructor(
                     initialScreenContext = initialScreenContext
                 )
             } catch (_: TurnTimeoutException) {
-                val timeoutMsg = "Turn timed out after 60 seconds. Stopping safely."
-                withContext(NonCancellable) {
-                    chatRepository.appendMessage(
-                        ChatMessage(role = MessageRole.ASSISTANT, content = timeoutMsg)
-                    )
-                }
+                val timeoutMsg = "That took too long. Try again."
+                _userFacingError.value = UserFacingError(timeoutMsg, "Try again")
                 _lastResponseText.value = timeoutMsg
                 _orbState.value = AssistantOrbState.IDLE
+                _orbCaption.value = null
                 finalOutput = timeoutMsg
             } catch (_: TimeoutCancellationException) {
-                val timeoutMsg = "Turn timed out after 60 seconds. Stopping safely."
-                withContext(NonCancellable) {
-                    chatRepository.appendMessage(
-                        ChatMessage(role = MessageRole.ASSISTANT, content = timeoutMsg)
-                    )
-                }
+                val timeoutMsg = "That took too long. Try again."
+                _userFacingError.value = UserFacingError(timeoutMsg, "Try again")
                 _lastResponseText.value = timeoutMsg
                 _orbState.value = AssistantOrbState.IDLE
+                _orbCaption.value = null
                 finalOutput = timeoutMsg
             } catch (ce: CancellationException) {
-                withContext(NonCancellable) {
-                    chatRepository.appendMessage(
-                        ChatMessage(role = MessageRole.ASSISTANT, content = "[Cancelled]")
-                    )
-                }
+                _orbCaption.value = null
                 throw ce
             }
         }
@@ -217,271 +232,424 @@ class AgentOrchestrator @Inject constructor(
             )
         )
 
-        // Opportunistically extract explicit "remember that X is Y" / "my favourite X is Y" immediately
-        // so same-turn or immediate next-turn tests see it even before background job finishes
-        memoryLearner?.extractExplicitHeuristicFacts(
-            userText = userText,
-            isSensitiveScreen = SafetyGate.isSensitiveScreen(initialScreenContext)
-        ) ?: extractFallbackRememberDirective(userText)
-
         _orbState.value = AssistantOrbState.THINKING
+        _orbCaption.value = null
 
-        var stepCount = 0
-        var finalReply = ""
-        var currentScreenSnapshot = initialScreenContext
-            ?: JarvisAccessibilityService.captureCurrentScreenSnapshot()
-
-        while (stepCount < MAX_STEPS_PER_TURN && isActive) {
-            if (activeExecutionElapsedMs >= MAX_ACTIVE_TURN_DURATION_MS) {
-                throw TurnTimeoutException("Exceeded 60s active execution budget")
+        val timerJob = launch {
+            delay(6000L)
+            if (isActive && _orbState.value == AssistantOrbState.THINKING) {
+                _orbCaption.value = "Still working… (tap to cancel)"
             }
+        }
 
-            if (killSwitch.isKilled.value) {
-                _orbState.value = AssistantOrbState.PAUSED_KILLSWITCH
-                finalReply = "Stopped immediately by Kill Switch."
-                break
-            }
-
-            stepCount++
-            val recentMessages = chatRepository.getRecentContextMessages(limit = 20)
-            val memories = memoryRepository.searchTopFactsForContext(userText, limit = 15)
-                .let { matched ->
-                    val all = memoryRepository.getAllMemoriesSnapshot()
-                    (all.filter { it.pinned } + matched + all).distinctBy { it.id }.take(25)
+        try {
+            // 1. Check local fast-path router before invoking remote model
+            when (val localRoute = LocalIntentRouter.route(userText)) {
+                is LocalRouteResult.Stop -> {
+                    killSwitch.trigger("User issued stop command")
+                    val stopMsg = "Stopped immediately."
+                    _lastResponseText.value = stopMsg
+                    _orbState.value = AssistantOrbState.PAUSED_KILLSWITCH
+                    return@coroutineScope stopMsg
                 }
-            val summaries = chatRepository.getRecentSummaries(limit = 2)
-            val availableTools = toolRegistry.getAvailableDescriptors(
-                fullControlMode = BuildConfig.FULL_CONTROL_MODE,
-                storeSafeMode = BuildConfig.STORE_SAFE_MODE
-            )
-
-            val stepStartMs = System.currentTimeMillis()
-            val stepDecision = agentBackendRepository.runAgentStep(
-                messages = recentMessages,
-                tools = availableTools,
-                memories = memories,
-                screenContext = currentScreenSnapshot,
-                language = settings.language,
-                summaries = summaries
-            )
-            val stepDurationMs = (System.currentTimeMillis() - stepStartMs).coerceAtLeast(1L)
-            activeExecutionElapsedMs += stepDurationMs
-            _lastAgentStepLatencyMs.value = stepDurationMs
-
-            if (stepDecision.keyRejected) {
-                _keyRejectedBanner.value = true
-            }
-
-            if (stepDecision.toolCalls.isEmpty()) {
-                finalReply = stepDecision.assistantText ?: "Done."
-                break
-            }
-
-            var allToolsSucceeded = true
-            val stepOutputs = mutableListOf<String>()
-
-            for (toolCall in stepDecision.toolCalls) {
-                if (killSwitch.isKilled.value) {
-                    allToolsSucceeded = false
-                    break
-                }
-
-                val tool = toolRegistry.getTool(toolCall.name)
-                val serializedArgs = runCatching { argsAdapter.toJson(toolCall.args) }.getOrNull()
-
-                if (tool == null) {
-                    val missingOutput = "Tool '${toolCall.name}' is not registered."
+                is LocalRouteResult.DirectReply -> {
                     chatRepository.appendMessage(
                         ChatMessage(
                             conversationId = conversationId,
-                            role = MessageRole.TOOL,
-                            content = missingOutput,
-                            toolName = toolCall.name,
-                            toolArgsJson = serializedArgs
+                            role = MessageRole.ASSISTANT,
+                            content = localRoute.reply
                         )
                     )
-                    stepOutputs.add(missingOutput)
-                    allToolsSucceeded = false
-                    continue
+                    _lastResponseText.value = localRoute.reply
+                    _orbState.value = AssistantOrbState.IDLE
+                    return@coroutineScope localRoute.reply
+                }
+                is LocalRouteResult.ToolAction -> {
+                    val tool = toolRegistry.getTool(localRoute.toolName)
+                    var toolResultText = localRoute.templateReply
+                    if (tool != null) {
+                        val decision = safetyGate.evaluate(
+                            toolCall = ToolCallSpec(
+                                id = "local_${System.currentTimeMillis()}",
+                                name = localRoute.toolName,
+                                args = localRoute.args
+                            ),
+                            tool = tool,
+                            confirmationLevel = settings.confirmationLevel,
+                            screenContext = initialScreenContext
+                        )
+
+                        var userConfirmed = false
+                        if (!decision.allowedImmediately) {
+                            if (decision.requiresConfirmation) {
+                                val approval = safetyGate.requestUserApproval(
+                                    toolCall = ToolCallSpec(
+                                        id = "local_${System.currentTimeMillis()}",
+                                        name = localRoute.toolName,
+                                        args = localRoute.args
+                                    ),
+                                    tool = tool,
+                                    reasonEn = decision.reasonEn,
+                                    reasonHi = decision.reasonEn
+                                )
+                                if (!approval.approved) {
+                                    val deniedMsg = "Cancelled '${localRoute.toolName}' as requested."
+                                    _lastResponseText.value = deniedMsg
+                                    _orbState.value = AssistantOrbState.IDLE
+                                    return@coroutineScope deniedMsg
+                                }
+                                userConfirmed = true
+                            } else {
+                                val blockedMsg = decision.reasonEn
+                                _lastResponseText.value = blockedMsg
+                                _orbState.value = AssistantOrbState.IDLE
+                                return@coroutineScope blockedMsg
+                            }
+                        }
+
+                        val exec = tool.execute(localRoute.args)
+                        activityLogRepository.recordLog(
+                            ActivityLogEntry(
+                                toolName = tool.name,
+                                riskLevel = tool.riskLevel,
+                                argumentsSummary = SafetyGate.redactSensitiveArgs(localRoute.args),
+                                resultSummary = exec.outputEn,
+                                userConfirmed = userConfirmed,
+                                durationMs = 5L
+                            )
+                        )
+                        toolResultText = if (localRoute.templateReply.isNotBlank()) {
+                            localRoute.templateReply
+                        } else {
+                            exec.outputEn
+                        }
+                    }
+
+                    chatRepository.appendMessage(
+                        ChatMessage(
+                            conversationId = conversationId,
+                            role = MessageRole.ASSISTANT,
+                            content = toolResultText
+                        )
+                    )
+                    _lastResponseText.value = toolResultText
+                    _orbState.value = if (killSwitch.isKilled.value) {
+                        AssistantOrbState.PAUSED_KILLSWITCH
+                    } else {
+                        AssistantOrbState.IDLE
+                    }
+                    return@coroutineScope toolResultText
+                }
+                null -> {
+                    // proceed to remote Gemini call
+                }
+            }
+
+            // Opportunistically extract explicit "remember that X is Y"
+            memoryLearner?.extractExplicitHeuristicFacts(
+                userText = userText,
+                isSensitiveScreen = SafetyGate.isSensitiveScreen(initialScreenContext)
+            ) ?: extractFallbackRememberDirective(userText)
+
+            var stepCount = 0
+            var finalReply = ""
+            var currentScreenSnapshot = initialScreenContext
+                ?: JarvisAccessibilityService.captureCurrentScreenSnapshot()
+
+            while (stepCount < MAX_STEPS_PER_TURN && isActive) {
+                if (activeExecutionElapsedMs >= MAX_ACTIVE_TURN_DURATION_MS) {
+                    throw TurnTimeoutException("Exceeded 60s active execution budget")
                 }
 
-                val decision = safetyGate.evaluate(
-                    toolCall = toolCall,
-                    tool = tool,
-                    confirmationLevel = settings.confirmationLevel,
-                    screenContext = currentScreenSnapshot
+                if (killSwitch.isKilled.value) {
+                    _orbState.value = AssistantOrbState.PAUSED_KILLSWITCH
+                    finalReply = "Stopped immediately by Kill Switch."
+                    break
+                }
+
+                stepCount++
+                val recentMessages = chatRepository.getRecentContextMessages(limit = 20)
+                val memories = memoryRepository.searchTopFactsForContext(userText, limit = 15)
+                    .let { matched ->
+                        val all = memoryRepository.getAllMemoriesSnapshot()
+                        (all.filter { it.pinned } + matched + all).distinctBy { it.id }.take(25)
+                    }
+                val summaries = chatRepository.getRecentSummaries(limit = 2)
+                val availableTools = toolRegistry.getAvailableDescriptors(
+                    fullControlMode = BuildConfig.FULL_CONTROL_MODE,
+                    storeSafeMode = BuildConfig.STORE_SAFE_MODE
                 )
 
-                var userConfirmed = false
-                var effectiveToolCall = toolCall
-                if (!decision.allowedImmediately) {
-                    if (decision.requiresConfirmation) {
-                        val approval = safetyGate.requestUserApproval(
-                            toolCall = toolCall,
-                            tool = tool,
-                            reasonEn = decision.reasonEn,
-                            reasonHi = decision.reasonEn
+                val stepStartMs = System.currentTimeMillis()
+                val stepDecision = agentBackendRepository.runAgentStep(
+                    messages = recentMessages,
+                    tools = availableTools,
+                    memories = memories,
+                    screenContext = currentScreenSnapshot,
+                    language = settings.language,
+                    summaries = summaries
+                )
+                val stepDurationMs = (System.currentTimeMillis() - stepStartMs).coerceAtLeast(1L)
+                activeExecutionElapsedMs += stepDurationMs
+                _lastAgentStepLatencyMs.value = stepDurationMs
+
+                if (stepDecision.keyRejected) {
+                    _keyRejectedBanner.value = true
+                    val errMsg = "Invalid or missing Gemini API key. Please check your key in Settings."
+                    _userFacingError.value = UserFacingError(
+                        message = errMsg,
+                        actionLabel = "Open Settings",
+                        isOpenSettings = true
+                    )
+                    _orbState.value = AssistantOrbState.IDLE
+                    return@coroutineScope errMsg
+                }
+
+                if (stepDecision.toolCalls.isEmpty()) {
+                    val rawText = stepDecision.assistantText ?: "Done."
+                    if (rawText.startsWith("Unable to complete request") ||
+                        rawText.startsWith("You appear to be offline")
+                    ) {
+                        _userFacingError.value = UserFacingError(rawText, "Try again")
+                        _orbState.value = AssistantOrbState.IDLE
+                        return@coroutineScope rawText
+                    }
+                    finalReply = rawText
+                    break
+                }
+
+                var allToolsSucceeded = true
+                val stepOutputs = mutableListOf<String>()
+
+                for (toolCall in stepDecision.toolCalls) {
+                    if (killSwitch.isKilled.value) {
+                        allToolsSucceeded = false
+                        break
+                    }
+
+                    val tool = toolRegistry.getTool(toolCall.name)
+                    val serializedArgs = runCatching { argsAdapter.toJson(toolCall.args) }.getOrNull()
+
+                    if (tool == null) {
+                        val missingOutput = "Tool '${toolCall.name}' is not registered."
+                        chatRepository.appendMessage(
+                            ChatMessage(
+                                conversationId = conversationId,
+                                role = MessageRole.TOOL,
+                                content = missingOutput,
+                                toolName = toolCall.name,
+                                toolArgsJson = serializedArgs
+                            )
                         )
-                        if (!approval.approved) {
-                            val deniedMsg = "Cancelled '${toolCall.name}' as requested."
+                        stepOutputs.add(missingOutput)
+                        allToolsSucceeded = false
+                        continue
+                    }
+
+                    val decision = safetyGate.evaluate(
+                        toolCall = toolCall,
+                        tool = tool,
+                        confirmationLevel = settings.confirmationLevel,
+                        screenContext = currentScreenSnapshot
+                    )
+
+                    var userConfirmed = false
+                    var effectiveToolCall = toolCall
+                    if (!decision.allowedImmediately) {
+                        if (decision.requiresConfirmation) {
+                            val approval = safetyGate.requestUserApproval(
+                                toolCall = toolCall,
+                                tool = tool,
+                                reasonEn = decision.reasonEn,
+                                reasonHi = decision.reasonEn
+                            )
+                            if (!approval.approved) {
+                                val deniedMsg = "Cancelled '${toolCall.name}' as requested."
+                                activityLogRepository.recordLog(
+                                    ActivityLogEntry(
+                                        toolName = toolCall.name,
+                                        riskLevel = tool.riskLevel,
+                                        argumentsSummary = SafetyGate.redactSensitiveArgs(toolCall.args),
+                                        resultSummary = deniedMsg,
+                                        userConfirmed = false,
+                                        durationMs = 0L
+                                    )
+                                )
+                                chatRepository.appendMessage(
+                                    ChatMessage(
+                                        conversationId = conversationId,
+                                        role = MessageRole.TOOL,
+                                        content = deniedMsg,
+                                        toolName = toolCall.name,
+                                        toolArgsJson = serializedArgs
+                                    )
+                                )
+                                finalReply = deniedMsg
+                                allToolsSucceeded = false
+                                break
+                            }
+                            userConfirmed = true
+                            if (approval.selectedPhoneOverride != null) {
+                                val updatedArgs = toolCall.args.toMutableMap().apply {
+                                    put("phone_number", approval.selectedPhoneOverride)
+                                }
+                                effectiveToolCall = toolCall.copy(args = updatedArgs)
+                            }
+                        } else {
+                            val blockedMsg = decision.reasonEn
                             activityLogRepository.recordLog(
                                 ActivityLogEntry(
                                     toolName = toolCall.name,
                                     riskLevel = tool.riskLevel,
                                     argumentsSummary = SafetyGate.redactSensitiveArgs(toolCall.args),
-                                    resultSummary = deniedMsg,
+                                    resultSummary = blockedMsg,
                                     userConfirmed = false,
                                     durationMs = 0L
                                 )
                             )
-                            chatRepository.appendMessage(
-                                ChatMessage(
-                                    conversationId = conversationId,
-                                    role = MessageRole.TOOL,
-                                    content = deniedMsg,
-                                    toolName = toolCall.name,
-                                    toolArgsJson = serializedArgs
-                                )
-                            )
-                            finalReply = deniedMsg
+                            finalReply = blockedMsg
                             allToolsSucceeded = false
                             break
                         }
-                        userConfirmed = true
-                        if (approval.selectedPhoneOverride != null) {
-                            val updatedArgs = toolCall.args.toMutableMap().apply {
-                                put("phone_number", approval.selectedPhoneOverride)
-                            }
-                            effectiveToolCall = toolCall.copy(args = updatedArgs)
-                        }
-                    } else {
-                        val blockedMsg = decision.reasonEn
-                        activityLogRepository.recordLog(
-                            ActivityLogEntry(
-                                toolName = toolCall.name,
-                                riskLevel = tool.riskLevel,
-                                argumentsSummary = SafetyGate.redactSensitiveArgs(toolCall.args),
-                                resultSummary = blockedMsg,
-                                userConfirmed = false,
-                                durationMs = 0L
+                    }
+
+                    val startMs = System.currentTimeMillis()
+                    val maxAttempts = if (isNonIdempotentTool(tool.name)) 1 else 2
+                    var execResult = ToolExecutionResult(
+                        toolName = tool.name,
+                        success = false,
+                        outputEn = "Not executed"
+                    )
+                    for (attempt in 1..maxAttempts) {
+                        execResult = try {
+                            tool.execute(effectiveToolCall.args)
+                        } catch (ce: CancellationException) {
+                            throw ce
+                        } catch (e: Exception) {
+                            ToolExecutionResult(
+                                toolName = tool.name,
+                                success = false,
+                                outputEn = "Tool error: ${e.localizedMessage ?: "unknown"}"
                             )
-                        )
-                        finalReply = blockedMsg
-                        allToolsSucceeded = false
-                        break
+                        }
+                        if (execResult.success) break
+                        if (attempt < maxAttempts) {
+                            delay(200)
+                        }
                     }
-                }
+                    val durationMs = (System.currentTimeMillis() - startMs).coerceAtLeast(1L)
+                    activeExecutionElapsedMs += durationMs
 
-                val startMs = System.currentTimeMillis()
-                val maxAttempts = if (isNonIdempotentTool(tool.name)) 1 else 2
-                var execResult = ToolExecutionResult(
-                    toolName = tool.name,
-                    success = false,
-                    outputEn = "Not executed"
-                )
-                for (attempt in 1..maxAttempts) {
-                    execResult = try {
-                        tool.execute(effectiveToolCall.args)
-                    } catch (ce: CancellationException) {
-                        throw ce
-                    } catch (e: Exception) {
-                        ToolExecutionResult(
+                    val localizedResult = execResult.outputEn
+
+                    activityLogRepository.recordLog(
+                        ActivityLogEntry(
                             toolName = tool.name,
-                            success = false,
-                            outputEn = "Tool error: ${e.localizedMessage ?: "unknown"}"
+                            riskLevel = tool.riskLevel,
+                            argumentsSummary = SafetyGate.redactSensitiveArgs(effectiveToolCall.args),
+                            resultSummary = localizedResult,
+                            userConfirmed = userConfirmed,
+                            durationMs = durationMs
                         )
-                    }
-                    if (execResult.success) break
-                    if (attempt < maxAttempts) {
-                        delay(200)
+                    )
+
+                    val effectiveArgsJson = runCatching { argsAdapter.toJson(effectiveToolCall.args) }.getOrNull()
+                    chatRepository.appendMessage(
+                        ChatMessage(
+                            conversationId = conversationId,
+                            role = MessageRole.TOOL,
+                            content = localizedResult,
+                            toolName = tool.name,
+                            toolArgsJson = effectiveArgsJson
+                        )
+                    )
+
+                    stepOutputs.add(localizedResult)
+
+                    if (execResult.requiresFollowUpScreenRead || tool.requiresFullControlMode) {
+                        val refreshed = JarvisAccessibilityService.captureCurrentScreenSnapshot()
+                        if (refreshed != null) {
+                            currentScreenSnapshot = refreshed
+                        }
                     }
                 }
-                val durationMs = (System.currentTimeMillis() - startMs).coerceAtLeast(1L)
-                activeExecutionElapsedMs += durationMs
 
-                val localizedResult = execResult.outputEn
+                if (!allToolsSucceeded && finalReply.isNotEmpty()) {
+                    break
+                }
 
-                activityLogRepository.recordLog(
-                    ActivityLogEntry(
-                        toolName = tool.name,
-                        riskLevel = tool.riskLevel,
-                        argumentsSummary = SafetyGate.redactSensitiveArgs(effectiveToolCall.args),
-                        resultSummary = localizedResult,
-                        userConfirmed = userConfirmed,
-                        durationMs = durationMs
-                    )
-                )
+                // Low-risk single-tool shortcut: complete turn immediately with execution result
+                if (stepDecision.toolCalls.size == 1 &&
+                    stepDecision.toolCalls.first().name in LOW_RISK_ONE_SHOT_TOOLS &&
+                    stepOutputs.isNotEmpty()
+                ) {
+                    finalReply = stepDecision.assistantText?.takeIf { it.isNotBlank() }
+                        ?: stepOutputs.first()
+                    break
+                }
 
-                val effectiveArgsJson = runCatching { argsAdapter.toJson(effectiveToolCall.args) }.getOrNull()
-                chatRepository.appendMessage(
-                    ChatMessage(
-                        conversationId = conversationId,
-                        role = MessageRole.TOOL,
-                        content = localizedResult,
-                        toolName = tool.name,
-                        toolArgsJson = effectiveArgsJson
-                    )
-                )
-
-                stepOutputs.add(localizedResult)
-
-                if (execResult.requiresFollowUpScreenRead || tool.requiresFullControlMode) {
-                    val refreshed = JarvisAccessibilityService.captureCurrentScreenSnapshot()
-                    if (refreshed != null) {
-                        currentScreenSnapshot = refreshed
-                    }
+                if (stepDecision.assistantText != null && stepOutputs.isNotEmpty()) {
+                    finalReply = "${stepDecision.assistantText}\n${stepOutputs.joinToString("\n")}"
+                    break
+                } else if (stepOutputs.isNotEmpty() && stepCount >= 2) {
+                    finalReply = stepOutputs.joinToString("\n")
+                    break
                 }
             }
 
-            if (!allToolsSucceeded && finalReply.isNotEmpty()) {
-                break
+            if (finalReply.isBlank()) {
+                finalReply = "Done."
             }
 
-            if (stepDecision.assistantText != null && stepOutputs.isNotEmpty()) {
-                finalReply = "${stepDecision.assistantText}\n${stepOutputs.joinToString("\n")}"
-                break
-            } else if (stepOutputs.isNotEmpty() && stepCount >= 2) {
-                finalReply = stepOutputs.joinToString("\n")
-                break
-            }
-        }
-
-        if (finalReply.isBlank()) {
-            finalReply = "Done."
-        }
-
-        chatRepository.appendMessage(
-            ChatMessage(
-                conversationId = conversationId,
-                role = MessageRole.ASSISTANT,
-                content = finalReply
+            chatRepository.appendMessage(
+                ChatMessage(
+                    conversationId = conversationId,
+                    role = MessageRole.ASSISTANT,
+                    content = finalReply
+                )
             )
-        )
 
-        _lastResponseText.value = finalReply
-        _orbState.value = if (killSwitch.isKilled.value) {
-            AssistantOrbState.PAUSED_KILLSWITCH
-        } else {
-            AssistantOrbState.IDLE
-        }
-
-        val capturedScreen = currentScreenSnapshot
-        backgroundLearnScope.launch {
-            runCatching {
-                memoryLearner?.extractFactsFromTurn(
-                    userText = userText,
-                    assistantReply = finalReply,
-                    screenContext = capturedScreen
-                )
-                memoryLearner?.summarizeConversationIfNeeded(conversationId = conversationId)
+            _lastResponseText.value = finalReply
+            _orbState.value = if (killSwitch.isKilled.value) {
+                AssistantOrbState.PAUSED_KILLSWITCH
+            } else {
+                AssistantOrbState.IDLE
             }
-        }
 
-        return@coroutineScope finalReply
+            val capturedScreen = currentScreenSnapshot
+            if (isPersonalText(userText)) {
+                backgroundLearnScope.launch {
+                    runCatching {
+                        memoryLearner?.extractFactsFromTurn(
+                            userText = userText,
+                            assistantReply = finalReply,
+                            screenContext = capturedScreen
+                        )
+                        memoryLearner?.summarizeConversationIfNeeded(conversationId = conversationId)
+                    }
+                }
+            }
+
+            return@coroutineScope finalReply
+        } finally {
+            timerJob.cancel()
+            _orbCaption.value = null
+        }
+    }
+
+    private fun isPersonalText(text: String): Boolean {
+        val lower = text.lowercase(Locale.US)
+        val personalKeywords = listOf(
+            "my ", "i like", "i prefer", "call me", "remember", "birthday",
+            "wife", "husband", "mom", "mother", "dad", "father", "friend",
+            "home", "office", "work", "favorite", "favourite", "hate", "live in",
+            "address", "phone number", "email", "allergic", "allergy"
+        )
+        return personalKeywords.any { lower.contains(it) }
     }
 
     private suspend fun extractFallbackRememberDirective(userText: String) {
-        val lower = userText.lowercase()
+        val lower = userText.lowercase(Locale.US)
         if (lower.startsWith("remember ") || lower.contains("remember that ")) {
             val cleaned = userText
                 .replace(Regex("(?i)^remember( that)?\\s+"), "")
@@ -490,11 +658,13 @@ class AgentOrchestrator @Inject constructor(
                 val parts = cleaned.split(" is ", " = ", limit = 2)
                 val key = parts.firstOrNull()?.trim()?.take(40) ?: "note"
                 val value = parts.getOrNull(1)?.trim() ?: cleaned
-                memoryRepository.upsertMemory(
-                    category = "PREFERENCE",
-                    key = key,
-                    value = value
-                )
+                if (MemorySafetyFilter.validateFact(key, value) == null) {
+                    memoryRepository.upsertMemory(
+                        category = "PREFERENCE",
+                        key = key,
+                        value = value
+                    )
+                }
             }
         }
     }

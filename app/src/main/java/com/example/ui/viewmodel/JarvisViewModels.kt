@@ -11,6 +11,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.data.local.ApiKeyStore
+import com.example.data.local.DiagnosticsLogger
 import com.example.data.remote.GeminiClient
 import com.example.data.remote.KeyVerificationResult
 import com.example.di.AppContainer
@@ -31,6 +32,7 @@ import com.example.domain.model.OemBatteryGuide
 import com.example.domain.model.PermissionItemStatus
 import com.example.domain.model.RoutineItem
 import com.example.domain.model.RoutineTriggerType
+import com.example.domain.model.UserFacingError
 import com.example.domain.model.UserSettings
 import com.example.domain.model.VoiceDiagnosticsSnapshot
 import com.example.domain.model.VoiceSessionState
@@ -50,6 +52,7 @@ import com.example.services.voice.SpeechRecognizerWrapper
 import com.example.services.voice.TtsEngineWrapper
 import com.example.services.voice.VoiceSessionManager
 import com.example.tools.MemorySafetyFilter
+import java.util.Locale
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -85,6 +88,12 @@ class SetupViewModel(
         SharingStarted.WhileSubscribed(5000),
         apiKeyStore.exists()
     )
+
+    private val _currentStep = MutableStateFlow(1)
+    val currentStep: StateFlow<Int> = _currentStep.asStateFlow()
+
+    private val _stepError = MutableStateFlow<String?>(null)
+    val stepError: StateFlow<String?> = _stepError.asStateFlow()
 
     private val _apiKeyInput = MutableStateFlow("")
     val apiKeyInput: StateFlow<String> = _apiKeyInput.asStateFlow()
@@ -161,10 +170,20 @@ class SetupViewModel(
 
     fun updateApiKeyInput(value: String) {
         _apiKeyInput.value = value
+        _stepError.value = null
         if (_isKeyVerified.value && value.trim() != apiKeyStore.get()) {
             _isKeyVerified.value = false
             _verificationSuccess.value = false
             _verificationMessage.value = null
+        }
+    }
+
+    fun onPasteKey(pasted: String) {
+        val trimmed = pasted.trim()
+        _apiKeyInput.value = trimmed
+        _stepError.value = null
+        if (trimmed.startsWith("AIza") || trimmed.length >= 30) {
+            verifyApiKey()
         }
     }
 
@@ -181,6 +200,7 @@ class SetupViewModel(
 
     fun updateUserName(name: String) {
         _userNameInput.value = name
+        _stepError.value = null
     }
 
     fun updateUserCity(city: String) {
@@ -196,6 +216,54 @@ class SetupViewModel(
 
     fun setPrivacyAccepted(accepted: Boolean) {
         _privacyAccepted.value = accepted
+        _stepError.value = null
+    }
+
+    fun goToStep(step: Int) {
+        if (step in 1..3) {
+            _currentStep.value = step
+            _stepError.value = null
+        }
+    }
+
+    fun onNextClicked() {
+        when (_currentStep.value) {
+            1 -> {
+                if (!_isKeyVerified.value && !apiKeyStore.exists()) {
+                    _stepError.value = "Verify your key to continue."
+                    return
+                }
+                _stepError.value = null
+                _currentStep.value = 2
+            }
+            2 -> {
+                if (_userNameInput.value.trim().isEmpty()) {
+                    _stepError.value = "Please enter your name."
+                    return
+                }
+                _stepError.value = null
+                _currentStep.value = 3
+            }
+            3 -> {
+                if (!_isMicGranted.value) {
+                    _stepError.value = "Microphone permission is required."
+                    return
+                }
+                if (!_privacyAccepted.value) {
+                    _stepError.value = "Please agree to the privacy statement."
+                    return
+                }
+                _stepError.value = null
+                completeSetup()
+            }
+        }
+    }
+
+    fun onBackClicked() {
+        if (_currentStep.value > 1) {
+            _currentStep.value -= 1
+            _stepError.value = null
+        }
     }
 
     fun verifyApiKey() {
@@ -207,6 +275,7 @@ class SetupViewModel(
         }
         _isVerifying.value = true
         _verificationMessage.value = null
+        _stepError.value = null
         viewModelScope.launch {
             when (val result = geminiClient.verifyKeyAndListModels(candidate)) {
                 is KeyVerificationResult.Valid -> {
@@ -219,7 +288,7 @@ class SetupViewModel(
                     settingsRepository.setSelectedModelId(defaultModel)
                     _isKeyVerified.value = true
                     _verificationSuccess.value = true
-                    _verificationMessage.value = "Verified — ${models.size} models available"
+                    _verificationMessage.value = "Connected! Available models: ${models.size}"
                     _keyPresenceVersion.value += 1
                 }
                 is KeyVerificationResult.Invalid -> {
@@ -273,7 +342,7 @@ class SetupViewModel(
                 if (nick.isNotEmpty() && full.isNotEmpty()) {
                     memoryRepository.upsertMemory(
                         category = MemoryCategory.CONTACT.name,
-                        key = "contact_${nick.lowercase()}",
+                        key = "contact_${nick.lowercase(Locale.US)}",
                         value = "$nick -> $full",
                         source = MemorySource.SETUP_WIZARD.name,
                         confidence = 1.0f,
@@ -292,6 +361,7 @@ class HomeViewModel(
     private val agentOrchestrator: AgentOrchestrator,
     private val chatRepository: ChatRepository,
     private val settingsRepository: SettingsRepository,
+    private val memoryRepository: MemoryRepository,
     private val safetyGate: SafetyGate,
     private val killSwitch: KillSwitch,
     private val voiceSessionManager: VoiceSessionManager,
@@ -322,6 +392,8 @@ class HomeViewModel(
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), AssistantOrbState.IDLE)
 
+    val orbCaption: StateFlow<String?> = agentOrchestrator.orbCaption
+    val userFacingError: StateFlow<UserFacingError?> = agentOrchestrator.userFacingError
     val lastResponseText: StateFlow<String> = agentOrchestrator.lastResponseText
     val pendingConfirmation: StateFlow<ConfirmationRequest?> = safetyGate.pendingConfirmation
     val isKilled: StateFlow<Boolean> = killSwitch.isKilled
@@ -333,22 +405,34 @@ class HomeViewModel(
     private val _inputDraft = MutableStateFlow("")
     val inputDraft: StateFlow<String> = _inputDraft.asStateFlow()
 
+    private val _isInputVisible = MutableStateFlow(false)
+    val isInputVisible: StateFlow<Boolean> = _isInputVisible.asStateFlow()
+
     private val _sttStatusBanner = MutableStateFlow<String?>(null)
     val sttStatusBanner: StateFlow<String?> = _sttStatusBanner.asStateFlow()
 
-    val latencyMetrics: StateFlow<LatencyMetrics> = combine(
-        speechRecognizer.lastSttLatencyMs,
-        agentOrchestrator.lastAgentStepLatencyMs,
-        ttsEngine.firstAudioLatencyMs
-    ) { stt, agent, tts ->
-        LatencyMetrics(
-            sttLatencyMs = stt,
-            agentStepLatencyMs = agent,
-            ttsFirstAudioLatencyMs = tts,
-            endToFirstAudioMs = stt + agent + tts,
-            usingStreamingBackend = false
-        )
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), LatencyMetrics())
+    private val _userName = MutableStateFlow("")
+    val userName: StateFlow<String> = _userName.asStateFlow()
+
+    private val _showTutorial = MutableStateFlow(false)
+    val showTutorial: StateFlow<Boolean> = _showTutorial.asStateFlow()
+
+    init {
+        viewModelScope.launch {
+            memoryRepository.memoriesFlow.collect { memories ->
+                val nameFact = memories.firstOrNull { it.key == "user_name" }
+                _userName.value = nameFact?.value.orEmpty()
+            }
+        }
+    }
+
+    fun toggleInputVisibility() {
+        _isInputVisible.value = !_isInputVisible.value
+    }
+
+    fun dismissTutorial() {
+        _showTutorial.value = false
+    }
 
     fun updateDraft(text: String) {
         _inputDraft.value = text
@@ -362,12 +446,21 @@ class HomeViewModel(
         agentOrchestrator.clearKeyRejectedBanner()
     }
 
+    fun clearUserFacingError() {
+        agentOrchestrator.clearUserFacingError()
+    }
+
     fun startNewChat() {
         viewModelScope.launch {
             voiceSessionManager.stopAll()
             chatRepository.startNewConversation()
             _sttStatusBanner.value = null
+            agentOrchestrator.clearUserFacingError()
         }
+    }
+
+    fun sendSampleCommand(command: String) {
+        sendTextCommand(command)
     }
 
     fun sendTextCommand(textOverride: String? = null) {
@@ -377,6 +470,7 @@ class HomeViewModel(
             _inputDraft.value = ""
         }
         _sttStatusBanner.value = null
+        agentOrchestrator.clearUserFacingError()
 
         viewModelScope.launch {
             voiceSessionManager.enterThinking()
@@ -434,6 +528,7 @@ class HomeViewModel(
     fun startPushToTalk() {
         if (killSwitch.isKilled.value) return
         _sttStatusBanner.value = null
+        agentOrchestrator.clearUserFacingError()
         val lang = settings.value.language
 
         voiceSessionManager.startListening(
@@ -529,20 +624,15 @@ class MemoryViewModel(
     private val _memoryStatusBanner = MutableStateFlow<String?>(null)
     val memoryStatusBanner: StateFlow<String?> = _memoryStatusBanner.asStateFlow()
 
-    private val _storageSizeBytes = MutableStateFlow(computeDatabaseSizeBytes())
-    val storageSizeBytes: StateFlow<Long> = _storageSizeBytes.asStateFlow()
+    private val _isAddSheetOpen = MutableStateFlow(false)
+    val isAddSheetOpen: StateFlow<Boolean> = _isAddSheetOpen.asStateFlow()
 
-    private fun computeDatabaseSizeBytes(): Long {
-        return runCatching {
-            val dbFile = appContext.getDatabasePath("jarvis_assistant.db")
-            val walFile = java.io.File(dbFile.path + "-wal")
-            (if (dbFile.exists()) dbFile.length() else 0L) +
-                (if (walFile.exists()) walFile.length() else 0L)
-        }.getOrDefault(0L)
+    fun openAddSheet() {
+        _isAddSheetOpen.value = true
     }
 
-    fun refreshStorageSize() {
-        _storageSizeBytes.value = computeDatabaseSizeBytes()
+    fun closeAddSheet() {
+        _isAddSheetOpen.value = false
     }
 
     fun updateSearchQuery(query: String) {
@@ -551,6 +641,26 @@ class MemoryViewModel(
 
     fun dismissBanner() {
         _memoryStatusBanner.value = null
+    }
+
+    fun addFactFromPrompt(rawText: String) {
+        val trimmed = rawText.trim()
+        if (trimmed.isEmpty()) return
+        val lower = trimmed.lowercase(Locale.US)
+        val category = when {
+            lower.contains("sister") || lower.contains("brother") || lower.contains("mom") ||
+                lower.contains("dad") || lower.contains("friend") || lower.contains("boss") ||
+                lower.contains("phone") || lower.contains("contact") -> MemoryCategory.CONTACT.name
+            lower.contains("like") || lower.contains("prefer") || lower.contains("favourite") ||
+                lower.contains("favorite") || lower.contains("hate") -> MemoryCategory.PREFERENCE.name
+            lower.contains("name is") || lower.contains("live in") || lower.contains("birthday") ||
+                lower.contains("city") -> MemoryCategory.PROFILE.name
+            else -> MemoryCategory.NOTE.name
+        }
+
+        val key = trimmed.take(30).replace(Regex("(?i)^(remember( that)?|my)\\s+"), "").trim()
+        saveMemory(category = category, key = key.ifEmpty { "Note" }, value = trimmed)
+        closeAddSheet()
     }
 
     fun saveMemory(category: String, key: String, value: String, pinned: Boolean = false) {
@@ -570,7 +680,6 @@ class MemoryViewModel(
                 pinned = pinned
             )
             _memoryStatusBanner.value = null
-            refreshStorageSize()
         }
     }
 
@@ -595,7 +704,6 @@ class MemoryViewModel(
                 value = newValue.trim(),
                 pinned = pinned
             )
-            refreshStorageSize()
         }
     }
 
@@ -608,7 +716,6 @@ class MemoryViewModel(
     fun deleteMemory(id: Long) {
         viewModelScope.launch {
             memoryRepository.deleteMemory(id)
-            refreshStorageSize()
         }
     }
 
@@ -616,7 +723,6 @@ class MemoryViewModel(
         viewModelScope.launch {
             memoryRepository.deleteMemory(fact.id)
             _memoryStatusBanner.value = "Undid learned fact: ${fact.key}"
-            refreshStorageSize()
         }
     }
 
@@ -633,6 +739,15 @@ class MemoryViewModel(
         _selectedConversationMessages.value = emptyList()
     }
 
+    fun deleteConversation(conversationId: Long) {
+        viewModelScope.launch {
+            chatRepository.deleteConversation(conversationId)
+            if (_selectedConversation.value?.id == conversationId) {
+                closeConversationTranscript()
+            }
+        }
+    }
+
     fun exportMemoriesJson(onReady: (String) -> Unit) {
         viewModelScope.launch {
             val json = memoryRepository.exportAllAsJson()
@@ -643,7 +758,6 @@ class MemoryViewModel(
     fun clearAllMemories() {
         viewModelScope.launch {
             memoryRepository.clearAllMemories()
-            refreshStorageSize()
         }
     }
 
@@ -653,7 +767,6 @@ class MemoryViewModel(
             memoryRepository.clearAllMemories()
             chatRepository.clearAllMessages()
             activityLogRepository.clearAllLogs()
-            refreshStorageSize()
             onCompleted()
         }
     }
@@ -695,7 +808,7 @@ class RoutinesViewModel(
         if (actions.isEmpty()) return
 
         viewModelScope.launch {
-            val savedId = routineRepository.upsertRoutine(
+            routineRepository.upsertRoutine(
                 RoutineItem(
                     title = title.trim(),
                     triggerType = triggerType,
@@ -704,29 +817,22 @@ class RoutinesViewModel(
                     enabled = true
                 )
             )
-            if (triggerType == RoutineTriggerType.TIME_DAILY && savedId > 0L) {
-                RoutineTriggerReceiver.scheduleDailyRoutineAlarm(
-                    context = appContext,
-                    routineId = savedId,
-                    timeHhMm = triggerValue.trim()
-                )
-            }
         }
     }
 
-    fun toggleRoutine(id: Long, enabled: Boolean) {
+    fun toggleRoutine(routine: RoutineItem, enabled: Boolean) {
         viewModelScope.launch {
-            routineRepository.toggleRoutine(id, enabled)
+            routineRepository.toggleRoutine(routine.id, enabled)
         }
     }
 
-    fun deleteRoutine(id: Long) {
+    fun deleteRoutine(routine: RoutineItem) {
         viewModelScope.launch {
-            routineRepository.deleteRoutine(id)
+            routineRepository.deleteRoutine(routine.id)
         }
     }
 
-    fun executeRoutineNow(routine: RoutineItem) {
+    fun runRoutineNow(routine: RoutineItem) {
         viewModelScope.launch {
             routineRepository.markRoutineRun(routine.id, System.currentTimeMillis())
             for (cmd in routine.actionsJson) {
@@ -802,7 +908,7 @@ class PermissionsViewModel(
             PermissionItemStatus(
                 id = "RECORD_AUDIO",
                 titleEn = "Microphone (Voice Input)",
-                rationaleEn = "Required to hear your spoken commands via push-to-talk. Raw audio is never stored on disk.",
+                rationaleEn = "Required to hear your spoken commands. Raw audio is never stored on disk.",
                 isGranted = hasMic
             ),
             PermissionItemStatus(
@@ -814,7 +920,7 @@ class PermissionsViewModel(
             PermissionItemStatus(
                 id = "READ_CONTACTS",
                 titleEn = "Contacts Lookup (Safe Calling & Messaging)",
-                rationaleEn = "Resolves spoken contact names to real phone numbers so JARVIS never guesses or dials wrong numbers.",
+                rationaleEn = "Resolves spoken contact names to real phone numbers so JARVIS never dials wrong numbers.",
                 isGranted = hasContacts
             ),
             PermissionItemStatus(
@@ -826,14 +932,14 @@ class PermissionsViewModel(
             PermissionItemStatus(
                 id = "ACCESSIBILITY_SERVICE",
                 titleEn = "Accessibility Service (Full Control Mode)",
-                rationaleEn = "Reads screen layout and executes user-approved taps and scrolls. Automatically blocked on password fields and banking/UPI apps.",
+                rationaleEn = "Reads screen layout and executes user-approved taps and scrolls. Automatically blocked on banking/UPI apps.",
                 isGranted = hasAccessibility,
                 isOptionalInStoreSafeMode = true
             ),
             PermissionItemStatus(
                 id = "NOTIFICATION_LISTENER",
                 titleEn = "Notification Listener Access",
-                rationaleEn = "Summarizes incoming notifications and sends confirmed inline replies (4-8 digit OTP codes are automatically redacted).",
+                rationaleEn = "Summarizes incoming notifications and sends confirmed inline replies.",
                 isGranted = hasNotifListener
             ),
             PermissionItemStatus(
@@ -878,6 +984,12 @@ class SettingsViewModel(
     private val _isVerifyingKey = MutableStateFlow(false)
     val isVerifyingKey: StateFlow<Boolean> = _isVerifyingKey.asStateFlow()
 
+    private val _isTestingConnection = MutableStateFlow(false)
+    val isTestingConnection: StateFlow<Boolean> = _isTestingConnection.asStateFlow()
+
+    private val _testConnectionMessage = MutableStateFlow<String?>(null)
+    val testConnectionMessage: StateFlow<String?> = _testConnectionMessage.asStateFlow()
+
     val voiceDiagnostics: StateFlow<VoiceDiagnosticsSnapshot> = combine(
         combine(
             voiceSessionManager.state,
@@ -910,6 +1022,25 @@ class SettingsViewModel(
         _maskedApiKey.value = apiKeyStore.mask()
     }
 
+    fun testAiConnection() {
+        val currentKey = apiKeyStore.get()
+        if (currentKey.isNullOrBlank()) {
+            _testConnectionMessage.value = "No key configured"
+            return
+        }
+        _isTestingConnection.value = true
+        _testConnectionMessage.value = null
+        viewModelScope.launch {
+            val result = geminiClient.testConnection(currentKey)
+            _isTestingConnection.value = false
+            _testConnectionMessage.value = if (result.isSuccess) {
+                "Connected to Gemini successfully"
+            } else {
+                result.exceptionOrNull()?.localizedMessage ?: "Connection failed"
+            }
+        }
+    }
+
     fun verifyAndSaveNewKey(newKey: String, onSuccess: () -> Unit = {}) {
         val trimmed = newKey.trim()
         if (trimmed.isEmpty()) {
@@ -931,7 +1062,7 @@ class SettingsViewModel(
                     settingsRepository.setSelectedModelId(chosen)
                     settingsRepository.setSetupComplete(true)
                     agentOrchestrator.clearKeyRejectedBanner()
-                    _keyStatusMessage.value = "Verified — ${models.size} models available"
+                    _keyStatusMessage.value = "Connected! Available models: ${models.size}"
                     onSuccess()
                 }
                 is KeyVerificationResult.Invalid -> {
@@ -1068,6 +1199,7 @@ class JarvisViewModelFactory(
                 agentOrchestrator = container.agentOrchestrator,
                 chatRepository = container.chatRepository,
                 settingsRepository = container.settingsRepository,
+                memoryRepository = container.memoryRepository,
                 safetyGate = container.safetyGate,
                 killSwitch = container.killSwitch,
                 voiceSessionManager = container.voiceSessionManager,

@@ -176,8 +176,10 @@ fun AuroraPrimaryButton(
     enabled: Boolean = true,
     loading: Boolean = false,
     leadingIcon: ImageVector? = null,
+    icon: ImageVector? = null,
     testTag: String? = null
 ) {
+    val effectiveIcon = icon ?: leadingIcon
     val view = LocalView.current
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
@@ -230,9 +232,9 @@ fun AuroraPrimaryButton(
                     strokeWidth = 2.dp
                 )
                 Spacer(modifier = Modifier.width(10.dp))
-            } else if (leadingIcon != null) {
+            } else if (effectiveIcon != null) {
                 Icon(
-                    imageVector = leadingIcon,
+                    imageVector = effectiveIcon,
                     contentDescription = null,
                     tint = AuroraColors.TextPrimary,
                     modifier = Modifier.size(18.dp)
@@ -267,9 +269,11 @@ fun AuroraSecondaryButton(
     enabled: Boolean = true,
     loading: Boolean = false,
     leadingIcon: ImageVector? = null,
+    icon: ImageVector? = null,
     iconTint: Color = AuroraColors.Lavender,
     testTag: String? = null
 ) {
+    val effectiveIcon = icon ?: leadingIcon
     val view = LocalView.current
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
@@ -319,9 +323,9 @@ fun AuroraSecondaryButton(
                     strokeWidth = 2.dp
                 )
                 Spacer(modifier = Modifier.width(8.dp))
-            } else if (leadingIcon != null) {
+            } else if (effectiveIcon != null) {
                 Icon(
-                    imageVector = leadingIcon,
+                    imageVector = effectiveIcon,
                     contentDescription = null,
                     tint = iconTint,
                     modifier = Modifier.size(18.dp)
@@ -490,12 +494,13 @@ fun AuroraTextButton(
 fun AuroraIconButton(
     icon: ImageVector,
     contentDescription: String,
-    testTag: String,
+    testTag: String = "icon_button",
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
     tint: Color = AuroraColors.TextPrimary,
-    activeFillColor: Color? = null
+    activeFillColor: Color? = null,
+    size: androidx.compose.ui.unit.Dp = 48.dp
 ) {
     val view = LocalView.current
     val interactionSource = remember { MutableInteractionSource() }
@@ -508,7 +513,7 @@ fun AuroraIconButton(
 
     Box(
         modifier = modifier
-            .size(48.dp)
+            .size(size)
             .scale(scale)
             .alpha(if (enabled) 1f else 0.4f)
             .clip(CircleShape)

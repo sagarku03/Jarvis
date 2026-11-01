@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -25,22 +26,27 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Chat
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteForever
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.IosShare
-import androidx.compose.material.icons.filled.Memory
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Undo
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -66,18 +72,16 @@ import com.example.ui.components.AuroraGlassCard
 import com.example.ui.components.AuroraIconButton
 import com.example.ui.components.AuroraPrimaryButton
 import com.example.ui.components.AuroraSecondaryButton
-import com.example.ui.components.AuroraSectionHeader
 import com.example.ui.components.AuroraStatusPill
 import com.example.ui.components.AuroraTextButton
 import com.example.ui.theme.AuroraColors
-import com.example.ui.theme.JarvisMonoStyle
 import com.example.ui.theme.JarvisTimestampMonoStyle
 import com.example.ui.viewmodel.MemoryViewModel
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-@OptIn(ExperimentalLayoutApi::class)
+@OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun MemoryScreen(viewModel: MemoryViewModel) {
     val context = LocalContext.current
@@ -88,41 +92,20 @@ fun MemoryScreen(viewModel: MemoryViewModel) {
     val selectedConversation by viewModel.selectedConversation.collectAsStateWithLifecycle()
     val selectedConversationMessages by viewModel.selectedConversationMessages.collectAsStateWithLifecycle()
     val memoryStatusBanner by viewModel.memoryStatusBanner.collectAsStateWithLifecycle()
-    val storageSizeBytes by viewModel.storageSizeBytes.collectAsStateWithLifecycle()
+    val isAddSheetOpen by viewModel.isAddSheetOpen.collectAsStateWithLifecycle()
 
     var selectedTabIndex by remember { mutableIntStateOf(0) }
-    var keyDraft by remember { mutableStateOf("") }
-    var valueDraft by remember { mutableStateOf("") }
-    var categoryDraft by remember { mutableStateOf(MemoryCategory.CONTACT.name) }
+    var addSheetPromptText by remember { mutableStateOf("") }
 
     var editingFact by remember { mutableStateOf<MemoryFact?>(null) }
     var editKeyDraft by remember { mutableStateOf("") }
     var editValueDraft by remember { mutableStateOf("") }
-    var editCategoryDraft by remember { mutableStateOf(MemoryCategory.NOTE.name) }
-    var editPinnedDraft by remember { mutableStateOf(false) }
 
     var showDeleteAllDialog by remember { mutableStateOf(false) }
-    var deleteConfirmDraft by remember { mutableStateOf("") }
+    var deleteConfirmInput by remember { mutableStateOf("") }
+    var showMenu by remember { mutableStateOf(false) }
 
-    LaunchedEffect(Unit) {
-        viewModel.refreshStorageSize()
-    }
-
-    val categories: List<Pair<String, Int>> = listOf(
-        MemoryCategory.PROFILE.name to R.string.memory_cat_profile,
-        MemoryCategory.CONTACT.name to R.string.memory_cat_contact,
-        MemoryCategory.PREFERENCE.name to R.string.memory_cat_preference,
-        MemoryCategory.ROUTINE_HINT.name to R.string.memory_cat_routine_hint,
-        MemoryCategory.TASK.name to R.string.memory_cat_task,
-        MemoryCategory.NOTE.name to R.string.memory_cat_note,
-        MemoryCategory.EPISODE.name to R.string.memory_cat_episode
-    )
-
-    val tabs: List<Pair<Int, String>> = listOf(
-        R.string.memory_tab_facts to "memory_tab_facts",
-        R.string.memory_tab_conversations to "memory_tab_conversations",
-        R.string.memory_tab_learned_today to "memory_tab_learned_today"
-    )
+    val bottomSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     AuroraBackground {
         Column(
@@ -132,68 +115,157 @@ fun MemoryScreen(viewModel: MemoryViewModel) {
                 .align(Alignment.TopCenter)
                 .padding(horizontal = 16.dp, vertical = 12.dp)
         ) {
-            AuroraSectionHeader(
-                title = stringResource(R.string.memory_title),
-                subtitle = stringResource(R.string.memory_subtitle),
-                trailing = {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        AuroraSecondaryButton(
-                            text = stringResource(R.string.memory_export_json),
-                            leadingIcon = Icons.Default.IosShare,
-                            onClick = {
-                                viewModel.exportMemoriesJson { jsonPayload ->
-                                    runCatching {
-                                        val shareIntent = Intent(Intent.ACTION_SEND).apply {
-                                            type = "application/json"
-                                            putExtra(Intent.EXTRA_SUBJECT, "JARVIS Memory Export")
-                                            putExtra(Intent.EXTRA_TEXT, jsonPayload)
-                                        }
-                                        context.startActivity(
-                                            Intent.createChooser(shareIntent, "Export JARVIS Memory").apply {
-                                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                            }
-                                        )
-                                    }
-                                }
-                            },
-                            testTag = "memory_export_json_button"
-                        )
+            // Header: "What I know about you" + Menu
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = stringResource(R.string.memory_title),
+                        style = MaterialTheme.typography.titleLarge,
+                        color = AuroraColors.TextPrimary,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = stringResource(R.string.memory_subtitle),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = AuroraColors.TextSecondary
+                    )
+                }
 
-                        AuroraDangerButton(
-                            text = stringResource(R.string.memory_delete_all_data),
-                            leadingIcon = Icons.Default.DeleteForever,
+                Box {
+                    AuroraIconButton(
+                        icon = Icons.Default.MoreVert,
+                        contentDescription = "Options",
+                        onClick = { showMenu = true },
+                        tint = AuroraColors.Lavender
+                    )
+                    DropdownMenu(
+                        expanded = showMenu,
+                        onDismissRequest = { showMenu = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.memory_export_json)) },
+                            leadingIcon = { Icon(Icons.Default.IosShare, null) },
                             onClick = {
-                                deleteConfirmDraft = ""
-                                showDeleteAllDialog = true
+                                showMenu = false
+                                viewModel.exportMemoriesJson { json ->
+                                    val sendIntent = Intent(Intent.ACTION_SEND).apply {
+                                        type = "application/json"
+                                        putExtra(Intent.EXTRA_TEXT, json)
+                                    }
+                                    context.startActivity(Intent.createChooser(sendIntent, "Export Memories"))
+                                }
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = {
+                                Text(
+                                    stringResource(R.string.memory_delete_all_data),
+                                    color = AuroraColors.Danger
+                                )
                             },
-                            testTag = "memory_delete_all_data_button"
+                            leadingIcon = { Icon(Icons.Default.DeleteForever, null, tint = AuroraColors.Danger) },
+                            onClick = {
+                                showMenu = false
+                                showDeleteAllDialog = true
+                            }
                         )
                     }
                 }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // Search bar
+            OutlinedTextField(
+                value = searchQuery,
+                onValueChange = viewModel::updateSearchQuery,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("memory_search_input"),
+                placeholder = {
+                    Text(
+                        stringResource(R.string.memory_search_hint),
+                        color = AuroraColors.TextMuted,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                },
+                leadingIcon = {
+                    Icon(
+                        imageVector = Icons.Default.Search,
+                        contentDescription = null,
+                        tint = AuroraColors.Lavender
+                    )
+                },
+                singleLine = true,
+                shape = RoundedCornerShape(14.dp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = AuroraColors.Violet,
+                    unfocusedBorderColor = AuroraColors.GlassBorder,
+                    focusedContainerColor = AuroraColors.GlassFillLight,
+                    unfocusedContainerColor = AuroraColors.GlassFillDark,
+                    focusedTextColor = AuroraColors.TextPrimary,
+                    unfocusedTextColor = AuroraColors.TextPrimary
+                )
             )
 
-            Spacer(modifier = Modifier.height(6.dp))
+            Spacer(modifier = Modifier.height(10.dp))
 
-            val sizeKb = String.format(Locale.US, "%.1f", (storageSizeBytes / 1024f).coerceAtLeast(0.1f))
-            Text(
-                text = stringResource(R.string.memory_storage_size_kb, sizeKb),
-                style = JarvisMonoStyle,
-                color = AuroraColors.TextSecondary,
-                modifier = Modifier.testTag("memory_storage_size_label")
-            )
+            // Big "+ Add" button
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // Tab selectors
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    TabPill(
+                        label = stringResource(R.string.memory_tab_facts),
+                        selected = selectedTabIndex == 0,
+                        onClick = { selectedTabIndex = 0 }
+                    )
+                    TabPill(
+                        label = stringResource(R.string.memory_tab_learned_today),
+                        selected = selectedTabIndex == 1,
+                        onClick = { selectedTabIndex = 1 }
+                    )
+                    TabPill(
+                        label = stringResource(R.string.memory_tab_conversations),
+                        selected = selectedTabIndex == 2,
+                        onClick = { selectedTabIndex = 2 }
+                    )
+                }
 
-            if (!memoryStatusBanner.isNullOrBlank()) {
+                AuroraPrimaryButton(
+                    text = stringResource(R.string.memory_add_button),
+                    icon = Icons.Default.Add,
+                    onClick = {
+                        addSheetPromptText = ""
+                        viewModel.openAddSheet()
+                    },
+                    modifier = Modifier.testTag("memory_open_add_sheet")
+                )
+            }
+
+            if (memoryStatusBanner != null) {
                 Spacer(modifier = Modifier.height(6.dp))
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(AuroraColors.AmberWarning.copy(alpha = 0.16f))
-                        .border(1.dp, AuroraColors.AmberWarning.copy(alpha = 0.4f), RoundedCornerShape(12.dp))
-                        .padding(horizontal = 12.dp, vertical = 8.dp)
-                        .testTag("memory_status_banner"),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(AuroraColors.AmberWarning.copy(alpha = 0.15f))
+                        .border(1.dp, AuroraColors.AmberWarning.copy(alpha = 0.4f), RoundedCornerShape(10.dp))
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Text(
                         text = memoryStatusBanner.orEmpty(),
@@ -201,289 +273,285 @@ fun MemoryScreen(viewModel: MemoryViewModel) {
                         color = AuroraColors.TextPrimary,
                         modifier = Modifier.weight(1f)
                     )
-                    AuroraTextButton(
-                        text = stringResource(R.string.safety_confirm_deny),
-                        onClick = viewModel::dismissBanner,
-                        testTag = "memory_dismiss_banner_button"
+                    AuroraIconButton(
+                        icon = Icons.Default.Close,
+                        contentDescription = "Dismiss",
+                        onClick = { viewModel.dismissBanner() },
+                        size = 28.dp,
+                        tint = AuroraColors.TextSecondary
                     )
                 }
             }
 
             Spacer(modifier = Modifier.height(10.dp))
 
-            // 3-Tab Switcher (Facts | Conversations | Learned today)
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(AuroraColors.SurfacePrimary)
-                    .border(1.dp, AuroraColors.GlassBorder, RoundedCornerShape(16.dp))
-                    .padding(4.dp),
-                horizontalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                tabs.forEachIndexed { idx, tabPair ->
-                    val labelRes = tabPair.first
-                    val tag = tabPair.second
-                    val selected = selectedTabIndex == idx
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .heightIn(min = 44.dp)
-                            .clip(RoundedCornerShape(12.dp))
-                            .then(
-                                if (selected) {
-                                    Modifier.background(AuroraColors.VioletGradient)
-                                } else {
-                                    Modifier
-                                }
-                            )
-                            .clickable { selectedTabIndex = idx }
-                            .padding(horizontal = 8.dp, vertical = 8.dp)
-                            .testTag(tag),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = stringResource(labelRes),
-                            style = MaterialTheme.typography.labelLarge,
-                            color = if (selected) AuroraColors.TextPrimary else AuroraColors.TextSecondary,
-                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium
-                        )
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(10.dp))
-
+            // Content based on tab
             when (selectedTabIndex) {
                 0 -> {
-                    // FACTS TAB
-                    OutlinedTextField(
-                        value = searchQuery,
-                        onValueChange = viewModel::updateSearchQuery,
+                    // FACTS TAB: Grouped by friendly categories
+                    LazyColumn(
                         modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("memory_search_input"),
-                        placeholder = {
-                            Text(
-                                text = stringResource(R.string.memory_search_hint),
-                                color = AuroraColors.TextMuted
-                            )
-                        },
-                        leadingIcon = {
-                            Icon(
-                                imageVector = Icons.Default.Search,
-                                contentDescription = stringResource(R.string.memory_search_hint),
-                                tint = AuroraColors.Aqua
-                            )
-                        },
-                        singleLine = true,
-                        shape = RoundedCornerShape(16.dp),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = AuroraColors.Violet500,
-                            unfocusedBorderColor = AuroraColors.GlassBorder,
-                            focusedContainerColor = AuroraColors.SurfacePrimary,
-                            unfocusedContainerColor = AuroraColors.SurfacePrimary,
-                            focusedTextColor = AuroraColors.TextPrimary,
-                            unfocusedTextColor = AuroraColors.TextPrimary
-                        )
-                    )
-
-                    Spacer(modifier = Modifier.height(10.dp))
-
-                    // Add New Fact Card
-                    AuroraGlassCard(elevated = true) {
-                        Text(
-                            text = stringResource(R.string.memory_add_title),
-                            style = MaterialTheme.typography.titleMedium,
-                            color = AuroraColors.TextPrimary
-                        )
-
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            OutlinedTextField(
-                                value = keyDraft,
-                                onValueChange = { keyDraft = it },
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .testTag("memory_key_input"),
-                                placeholder = {
-                                    Text(
-                                        text = stringResource(R.string.memory_key_hint),
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = AuroraColors.TextMuted
-                                    )
-                                },
-                                singleLine = true,
-                                colors = OutlinedTextFieldDefaults.colors(
-                                    focusedBorderColor = AuroraColors.Violet500,
-                                    unfocusedBorderColor = AuroraColors.GlassBorder,
-                                    focusedTextColor = AuroraColors.TextPrimary,
-                                    unfocusedTextColor = AuroraColors.TextPrimary
-                                )
-                            )
-
-                            OutlinedTextField(
-                                value = valueDraft,
-                                onValueChange = { valueDraft = it },
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .testTag("memory_value_input"),
-                                placeholder = {
-                                    Text(
-                                        text = stringResource(R.string.memory_value_hint),
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = AuroraColors.TextMuted
-                                    )
-                                },
-                                singleLine = true,
-                                colors = OutlinedTextFieldDefaults.colors(
-                                    focusedBorderColor = AuroraColors.Violet500,
-                                    unfocusedBorderColor = AuroraColors.GlassBorder,
-                                    focusedTextColor = AuroraColors.TextPrimary,
-                                    unfocusedTextColor = AuroraColors.TextPrimary
-                                )
-                            )
-                        }
-
-                        FlowRow(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            verticalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            categories.forEach { catPair ->
-                                val catKey = catPair.first
-                                val labelRes = catPair.second
-                                AuroraStatusPill(
-                                    text = stringResource(labelRes),
-                                    color = if (categoryDraft == catKey) AuroraColors.Violet500 else AuroraColors.TextMuted,
+                            .fillMaxSize()
+                            .weight(1f)
+                            .testTag("memory_facts_list"),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                        contentPadding = PaddingValues(bottom = 24.dp)
+                    ) {
+                        if (memories.isEmpty()) {
+                            item {
+                                Box(
                                     modifier = Modifier
-                                        .clickable { categoryDraft = catKey }
-                                        .padding(vertical = 2.dp)
-                                        .testTag("memory_cat_$catKey")
-                                )
+                                        .fillMaxWidth()
+                                        .padding(vertical = 32.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = stringResource(R.string.memory_empty),
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = AuroraColors.TextMuted
+                                    )
+                                }
+                            }
+                        } else {
+                            val pinnedFacts = memories.filter { it.pinned }
+                            if (pinnedFacts.isNotEmpty()) {
+                                item {
+                                    CategoryHeader(title = "Pinned")
+                                }
+                                items(pinnedFacts, key = { "pinned_${it.id}" }) { fact ->
+                                    FactCard(
+                                        fact = fact,
+                                        onPinToggle = { viewModel.togglePinMemory(fact) },
+                                        onEdit = {
+                                            editingFact = fact
+                                            editKeyDraft = fact.key
+                                            editValueDraft = fact.value
+                                        },
+                                        onDelete = { viewModel.deleteMemory(fact.id) }
+                                    )
+                                }
+                            }
+
+                            val unpinned = memories.filter { !it.pinned }
+                            val peopleFacts = unpinned.filter { it.category == MemoryCategory.CONTACT.name }
+                            val aboutYouFacts = unpinned.filter { it.category == MemoryCategory.PROFILE.name || it.category == MemoryCategory.TASK.name }
+                            val preferenceFacts = unpinned.filter { it.category == MemoryCategory.PREFERENCE.name || it.category == MemoryCategory.ROUTINE_HINT.name }
+                            val reminderFacts = unpinned.filter { it.category == MemoryCategory.NOTE.name || it.category == MemoryCategory.EPISODE.name }
+
+                            if (aboutYouFacts.isNotEmpty()) {
+                                item { CategoryHeader(title = stringResource(R.string.memory_cat_about_you)) }
+                                items(aboutYouFacts, key = { it.id }) { fact ->
+                                    FactCard(
+                                        fact = fact,
+                                        onPinToggle = { viewModel.togglePinMemory(fact) },
+                                        onEdit = {
+                                            editingFact = fact
+                                            editKeyDraft = fact.key
+                                            editValueDraft = fact.value
+                                        },
+                                        onDelete = { viewModel.deleteMemory(fact.id) }
+                                    )
+                                }
+                            }
+
+                            if (peopleFacts.isNotEmpty()) {
+                                item { CategoryHeader(title = stringResource(R.string.memory_cat_people)) }
+                                items(peopleFacts, key = { it.id }) { fact ->
+                                    FactCard(
+                                        fact = fact,
+                                        onPinToggle = { viewModel.togglePinMemory(fact) },
+                                        onEdit = {
+                                            editingFact = fact
+                                            editKeyDraft = fact.key
+                                            editValueDraft = fact.value
+                                        },
+                                        onDelete = { viewModel.deleteMemory(fact.id) }
+                                    )
+                                }
+                            }
+
+                            if (preferenceFacts.isNotEmpty()) {
+                                item { CategoryHeader(title = stringResource(R.string.memory_cat_preferences)) }
+                                items(preferenceFacts, key = { it.id }) { fact ->
+                                    FactCard(
+                                        fact = fact,
+                                        onPinToggle = { viewModel.togglePinMemory(fact) },
+                                        onEdit = {
+                                            editingFact = fact
+                                            editKeyDraft = fact.key
+                                            editValueDraft = fact.value
+                                        },
+                                        onDelete = { viewModel.deleteMemory(fact.id) }
+                                    )
+                                }
+                            }
+
+                            if (reminderFacts.isNotEmpty()) {
+                                item { CategoryHeader(title = stringResource(R.string.memory_cat_reminders)) }
+                                items(reminderFacts, key = { it.id }) { fact ->
+                                    FactCard(
+                                        fact = fact,
+                                        onPinToggle = { viewModel.togglePinMemory(fact) },
+                                        onEdit = {
+                                            editingFact = fact
+                                            editKeyDraft = fact.key
+                                            editValueDraft = fact.value
+                                        },
+                                        onDelete = { viewModel.deleteMemory(fact.id) }
+                                    )
+                                }
                             }
                         }
-
-                        AuroraPrimaryButton(
-                            text = stringResource(R.string.memory_save_button),
-                            leadingIcon = Icons.Default.Add,
-                            enabled = keyDraft.isNotBlank() && valueDraft.isNotBlank(),
-                            onClick = {
-                                viewModel.saveMemory(categoryDraft, keyDraft, valueDraft)
-                                keyDraft = ""
-                                valueDraft = ""
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                            testTag = "memory_save_button"
-                        )
                     }
-
-                    Spacer(modifier = Modifier.height(10.dp))
-
-                    if (memories.isEmpty()) {
-                        EmptyMemoryState(stringResource(R.string.memory_empty))
-                    } else {
-                        LazyColumn(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .testTag("memory_list"),
-                            verticalArrangement = Arrangement.spacedBy(10.dp),
-                            contentPadding = PaddingValues(bottom = 24.dp)
-                        ) {
-                            items(memories, key = { it.id }) { fact ->
-                                MemoryFactCard(
+                }
+                1 -> {
+                    // LEARNED TODAY TAB
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .weight(1f)
+                            .testTag("memory_learned_today_list"),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                        contentPadding = PaddingValues(bottom = 24.dp)
+                    ) {
+                        if (learnedToday.isEmpty()) {
+                            item {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 32.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = stringResource(R.string.memory_learned_today_empty),
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = AuroraColors.TextMuted
+                                    )
+                                }
+                            }
+                        } else {
+                            items(learnedToday, key = { it.id }) { fact ->
+                                FactCard(
                                     fact = fact,
-                                    onTogglePin = { viewModel.togglePinMemory(fact) },
+                                    onPinToggle = { viewModel.togglePinMemory(fact) },
                                     onEdit = {
                                         editingFact = fact
                                         editKeyDraft = fact.key
                                         editValueDraft = fact.value
-                                        editCategoryDraft = fact.category
-                                        editPinnedDraft = fact.pinned
                                     },
-                                    onDelete = { viewModel.deleteMemory(fact.id) }
+                                    onDelete = { viewModel.undoLearnedFact(fact) },
+                                    isUndo = true
                                 )
                             }
                         }
                     }
                 }
-
-                1 -> {
+                2 -> {
                     // CONVERSATIONS TAB
-                    if (conversations.isEmpty()) {
-                        EmptyMemoryState(stringResource(R.string.memory_conversations_empty))
-                    } else {
-                        LazyColumn(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .testTag("conversations_list"),
-                            verticalArrangement = Arrangement.spacedBy(10.dp),
-                            contentPadding = PaddingValues(bottom = 24.dp)
-                        ) {
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .weight(1f)
+                            .testTag("memory_conversations_list"),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                        contentPadding = PaddingValues(bottom = 24.dp)
+                    ) {
+                        if (conversations.isEmpty()) {
+                            item {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 32.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = stringResource(R.string.memory_conversations_empty),
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = AuroraColors.TextMuted
+                                    )
+                                }
+                            }
+                        } else {
                             items(conversations, key = { it.id }) { conv ->
                                 ConversationCard(
                                     conversation = conv,
-                                    onClick = { viewModel.openConversationTranscript(conv) }
+                                    onClick = { viewModel.openConversationTranscript(conv) },
+                                    onDelete = { viewModel.deleteConversation(conv.id) }
                                 )
                             }
                         }
                     }
                 }
+            }
+        }
 
-                2 -> {
-                    // LEARNED TODAY TAB
-                    if (learnedToday.isEmpty()) {
-                        EmptyMemoryState(stringResource(R.string.memory_learned_today_empty))
-                    } else {
-                        LazyColumn(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .testTag("learned_today_list"),
-                            verticalArrangement = Arrangement.spacedBy(10.dp),
-                            contentPadding = PaddingValues(bottom = 24.dp)
-                        ) {
-                            items(learnedToday, key = { it.id }) { fact ->
-                                val withinOneHour = (System.currentTimeMillis() - fact.createdAtMs) <= 3600_000L
-                                AuroraGlassCard(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .testTag("learned_today_card_${fact.id}")
-                                ) {
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Column(modifier = Modifier.weight(1f)) {
-                                            AuroraStatusPill(
-                                                text = fact.category,
-                                                color = AuroraColors.Aqua
-                                            )
-                                            Spacer(modifier = Modifier.height(4.dp))
-                                            Text(
-                                                text = fact.key,
-                                                style = MaterialTheme.typography.titleMedium,
-                                                color = AuroraColors.TextPrimary,
-                                                fontWeight = FontWeight.SemiBold
-                                            )
-                                            Text(
-                                                text = fact.value,
-                                                style = MaterialTheme.typography.bodyMedium,
-                                                color = AuroraColors.TextSecondary
-                                            )
-                                        }
-                                        if (withinOneHour) {
-                                            AuroraSecondaryButton(
-                                                text = stringResource(R.string.memory_undo_button),
-                                                leadingIcon = Icons.Default.Undo,
-                                                onClick = { viewModel.undoLearnedFact(fact) },
-                                                testTag = "undo_learned_${fact.id}"
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        }
+        // Bottom Sheet: "+ Add Memory"
+        if (isAddSheetOpen) {
+            ModalBottomSheet(
+                onDismissRequest = { viewModel.closeAddSheet() },
+                sheetState = bottomSheetState,
+                containerColor = AuroraColors.BackgroundStart,
+                shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 20.dp, vertical = 12.dp)
+                ) {
+                    Text(
+                        text = stringResource(R.string.memory_add_sheet_title),
+                        style = MaterialTheme.typography.titleLarge,
+                        color = AuroraColors.TextPrimary,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    OutlinedTextField(
+                        value = addSheetPromptText,
+                        onValueChange = { addSheetPromptText = it },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("memory_add_sheet_input"),
+                        placeholder = {
+                            Text(
+                                stringResource(R.string.memory_add_sheet_hint),
+                                color = AuroraColors.TextMuted,
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        },
+                        minLines = 3,
+                        maxLines = 5,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = AuroraColors.Violet,
+                            unfocusedBorderColor = AuroraColors.GlassBorder,
+                            focusedContainerColor = AuroraColors.GlassFillLight,
+                            unfocusedContainerColor = AuroraColors.GlassFillDark,
+                            focusedTextColor = AuroraColors.TextPrimary,
+                            unfocusedTextColor = AuroraColors.TextPrimary
+                        ),
+                        shape = RoundedCornerShape(12.dp)
+                    )
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End
+                    ) {
+                        AuroraSecondaryButton(
+                            text = stringResource(R.string.memory_cancel_edit),
+                            onClick = { viewModel.closeAddSheet() }
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        AuroraPrimaryButton(
+                            text = stringResource(R.string.memory_save_button),
+                            enabled = addSheetPromptText.isNotBlank(),
+                            onClick = { viewModel.addFactFromPrompt(addSheetPromptText) },
+                            modifier = Modifier.testTag("memory_add_sheet_save")
+                        )
                     }
+
+                    Spacer(modifier = Modifier.height(24.dp))
                 }
             }
         }
@@ -492,10 +560,10 @@ fun MemoryScreen(viewModel: MemoryViewModel) {
         editingFact?.let { fact ->
             AlertDialog(
                 onDismissRequest = { editingFact = null },
-                containerColor = AuroraColors.SurfaceElevated,
                 title = {
                     Text(
-                        text = stringResource(R.string.memory_edit_title),
+                        stringResource(R.string.memory_edit_title),
+                        style = MaterialTheme.typography.titleMedium,
                         color = AuroraColors.TextPrimary
                     )
                 },
@@ -504,58 +572,99 @@ fun MemoryScreen(viewModel: MemoryViewModel) {
                         OutlinedTextField(
                             value = editKeyDraft,
                             onValueChange = { editKeyDraft = it },
-                            label = { Text(stringResource(R.string.memory_key_hint)) },
+                            label = { Text("Topic") },
                             singleLine = true,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("edit_memory_key_input")
+                            modifier = Modifier.fillMaxWidth()
                         )
                         OutlinedTextField(
                             value = editValueDraft,
                             onValueChange = { editValueDraft = it },
-                            label = { Text(stringResource(R.string.memory_value_hint)) },
-                            singleLine = true,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("edit_memory_value_input")
+                            label = { Text("Value") },
+                            modifier = Modifier.fillMaxWidth()
                         )
                     }
                 },
                 confirmButton = {
                     AuroraPrimaryButton(
-                        text = stringResource(R.string.memory_save_button),
-                        enabled = editKeyDraft.isNotBlank() && editValueDraft.isNotBlank(),
+                        text = stringResource(R.string.memory_update_button),
                         onClick = {
                             viewModel.updateMemory(
                                 fact = fact,
-                                newCategory = editCategoryDraft,
+                                newCategory = fact.category,
                                 newKey = editKeyDraft,
                                 newValue = editValueDraft,
-                                pinned = editPinnedDraft
+                                pinned = fact.pinned
                             )
                             editingFact = null
-                        },
-                        testTag = "edit_memory_confirm_button"
+                        }
                     )
                 },
                 dismissButton = {
-                    AuroraTextButton(
-                        text = stringResource(R.string.safety_confirm_deny),
-                        onClick = { editingFact = null },
-                        testTag = "edit_memory_cancel_button"
+                    AuroraSecondaryButton(
+                        text = stringResource(R.string.memory_cancel_edit),
+                        onClick = { editingFact = null }
                     )
-                }
+                },
+                containerColor = AuroraColors.BackgroundStart
             )
         }
 
-        // Conversation Transcript Dialog
-        selectedConversation?.let { conv ->
+        // Delete All Data Dialog
+        if (showDeleteAllDialog) {
             AlertDialog(
-                onDismissRequest = viewModel::closeConversationTranscript,
-                containerColor = AuroraColors.SurfaceElevated,
+                onDismissRequest = { showDeleteAllDialog = false },
                 title = {
                     Text(
-                        text = conv.title,
+                        stringResource(R.string.memory_delete_all_dialog_title),
+                        color = AuroraColors.Danger,
+                        fontWeight = FontWeight.Bold
+                    )
+                },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            stringResource(R.string.memory_delete_all_dialog_body),
+                            color = AuroraColors.TextPrimary,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        OutlinedTextField(
+                            value = deleteConfirmInput,
+                            onValueChange = { deleteConfirmInput = it },
+                            placeholder = { Text(stringResource(R.string.memory_delete_all_hint)) },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                },
+                confirmButton = {
+                    AuroraDangerButton(
+                        text = stringResource(R.string.memory_delete_all_confirm),
+                        enabled = deleteConfirmInput.trim() == "DELETE",
+                        onClick = {
+                            viewModel.deleteAllAssistantData("DELETE") {
+                                showDeleteAllDialog = false
+                            }
+                        }
+                    )
+                },
+                dismissButton = {
+                    AuroraSecondaryButton(
+                        text = stringResource(R.string.memory_cancel_edit),
+                        onClick = { showDeleteAllDialog = false }
+                    )
+                },
+                containerColor = AuroraColors.BackgroundStart
+            )
+        }
+
+        // Transcript Dialog
+        selectedConversation?.let { conv ->
+            AlertDialog(
+                onDismissRequest = { viewModel.closeConversationTranscript() },
+                title = {
+                    Text(
+                        stringResource(R.string.memory_conversation_messages_title),
+                        style = MaterialTheme.typography.titleMedium,
                         color = AuroraColors.TextPrimary
                     )
                 },
@@ -563,31 +672,25 @@ fun MemoryScreen(viewModel: MemoryViewModel) {
                     LazyColumn(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .heightIn(max = 360.dp)
-                            .testTag("conversation_transcript_dialog"),
+                            .heightIn(max = 400.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        if (!conv.summary.isNullOrBlank()) {
-                            item {
-                                Text(
-                                    text = conv.summary,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = AuroraColors.Lavender
-                                )
-                            }
-                        }
                         items(selectedConversationMessages, key = { it.id }) { msg ->
+                            val isUser = msg.role.name == "USER"
                             Column(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clip(RoundedCornerShape(10.dp))
-                                    .background(AuroraColors.SurfacePrimary)
+                                    .background(
+                                        if (isUser) AuroraColors.Violet.copy(alpha = 0.2f)
+                                        else AuroraColors.GlassFillLight
+                                    )
                                     .padding(8.dp)
                             ) {
                                 Text(
-                                    text = msg.role.name,
+                                    text = if (isUser) "You" else "Jarvis",
                                     style = MaterialTheme.typography.labelSmall,
-                                    color = AuroraColors.Aqua
+                                    color = if (isUser) AuroraColors.Lavender else AuroraColors.Aqua
                                 )
                                 Text(
                                     text = msg.content,
@@ -601,95 +704,114 @@ fun MemoryScreen(viewModel: MemoryViewModel) {
                 confirmButton = {
                     AuroraSecondaryButton(
                         text = stringResource(R.string.memory_close_dialog),
-                        onClick = viewModel::closeConversationTranscript,
-                        testTag = "close_conversation_transcript_button"
-                    )
-                }
-            )
-        }
-
-        // Delete All Assistant Data Dialog (requires typing DELETE)
-        if (showDeleteAllDialog) {
-            AlertDialog(
-                onDismissRequest = { showDeleteAllDialog = false },
-                containerColor = AuroraColors.SurfaceElevated,
-                title = {
-                    Text(
-                        text = stringResource(R.string.memory_delete_all_dialog_title),
-                        color = AuroraColors.CoralDanger
+                        onClick = { viewModel.closeConversationTranscript() }
                     )
                 },
-                text = {
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text(
-                            text = stringResource(R.string.memory_delete_all_dialog_body),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = AuroraColors.TextSecondary
-                        )
-                        OutlinedTextField(
-                            value = deleteConfirmDraft,
-                            onValueChange = { deleteConfirmDraft = it },
-                            placeholder = {
-                                Text(
-                                    text = stringResource(R.string.memory_delete_all_hint),
-                                    style = JarvisMonoStyle,
-                                    color = AuroraColors.TextMuted
-                                )
-                            },
-                            textStyle = JarvisMonoStyle.copy(color = AuroraColors.TextPrimary),
-                            singleLine = true,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("memory_delete_confirm_input")
-                        )
-                    }
-                },
-                confirmButton = {
-                    AuroraDangerButton(
-                        text = stringResource(R.string.memory_delete_all_confirm),
-                        solid = true,
-                        enabled = deleteConfirmDraft.trim() == "DELETE",
-                        onClick = {
-                            viewModel.deleteAllAssistantData(deleteConfirmDraft) {
-                                showDeleteAllDialog = false
-                            }
-                        },
-                        testTag = "memory_delete_confirm_button"
-                    )
-                },
-                dismissButton = {
-                    AuroraTextButton(
-                        text = stringResource(R.string.safety_confirm_deny),
-                        onClick = { showDeleteAllDialog = false },
-                        testTag = "memory_delete_cancel_button"
-                    )
-                }
+                containerColor = AuroraColors.BackgroundStart
             )
         }
     }
 }
 
 @Composable
-private fun EmptyMemoryState(message: String) {
+private fun CategoryHeader(title: String) {
+    Text(
+        text = title,
+        style = MaterialTheme.typography.labelLarge,
+        color = AuroraColors.Lavender,
+        fontWeight = FontWeight.Bold,
+        modifier = Modifier.padding(top = 8.dp, bottom = 2.dp)
+    )
+}
+
+@Composable
+private fun TabPill(label: String, selected: Boolean, onClick: () -> Unit) {
     Box(
-        modifier = Modifier.fillMaxSize(),
-        contentAlignment = Alignment.Center
+        modifier = Modifier
+            .clip(RoundedCornerShape(14.dp))
+            .background(if (selected) AuroraColors.Violet else AuroraColors.GlassFillLight)
+            .clickable { onClick() }
+            .padding(horizontal = 12.dp, vertical = 6.dp)
     ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodySmall,
+            color = if (selected) AuroraColors.TextPrimary else AuroraColors.TextSecondary,
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal
+        )
+    }
+}
+
+@Composable
+private fun FactCard(
+    fact: MemoryFact,
+    onPinToggle: () -> Unit,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit,
+    isUndo: Boolean = false
+) {
+    AuroraGlassCard(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onEdit() }
+            .testTag("memory_fact_${fact.id}")
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Icon(
-                imageVector = Icons.Default.Memory,
-                contentDescription = message,
-                tint = AuroraColors.TextMuted,
-                modifier = Modifier.size(48.dp)
-            )
-            Text(
-                text = message,
-                style = MaterialTheme.typography.bodyMedium,
-                color = AuroraColors.TextSecondary
-            )
+            Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                // Human-readable sentence
+                Text(
+                    text = fact.readableSentence(),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = AuroraColors.TextPrimary,
+                    fontWeight = FontWeight.Medium
+                )
+
+                Spacer(modifier = Modifier.height(6.dp))
+
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    val sourceText = if (fact.source == MemorySource.USER_EXPLICIT.name || fact.source == MemorySource.SETUP_WIZARD.name) {
+                        stringResource(R.string.memory_source_added)
+                    } else {
+                        stringResource(R.string.memory_source_learned)
+                    }
+                    AuroraStatusPill(
+                        text = sourceText,
+                        color = AuroraColors.Lavender
+                    )
+                    if (fact.pinned) {
+                        AuroraStatusPill(
+                            text = stringResource(R.string.memory_pinned_badge),
+                            color = AuroraColors.Aqua
+                        )
+                    }
+                }
+            }
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (!isUndo) {
+                    AuroraIconButton(
+                        icon = Icons.Default.PushPin,
+                        contentDescription = "Pin",
+                        tint = if (fact.pinned) AuroraColors.Aqua else AuroraColors.TextMuted,
+                        onClick = onPinToggle,
+                        size = 36.dp
+                    )
+                }
+                AuroraIconButton(
+                    icon = if (isUndo) Icons.Default.Undo else Icons.Default.Delete,
+                    contentDescription = "Delete",
+                    tint = if (isUndo) AuroraColors.AmberWarning else AuroraColors.Danger,
+                    onClick = onDelete,
+                    size = 36.dp
+                )
+            }
         }
     }
 }
@@ -697,18 +819,17 @@ private fun EmptyMemoryState(message: String) {
 @Composable
 private fun ConversationCard(
     conversation: ConversationItem,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    onDelete: () -> Unit
 ) {
-    val formatter = remember { SimpleDateFormat("dd MMM yyyy · HH:mm", Locale.getDefault()) }
-    val dateStr = remember(conversation.startedAtMs) {
-        formatter.format(Date(conversation.startedAtMs))
-    }
+    val dateStr = SimpleDateFormat("MMM d, yyyy · h:mm a", Locale.getDefault())
+        .format(Date(conversation.startedAtMs))
 
     AuroraGlassCard(
         modifier = Modifier
             .fillMaxWidth()
             .clickable { onClick() }
-            .testTag("conversation_card_${conversation.id}")
+            .testTag("memory_conversation_${conversation.id}")
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -716,123 +837,38 @@ private fun ConversationCard(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Row(
+                modifier = Modifier.weight(1f).padding(end = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 Icon(
                     imageVector = Icons.Default.Chat,
-                    contentDescription = conversation.title,
-                    tint = AuroraColors.Aqua,
-                    modifier = Modifier.size(18.dp)
+                    contentDescription = null,
+                    tint = AuroraColors.Lavender,
+                    modifier = Modifier.size(20.dp)
                 )
-                Text(
-                    text = conversation.title,
-                    style = MaterialTheme.typography.titleMedium,
-                    color = AuroraColors.TextPrimary
-                )
-            }
-            AuroraStatusPill(
-                text = "#${conversation.id}",
-                color = AuroraColors.Lavender
-            )
-        }
-        if (!conversation.summary.isNullOrBlank()) {
-            Text(
-                text = conversation.summary,
-                style = MaterialTheme.typography.bodySmall,
-                color = AuroraColors.TextSecondary
-            )
-        }
-        Text(
-            text = dateStr,
-            style = JarvisTimestampMonoStyle,
-            color = AuroraColors.TextMuted
-        )
-    }
-}
-
-@Composable
-private fun MemoryFactCard(
-    fact: MemoryFact,
-    onTogglePin: () -> Unit,
-    onEdit: () -> Unit,
-    onDelete: () -> Unit
-) {
-    val sourceEnum = MemorySource.fromString(fact.source)
-    val sourceLabel = when (sourceEnum) {
-        MemorySource.USER_EXPLICIT -> stringResource(R.string.memory_source_explicit)
-        MemorySource.AUTO_LEARNED -> stringResource(R.string.memory_source_inferred)
-        MemorySource.SETUP_WIZARD -> stringResource(R.string.memory_source_setup)
-        MemorySource.TOOL_RESULT -> stringResource(R.string.memory_source_tool)
-    }
-
-    AuroraGlassCard(
-        modifier = Modifier
-            .fillMaxWidth()
-            .testTag("memory_card_${fact.id}")
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    AuroraStatusPill(
-                        text = fact.category.lowercase().replaceFirstChar { it.uppercase() },
-                        color = AuroraColors.Lavender
+                Column {
+                    Text(
+                        text = conversation.title,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = AuroraColors.TextPrimary,
+                        fontWeight = FontWeight.SemiBold
                     )
-                    if (fact.pinned) {
-                        AuroraStatusPill(
-                            text = stringResource(R.string.memory_pinned_badge),
-                            color = AuroraColors.EmeraldSuccess
-                        )
-                    }
-                    AuroraStatusPill(
-                        text = "$sourceLabel · ${(fact.confidence * 100).toInt()}%",
-                        color = AuroraColors.Aqua
+                    Text(
+                        text = dateStr,
+                        style = JarvisTimestampMonoStyle.copy(color = AuroraColors.TextMuted)
                     )
                 }
-                Spacer(modifier = Modifier.height(6.dp))
-                Text(
-                    text = fact.key,
-                    style = MaterialTheme.typography.titleMedium,
-                    color = AuroraColors.TextPrimary,
-                    fontWeight = FontWeight.SemiBold
-                )
-                Text(
-                    text = fact.value,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = AuroraColors.TextSecondary
-                )
             }
 
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                AuroraIconButton(
-                    icon = Icons.Default.PushPin,
-                    contentDescription = stringResource(R.string.memory_pin_toggle),
-                    testTag = "pin_memory_${fact.id}",
-                    tint = if (fact.pinned) AuroraColors.EmeraldSuccess else AuroraColors.TextSecondary,
-                    onClick = onTogglePin
-                )
-                AuroraIconButton(
-                    icon = Icons.Default.Edit,
-                    contentDescription = stringResource(R.string.memory_edit_title),
-                    testTag = "edit_memory_${fact.id}",
-                    tint = AuroraColors.Lavender,
-                    onClick = onEdit
-                )
-                AuroraIconButton(
-                    icon = Icons.Default.Delete,
-                    contentDescription = stringResource(R.string.routines_delete),
-                    testTag = "delete_memory_${fact.id}",
-                    tint = AuroraColors.CoralDanger,
-                    onClick = onDelete
-                )
-            }
+            AuroraIconButton(
+                icon = Icons.Default.Delete,
+                contentDescription = stringResource(R.string.memory_conversation_delete),
+                testTag = "delete_conversation_${conversation.id}",
+                tint = AuroraColors.Danger,
+                onClick = onDelete,
+                size = 36.dp
+            )
         }
     }
 }

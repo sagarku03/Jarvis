@@ -25,6 +25,7 @@ data class MessageEntity(
     val content: String,
     val toolName: String? = null,
     val toolArgsJson: String? = null,
+    val rawModelPartsJson: String? = null,
     val timestamp: Long = System.currentTimeMillis()
 )
 

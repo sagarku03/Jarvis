@@ -113,7 +113,8 @@ class AppContainer(context: Context) {
         ).addMigrations(
             JarvisDatabase.MIGRATION_1_2,
             JarvisDatabase.MIGRATION_2_3,
-            JarvisDatabase.MIGRATION_3_4
+            JarvisDatabase.MIGRATION_3_4,
+            JarvisDatabase.MIGRATION_4_5
         )
 
         // Load SQLCipher native library on Android device; fall back cleanly on host JVM unit tests

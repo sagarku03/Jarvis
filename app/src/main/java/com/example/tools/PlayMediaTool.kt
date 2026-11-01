@@ -37,9 +37,25 @@ class PlayMediaTool @Inject constructor(
                 return ToolExecutionResult(name, false, "No YouTube or browser app is available to play '$query'.")
             }
             context.startActivity(intent)
-            ToolExecutionResult(name, true, "Opened '$query' on YouTube.")
+
+            // If accessibility is enabled, auto-click the first video result
+            val isAccessibilityOn = com.example.services.JarvisAccessibilityService.isConnected.value
+            if (isAccessibilityOn) {
+                val (clicked, msg) = com.example.services.JarvisAccessibilityService.clickFirstYouTubeVideoResult()
+                if (clicked) {
+                    ToolExecutionResult(toolName = name, success = true, outputEn = "Playing '$query' on YouTube.")
+                } else {
+                    ToolExecutionResult(toolName = name, success = true, outputEn = "Opened results for '$query' on YouTube.")
+                }
+            } else {
+                ToolExecutionResult(
+                    toolName = name,
+                    success = true,
+                    outputEn = "I opened the results — enable Accessibility to let me play it automatically."
+                )
+            }
         } catch (e: Exception) {
-            ToolExecutionResult(name, false, "Failed to play media: ${e.localizedMessage ?: "error"}.")
+            ToolExecutionResult(toolName = name, success = false, outputEn = "Failed to play media: ${e.localizedMessage ?: "error"}.")
         }
     }
 }

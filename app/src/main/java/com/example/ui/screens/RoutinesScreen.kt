@@ -199,9 +199,9 @@ fun RoutinesScreen(viewModel: RoutinesViewModel) {
                 items(routines, key = { it.id }) { item ->
                     RoutineItemCard(
                         item = item,
-                        onToggle = { enabled -> viewModel.toggleRoutine(item.id, enabled) },
-                        onRunNow = { viewModel.executeRoutineNow(item) },
-                        onDelete = { viewModel.deleteRoutine(item.id) }
+                        onToggle = { enabled -> viewModel.toggleRoutine(item, enabled) },
+                        onRunNow = { viewModel.runRoutineNow(item) },
+                        onDelete = { viewModel.deleteRoutine(item) }
                     )
                 }
             }
