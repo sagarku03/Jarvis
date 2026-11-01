@@ -1245,7 +1245,7 @@ class SettingsViewModel(
             selectedVoiceName = voiceToPreview,
             speed = current.speechSpeed,
             followUpListening = false,
-            onComplete = {
+            onFinished = {
                 _voicePreviewStatus.value = "Preview completed"
                 viewModelScope.launch {
                     delay(2500L)

@@ -58,10 +58,12 @@ android {
                 keystoreFile.writeBytes(Base64.getDecoder().decode(base64String))
             }
 
-            storeFile = keystoreFile
-            storePassword = "android"
-            keyAlias = "androiddebugkey"
-            keyPassword = "android"
+            if (keystoreFile.exists()) {
+                storeFile = keystoreFile
+                storePassword = "android"
+                keyAlias = "androiddebugkey"
+                keyPassword = "android"
+            }
         }
         getByName("debug") {
             val keystoreFile = file("../debug.keystore")
@@ -72,10 +74,12 @@ android {
                 keystoreFile.writeBytes(Base64.getDecoder().decode(base64String))
             }
 
-            storeFile = keystoreFile
-            storePassword = "android"
-            keyAlias = "androiddebugkey"
-            keyPassword = "android"
+            if (keystoreFile.exists()) {
+                storeFile = keystoreFile
+                storePassword = "android"
+                keyAlias = "androiddebugkey"
+                keyPassword = "android"
+            }
         }
     }
 
@@ -87,10 +91,16 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            signingConfig = signingConfigs.getByName("release")
+            val releaseSigning = signingConfigs.getByName("release")
+            if (releaseSigning.storeFile?.exists() == true) {
+                signingConfig = releaseSigning
+            }
         }
         debug {
-            signingConfig = signingConfigs.getByName("debug")
+            val debugSigning = signingConfigs.getByName("debug")
+            if (debugSigning.storeFile?.exists() == true) {
+                signingConfig = debugSigning
+            }
         }
     }
     compileOptions {
