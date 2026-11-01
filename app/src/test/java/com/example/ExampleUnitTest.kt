@@ -1907,5 +1907,4 @@ class ExampleUnitTest {
         }
     }
 }
-}
 
