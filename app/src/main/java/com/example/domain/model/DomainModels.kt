@@ -312,12 +312,12 @@ data class UserFacingError(
 
 data class UserSettings(
     val setupComplete: Boolean = false,
-    val selectedModelId: String = "gemini-2.5-flash",
+    val selectedModelId: String = "gemini-3.8-flash",
     val selectedTextModelId: String = "gemini-3.8-flash",
     val selectedVoiceModelId: String = "gemini-3.8-live",
     val selectedVoiceGender: String = "MALE",
     val selectedLiveVoiceName: String = "Puck",
-    val availableModels: List<String> = listOf("gemini-2.5-flash"),
+    val availableModels: List<String> = listOf("gemini-3.8-flash", "gemini-3.8-live"),
     val language: AppLanguage = AppLanguage.EN_IN,
     val voiceEngine: VoiceEngineOption = VoiceEngineOption.NATURAL_GOOGLE,
     val selectedVoiceName: String = "",

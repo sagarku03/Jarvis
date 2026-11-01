@@ -93,10 +93,21 @@ class AgentBackendRepositoryImpl @Inject constructor(
 
         val settings = settingsRepository.settingsFlow.first()
         val chosenModelId = if (isVoiceInput) {
-            settings.selectedVoiceModelId.ifBlank { "gemini-3.8-live" }
+            val voice = settings.selectedVoiceModelId.trim()
+            if (voice.isBlank() || voice.contains("2.0") || voice.contains("2.5-flash-lite")) {
+                GeminiClient.DEFAULT_VOICE_MODEL
+            } else {
+                voice
+            }
         } else {
-            settings.selectedTextModelId.ifBlank { "gemini-3.8-flash" }
+            val text = settings.selectedTextModelId.trim()
+            if (text.isBlank() || text.contains("2.0") || text.contains("2.5-flash-lite")) {
+                GeminiClient.DEFAULT_TEXT_MODEL
+            } else {
+                text
+            }
         }
+        DiagnosticsLogger.log("AgentBackend", "runAgentStep using model: $chosenModelId (isVoiceInput=$isVoiceInput)")
         val pinnedFacts = memories.filter {
             it.pinned || it.category == MemoryCategory.PROFILE.name || it.category == MemoryCategory.CONTACT.name
         }
@@ -166,6 +177,7 @@ class AgentBackendRepositoryImpl @Inject constructor(
                     )
                 }
                 is GeminiTurnResult.BadRequest -> {
+                    DiagnosticsLogger.log("AgentBackend", "Gemini returned BadRequest: ${result.message}")
                     AgentStepDecision(
                         assistantText = result.message,
                         toolCalls = emptyList()
@@ -922,19 +934,40 @@ class SettingsRepositoryImpl @Inject constructor(
         val rawModels = prefs[Keys.AVAILABLE_MODELS].orEmpty()
             .split("||")
             .map { it.trim() }
-            .filter { it.isNotEmpty() }
-            .ifEmpty { listOf(GeminiClient.DEFAULT_FALLBACK_MODEL) }
+            .filter { it.isNotEmpty() && !it.contains("2.0") && !it.contains("2.5-flash-lite") }
+            .ifEmpty { listOf(GeminiClient.DEFAULT_TEXT_MODEL, GeminiClient.DEFAULT_VOICE_MODEL) }
 
         val currentDay = System.currentTimeMillis() / (24L * 60L * 60L * 1000L)
         val savedDay = prefs[Keys.USAGE_DAY_EPOCH] ?: currentDay
         val reqToday = if (savedDay == currentDay) (prefs[Keys.REQUESTS_TODAY] ?: 0) else 0
         val tokToday = if (savedDay == currentDay) (prefs[Keys.TOKENS_TODAY] ?: 0) else 0
 
+        val savedModelId = prefs[Keys.SELECTED_MODEL_ID]
+        val resolvedModelId = if (savedModelId.isNullOrBlank() || savedModelId.contains("2.0") || savedModelId.contains("2.5-flash-lite")) {
+            rawModels.firstOrNull { it == GeminiClient.DEFAULT_TEXT_MODEL } ?: rawModels.first()
+        } else {
+            savedModelId
+        }
+
+        val savedVoiceModelId = prefs[Keys.SELECTED_VOICE_MODEL_ID]
+        val resolvedVoiceModelId = if (savedVoiceModelId.isNullOrBlank() || savedVoiceModelId.contains("2.0") || savedVoiceModelId.contains("2.5-flash-lite")) {
+            GeminiClient.DEFAULT_VOICE_MODEL
+        } else {
+            savedVoiceModelId
+        }
+
+        val savedTextModelId = prefs[Keys.SELECTED_TEXT_MODEL_ID]
+        val resolvedTextModelId = if (savedTextModelId.isNullOrBlank() || savedTextModelId.contains("2.0") || savedTextModelId.contains("2.5-flash-lite")) {
+            GeminiClient.DEFAULT_TEXT_MODEL
+        } else {
+            savedTextModelId
+        }
+
         UserSettings(
             setupComplete = prefs[Keys.SETUP_COMPLETE] ?: false,
-            selectedModelId = prefs[Keys.SELECTED_MODEL_ID] ?: rawModels.first(),
-            selectedTextModelId = prefs[Keys.SELECTED_TEXT_MODEL_ID] ?: "gemini-3.8-flash",
-            selectedVoiceModelId = prefs[Keys.SELECTED_VOICE_MODEL_ID] ?: "gemini-3.8-live",
+            selectedModelId = resolvedModelId,
+            selectedTextModelId = resolvedTextModelId,
+            selectedVoiceModelId = resolvedVoiceModelId,
             selectedVoiceGender = prefs[Keys.SELECTED_VOICE_GENDER] ?: "MALE",
             selectedLiveVoiceName = prefs[Keys.SELECTED_LIVE_VOICE_NAME] ?: "Puck",
             availableModels = rawModels,

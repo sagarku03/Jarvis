@@ -50,13 +50,22 @@ import com.example.tools.CallContactTool
 import com.example.tools.MemorySafetyFilter
 import com.example.tools.ReadScreenTool
 import com.example.tools.TapElementTool
+import com.example.domain.agent.LocalIntentRouter
+import com.example.domain.agent.LocalRouteResult
+import com.example.services.voice.TtsManager
+import com.example.ui.viewmodel.SettingsViewModel
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.setMain
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
@@ -188,8 +197,8 @@ class ExampleUnitTest {
                         {
                           "models": [
                             {
-                              "name": "models/gemini-2.5-flash",
-                              "displayName": "Gemini 2.5 Flash",
+                              "name": "models/gemini-3.8-flash",
+                              "displayName": "Gemini 3.8 Flash",
                               "supportedGenerationMethods": ["generateContent"]
                             },
                             {
@@ -205,7 +214,7 @@ class ExampleUnitTest {
             val verifyRes = client.verifyKeyAndListModels(testApiKey)
             assertTrue(verifyRes is KeyVerificationResult.Valid)
             val models = (verifyRes as KeyVerificationResult.Valid).availableModels
-            assertEquals(listOf("gemini-2.5-flash"), models)
+            assertEquals(listOf("gemini-3.8-flash"), models)
 
             val recordedModelsReq = server.takeRequest()
             assertEquals("GET", recordedModelsReq.method)
@@ -254,7 +263,7 @@ class ExampleUnitTest {
                 ChatMessage(id = 2, role = MessageRole.TOOL, content = "Timer started", toolName = "set_timer")
             )
             val turnRes = client.generateContent(
-                modelId = "gemini-2.5-flash",
+                modelId = "gemini-3.8-flash",
                 systemInstruction = "You are JARVIS.",
                 messages = historyWithToolOutput,
                 tools = listOf(
@@ -275,7 +284,7 @@ class ExampleUnitTest {
             assertEquals(15, success.candidateTokens)
 
             val recordedGenReq = server.takeRequest()
-            assertEquals("/v1beta/models/gemini-2.5-flash:generateContent", recordedGenReq.path)
+            assertEquals("/v1beta/models/gemini-3.8-flash:generateContent", recordedGenReq.path)
             assertEquals(testApiKey, recordedGenReq.getHeader("x-goog-api-key"))
             assertFalse(recordedGenReq.path.orEmpty().contains(testApiKey))
             val sentBody = recordedGenReq.body.readUtf8()
@@ -285,7 +294,7 @@ class ExampleUnitTest {
             // C) Verify 403 maps to KeyRejected
             server.enqueue(MockResponse().setResponseCode(403).setBody("""{"error":{"message":"Invalid key"}}"""))
             val rejected = client.generateContent(
-                modelId = "gemini-2.5-flash",
+                modelId = "gemini-3.8-flash",
                 systemInstruction = "System",
                 messages = listOf(ChatMessage(role = MessageRole.USER, content = "Hi")),
                 tools = emptyList()
@@ -297,7 +306,7 @@ class ExampleUnitTest {
             server.enqueue(MockResponse().setResponseCode(429).addHeader("Retry-After", "0"))
             server.enqueue(MockResponse().setResponseCode(429).addHeader("Retry-After", "0"))
             val quota = client.generateContent(
-                modelId = "gemini-2.5-flash",
+                modelId = "gemini-3.8-flash",
                 systemInstruction = "System",
                 messages = listOf(ChatMessage(role = MessageRole.USER, content = "Hi")),
                 tools = emptyList()
@@ -807,30 +816,96 @@ class ExampleUnitTest {
             override suspend fun markRoutineRun(id: Long, timestampMs: Long) {}
             override suspend fun findMatchingVoiceRoutine(utterance: String): RoutineItem? = null
         }
-        val settingsRepo = object : SettingsRepository {
-            override val settingsFlow: Flow<UserSettings> = MutableStateFlow(UserSettings())
-            override suspend fun setSetupComplete(complete: Boolean) {}
-            override suspend fun setSelectedModelId(modelId: String) {}
-            override suspend fun setSelectedTextModelId(modelId: String) {}
-            override suspend fun setSelectedVoiceModelId(modelId: String) {}
-            override suspend fun setSelectedVoiceGender(gender: String) {}
-            override suspend fun setSelectedLiveVoiceName(voiceName: String) {}
-            override suspend fun setAvailableModels(models: List<String>) {}
-            override suspend fun setLanguage(language: AppLanguage) {}
-            override suspend fun setSelectedVoiceName(voiceName: String) {}
-            override suspend fun setSpeechSpeed(speed: Float) {}
-            override suspend fun setSpeechPitch(pitch: Float) {}
-            override suspend fun setAutoLearnEnabled(enabled: Boolean) {}
-            override suspend fun setAskBeforeSavingFact(ask: Boolean) {}
-            override suspend fun recordGeminiUsage(tokensUsed: Int, nowMs: Long) {}
-            override suspend fun setFloatingOrbEnabled(enabled: Boolean) {}
-            override suspend fun setConfirmationLevel(level: ConfirmationLevel) {}
-            override suspend fun setKillSwitchActive(active: Boolean) {}
-            override suspend fun setVoiceEngine(voiceEngine: com.example.domain.model.VoiceEngineOption) {}
-            override suspend fun setWakePhraseEnabled(enabled: Boolean) {}
-            override suspend fun setWakePhraseScreenOnOnly(enabled: Boolean) {}
-            override suspend fun setWakePhraseStopAfter30m(enabled: Boolean) {}
-            override suspend fun setVoiceTimings(firstTokenMs: Long, firstWordMs: Long) {}
+    private class FakeSettingsRepository(
+        initialSettings: UserSettings = UserSettings()
+    ) : SettingsRepository {
+        val flow = MutableStateFlow(initialSettings)
+        override val settingsFlow: Flow<UserSettings> = flow
+
+        override suspend fun setSetupComplete(complete: Boolean) {
+            flow.value = flow.value.copy(setupComplete = complete)
+        }
+        override suspend fun setSelectedModelId(modelId: String) {
+            flow.value = flow.value.copy(selectedModelId = modelId)
+        }
+        override suspend fun setSelectedTextModelId(modelId: String) {
+            flow.value = flow.value.copy(selectedTextModelId = modelId)
+        }
+        override suspend fun setSelectedVoiceModelId(modelId: String) {
+            flow.value = flow.value.copy(selectedVoiceModelId = modelId)
+        }
+        override suspend fun setSelectedVoiceGender(gender: String) {
+            flow.value = flow.value.copy(selectedVoiceGender = gender)
+        }
+        override suspend fun setSelectedLiveVoiceName(voiceName: String) {
+            flow.value = flow.value.copy(selectedLiveVoiceName = voiceName)
+        }
+        override suspend fun setAvailableModels(models: List<String>) {
+            flow.value = flow.value.copy(availableModels = models)
+        }
+        override suspend fun setLanguage(language: AppLanguage) {
+            flow.value = flow.value.copy(language = language)
+        }
+        override suspend fun setSelectedVoiceName(voiceName: String) {
+            flow.value = flow.value.copy(selectedVoiceName = voiceName)
+        }
+        override suspend fun setSpeechSpeed(speed: Float) {
+            flow.value = flow.value.copy(speechSpeed = speed)
+        }
+        override suspend fun setSpeechPitch(pitch: Float) {
+            flow.value = flow.value.copy(speechPitch = pitch)
+        }
+        override suspend fun setAutoLearnEnabled(enabled: Boolean) {
+            flow.value = flow.value.copy(autoLearnEnabled = enabled)
+        }
+        override suspend fun setAskBeforeSavingFact(ask: Boolean) {
+            flow.value = flow.value.copy(askBeforeSavingFact = ask)
+        }
+        override suspend fun recordGeminiUsage(tokensUsed: Int, nowMs: Long) {}
+        override suspend fun setFloatingOrbEnabled(enabled: Boolean) {
+            flow.value = flow.value.copy(floatingOrbEnabled = enabled)
+        }
+        override suspend fun setConfirmationLevel(level: ConfirmationLevel) {
+            flow.value = flow.value.copy(confirmationLevel = level)
+        }
+        override suspend fun setKillSwitchActive(active: Boolean) {
+            flow.value = flow.value.copy(killSwitchActive = active)
+        }
+        override suspend fun setVoiceEngine(voiceEngine: com.example.domain.model.VoiceEngineOption) {
+            flow.value = flow.value.copy(voiceEngine = voiceEngine)
+        }
+        override suspend fun setWakePhraseEnabled(enabled: Boolean) {
+            flow.value = flow.value.copy(wakePhraseEnabled = enabled)
+        }
+        override suspend fun setWakePhraseScreenOnOnly(enabled: Boolean) {
+            flow.value = flow.value.copy(wakePhraseScreenOnOnly = enabled)
+        }
+        override suspend fun setWakePhraseStopAfter30m(enabled: Boolean) {
+            flow.value = flow.value.copy(wakePhraseStopAfter30m = enabled)
+        }
+        override suspend fun setVoiceTimings(firstTokenMs: Long, firstWordMs: Long) {}
+    }
+
+    private fun createTestOrchestrator(
+        backendRepository: AgentBackendRepository,
+        chatRepository: ChatRepository = FakeChatRepository(),
+        tools: Set<Tool>,
+        killSwitch: KillSwitch = KillSwitch(),
+        settingsRepository: SettingsRepository = FakeSettingsRepository()
+    ): AgentOrchestrator {
+        val memoryRepo = FakeMemoryRepository()
+        val logRepo = object : ActivityLogRepository {
+            override val logsFlow: Flow<List<ActivityLogEntry>> = MutableStateFlow(emptyList())
+            override suspend fun recordLog(entry: ActivityLogEntry) {}
+            override suspend fun clearAllLogs() {}
+        }
+        val routineRepo = object : RoutineRepository {
+            override val routinesFlow: Flow<List<RoutineItem>> = MutableStateFlow(emptyList())
+            override suspend fun upsertRoutine(routine: RoutineItem): Long = 1L
+            override suspend fun toggleRoutine(id: Long, enabled: Boolean) {}
+            override suspend fun deleteRoutine(id: Long) {}
+            override suspend fun markRoutineRun(id: Long, timestampMs: Long) {}
+            override suspend fun findMatchingVoiceRoutine(utterance: String): RoutineItem? = null
         }
 
         return AgentOrchestrator(
@@ -839,7 +914,7 @@ class ExampleUnitTest {
             memoryRepository = memoryRepo,
             activityLogRepository = logRepo,
             routineRepository = routineRepo,
-            settingsRepository = settingsRepo,
+            settingsRepository = settingsRepository,
             toolRegistry = ToolRegistry(tools),
             safetyGate = SafetyGateImpl(null),
             killSwitch = killSwitch
@@ -973,6 +1048,34 @@ class ExampleUnitTest {
     }
 
     @Test
+    fun localIntentRouter_hinglishPostfixAppAndYoutubeMatches() {
+        val ytOpen = com.example.domain.agent.LocalIntentRouter.route("YouTube open karo") as? com.example.domain.agent.LocalRouteResult.ToolAction
+        assertNotNull(ytOpen)
+        assertEquals("open_app", ytOpen?.toolName)
+        assertEquals("YouTube", ytOpen?.args?.get("app_name"))
+
+        val waOpen = com.example.domain.agent.LocalIntentRouter.route("WhatsApp kholo") as? com.example.domain.agent.LocalRouteResult.ToolAction
+        assertNotNull(waOpen)
+        assertEquals("open_app", waOpen?.toolName)
+        assertEquals("WhatsApp", waOpen?.args?.get("app_name"))
+
+        val instaOpen = com.example.domain.agent.LocalIntentRouter.route("Instagram chalu karo") as? com.example.domain.agent.LocalRouteResult.ToolAction
+        assertNotNull(instaOpen)
+        assertEquals("open_app", instaOpen?.toolName)
+        assertEquals("Instagram", instaOpen?.args?.get("app_name"))
+
+        val ytPlay1 = com.example.domain.agent.LocalIntentRouter.route("arijit singh ke gaane chalao youtube pe") as? com.example.domain.agent.LocalRouteResult.ToolAction
+        assertNotNull(ytPlay1)
+        assertEquals("play_media", ytPlay1?.toolName)
+        assertEquals("arijit singh ke gaane", ytPlay1?.args?.get("query"))
+
+        val ytPlay2 = com.example.domain.agent.LocalIntentRouter.route("youtube pe lofi songs play karo") as? com.example.domain.agent.LocalRouteResult.ToolAction
+        assertNotNull(ytPlay2)
+        assertEquals("play_media", ytPlay2?.toolName)
+        assertEquals("lofi songs", ytPlay2?.args?.get("query"))
+    }
+
+    @Test
     fun dualModelArchitecture_defaultsAndFriendlyNames() {
         assertEquals("gemini-3.8-flash", GeminiClient.DEFAULT_TEXT_MODEL)
         assertEquals("gemini-3.8-live", GeminiClient.DEFAULT_VOICE_MODEL)
@@ -983,6 +1086,7 @@ class ExampleUnitTest {
         assertEquals("Gemini 3.8 Flash (Text)", GeminiClient.friendlyModelName("models/gemini-3.8-flash"))
 
         val settings = UserSettings()
+        assertEquals("gemini-3.8-flash", settings.selectedModelId)
         assertEquals("gemini-3.8-flash", settings.selectedTextModelId)
         assertEquals("gemini-3.8-live", settings.selectedVoiceModelId)
         assertEquals("MALE", settings.selectedVoiceGender)
@@ -991,11 +1095,9 @@ class ExampleUnitTest {
 
     @Test
     fun dualModelArchitecture_fallbackChainGracefullyResolves() {
-        // Fallback chain: 3.8 -> 2.0-flash -> 2.5-flash -> 2.5-flash-lite
-        assertEquals("gemini-2.0-flash", GeminiClient.getNextFallbackModel("gemini-3.8-live"))
-        assertEquals("gemini-2.0-flash", GeminiClient.getNextFallbackModel("gemini-3.8-flash"))
-        assertEquals("gemini-2.5-flash", GeminiClient.getNextFallbackModel("gemini-2.0-flash"))
-        assertEquals("gemini-2.5-flash-lite", GeminiClient.getNextFallbackModel("gemini-2.5-flash"))
+        // Fallback chain: 3.8-live -> 3.8-flash
+        assertEquals("gemini-3.8-flash", GeminiClient.getNextFallbackModel("gemini-3.8-live"))
+        assertEquals("gemini-3.8-flash", GeminiClient.getNextFallbackModel("gemini-3.8-flash"))
     }
 
     @Test
@@ -1216,4 +1318,614 @@ class ExampleUnitTest {
         val foundSet = registry.findTool("set_volume", fullControlOverride = true)
         assertNotNull(foundSet)
     }
+
+    @Test
+    fun geminiClient_testConnection_verifiesUrlAndPayload() = runBlocking {
+        val server = MockWebServer()
+        server.start()
+        try {
+            val baseUrl = server.url("/").toString().trimEnd('/')
+            val moshi = Moshi.Builder().addLast(KotlinJsonAdapterFactory()).build()
+            val apiKeyStore = ApiKeyStore(ContextWrapper(null))
+            val testApiKey = "AIzaSyTestSecretKey9876"
+            apiKeyStore.save(testApiKey)
+
+            val client = GeminiClient(
+                okHttpClient = OkHttpClient(),
+                moshi = moshi,
+                apiKeyStore = apiKeyStore,
+                baseUrlProvider = { baseUrl }
+            )
+
+            // Success case: returns 200 with candidates
+            server.enqueue(
+                MockResponse()
+                    .setResponseCode(200)
+                    .setBody("""{"candidates": [{"content": {"role": "model", "parts": [{"text": "OK"}]}}]}""")
+            )
+            val res = client.testConnection(testApiKey)
+            assertTrue("testConnection should return success on HTTP 200", res.isSuccess)
+            assertEquals("Working", res.getOrNull())
+
+            val req = server.takeRequest()
+            assertEquals("POST", req.method)
+            assertEquals("/v1beta/models/gemini-3.8-flash:generateContent", req.path)
+            assertEquals(testApiKey, req.getHeader("x-goog-api-key"))
+            assertEquals("application/json", req.getHeader("Content-Type"))
+            assertFalse(req.path.orEmpty().contains(testApiKey))
+            val body = req.body.readUtf8()
+            assertTrue(body.contains("\"role\":\"user\"") || body.contains("\"role\": \"user\""))
+            assertTrue(body.contains("\"text\":\"Say OK\"") || body.contains("\"text\": \"Say OK\""))
+
+            // Failure case: 400 bad request
+            server.enqueue(
+                MockResponse()
+                    .setResponseCode(400)
+                    .setBody("""{"error": {"code": 400, "message": "API key not valid", "status": "INVALID_ARGUMENT"}}""")
+            )
+            val failRes = client.testConnection(testApiKey)
+            assertTrue("testConnection should fail on HTTP 400", failRes.isFailure)
+            assertTrue(failRes.exceptionOrNull()?.message?.contains("API key not valid") == true)
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun geminiClient_fallbackChain_resolvesFrom38FlashAndLive() {
+        // Fallback chain: 3.8-live and 3.8-flash resolve cleanly
+        assertEquals("gemini-3.8-flash", GeminiClient.getNextFallbackModel("gemini-3.8-flash"))
+        assertEquals("gemini-3.8-flash", GeminiClient.getNextFallbackModel("models/gemini-3.8-flash"))
+        assertEquals("gemini-3.8-flash", GeminiClient.getNextFallbackModel("gemini-3.8-live"))
+        assertEquals("gemini-3.8-flash", GeminiClient.getNextFallbackModel("models/gemini-3.8-live"))
+
+        // Default model selection prioritizes 3.8-flash
+        assertEquals("gemini-3.8-flash", GeminiClient.selectDefaultModel(listOf("gemini-3.8-flash", "gemini-3.8-live")))
+        assertEquals("gemini-3.8-flash", GeminiClient.selectDefaultModel(listOf("gemini-3.8-flash", "gemini-1.5-pro")))
+
+        // Friendly names
+        assertEquals("Gemini 3.8 Flash (Text)", GeminiClient.friendlyModelName("gemini-3.8-flash"))
+        assertEquals("Gemini 3.8 Live (Voice)", GeminiClient.friendlyModelName("gemini-3.8-live"))
+        assertEquals("Gemini 3.8 Flash (Text)", GeminiClient.friendlyModelName("models/gemini-3.8-flash"))
+        assertEquals("Gemini 3.8 Live (Voice)", GeminiClient.friendlyModelName("models/gemini-3.8-live"))
+    }
+
+    @Test
+    fun geminiClient_sanitizeOpenApiSchema_cleansSchemaCorrectly() {
+        val moshi = Moshi.Builder().addLast(KotlinJsonAdapterFactory()).build()
+        val apiKeyStore = ApiKeyStore(ContextWrapper(null))
+        val client = GeminiClient(
+            okHttpClient = OkHttpClient(),
+            moshi = moshi,
+            apiKeyStore = apiKeyStore
+        )
+
+        // 1. Null schema returns default OBJECT
+        val nullResult = client.sanitizeOpenApiSchema(null)
+        assertEquals("OBJECT", nullResult["type"])
+        assertEquals(emptyMap<String, Any?>(), nullResult["properties"])
+
+        // 2. Normal schema with extra disallowed keys stripped
+        val rawSchema = mapOf(
+            "type" to "object",
+            "title" to "DisallowedTitle",
+            "\$schema" to "http://json-schema.org/draft-07/schema#",
+            "additionalProperties" to false,
+            "description" to "A sample tool input",
+            "required" to listOf("query", "count"),
+            "properties" to mapOf(
+                "query" to mapOf(
+                    "type" to "string",
+                    "description" to "Search query text",
+                    "invalidField" to 123
+                ),
+                "count" to mapOf(
+                    "type" to "integer",
+                    "description" to "Item count"
+                ),
+                "mode" to mapOf(
+                    "type" to "string",
+                    "enum" to listOf("fast", "precise")
+                )
+            )
+        )
+
+        val sanitized = client.sanitizeOpenApiSchema(rawSchema)
+        assertEquals("OBJECT", sanitized["type"])
+        assertEquals("A sample tool input", sanitized["description"])
+        assertEquals(listOf("query", "count"), sanitized["required"])
+        assertNull(sanitized["title"])
+        assertNull(sanitized["\$schema"])
+        assertNull(sanitized["additionalProperties"])
+
+        @Suppress("UNCHECKED_CAST")
+        val props = sanitized["properties"] as Map<String, Any?>
+        assertNotNull(props["query"])
+        assertNotNull(props["count"])
+        assertNotNull(props["mode"])
+
+        @Suppress("UNCHECKED_CAST")
+        val queryProp = props["query"] as Map<String, Any?>
+        assertEquals("STRING", queryProp["type"])
+        assertEquals("Search query text", queryProp["description"])
+        assertNull(queryProp["invalidField"])
+
+        @Suppress("UNCHECKED_CAST")
+        val countProp = props["count"] as Map<String, Any?>
+        assertEquals("INTEGER", countProp["type"])
+
+        @Suppress("UNCHECKED_CAST")
+        val modeProp = props["mode"] as Map<String, Any?>
+        assertEquals("STRING", modeProp["type"])
+        assertEquals(listOf("fast", "precise"), modeProp["enum"])
+    }
+
+    @Test
+    fun geminiClient_parseSuccessResponse_handlesTextToolsAndBlocks() {
+        val moshi = Moshi.Builder().addLast(KotlinJsonAdapterFactory()).build()
+        val apiKeyStore = ApiKeyStore(ContextWrapper(null))
+        val client = GeminiClient(
+            okHttpClient = OkHttpClient(),
+            moshi = moshi,
+            apiKeyStore = apiKeyStore
+        )
+
+        // 1. Text response
+        val textJson = """
+            {
+              "candidates": [
+                {
+                  "content": {
+                    "role": "model",
+                    "parts": [{"text": "Hello there! How can I assist you today?"}]
+                  },
+                  "finishReason": "STOP"
+                }
+              ],
+              "usageMetadata": {
+                "promptTokenCount": 10,
+                "candidatesTokenCount": 9,
+                "totalTokenCount": 19
+              }
+            }
+        """.trimIndent()
+        val textRes = client.parseSuccessResponse(textJson)
+        assertTrue(textRes is GeminiTurnResult.Success)
+        val textSuccess = textRes as GeminiTurnResult.Success
+        assertEquals("Hello there! How can I assist you today?", textSuccess.assistantText)
+        assertTrue(textSuccess.toolCalls.isEmpty())
+        assertEquals(10, textSuccess.promptTokens)
+        assertEquals(9, textSuccess.candidateTokens)
+
+        // 2. Tool call response with numeric args converted to string cleanly
+        val toolJson = """
+            {
+              "candidates": [
+                {
+                  "content": {
+                    "role": "model",
+                    "parts": [
+                      {
+                        "functionCall": {
+                          "name": "adjust_volume",
+                          "args": { "level_percent": 75, "stream": "music" }
+                        }
+                      }
+                    ]
+                  },
+                  "finishReason": "STOP"
+                }
+              ]
+            }
+        """.trimIndent()
+        val toolRes = client.parseSuccessResponse(toolJson)
+        assertTrue(toolRes is GeminiTurnResult.Success)
+        val toolSuccess = toolRes as GeminiTurnResult.Success
+        assertEquals(1, toolSuccess.toolCalls.size)
+        assertEquals("adjust_volume", toolSuccess.toolCalls.first().name)
+        assertEquals("75", toolSuccess.toolCalls.first().args["level_percent"])
+        assertEquals("music", toolSuccess.toolCalls.first().args["stream"])
+
+        // 3. Blocked prompt feedback
+        val blockJson = """{"promptFeedback": {"blockReason": "SAFETY"}}"""
+        val blockRes = client.parseSuccessResponse(blockJson)
+        assertTrue(blockRes is GeminiTurnResult.Success)
+        assertEquals("I can't help with that.", (blockRes as GeminiTurnResult.Success).assistantText)
+
+        // 4. Finish reason SAFETY
+        val safetyJson = """
+            {
+              "candidates": [
+                {
+                  "content": {"parts": []},
+                  "finishReason": "SAFETY"
+                }
+              ]
+            }
+        """.trimIndent()
+        val safetyRes = client.parseSuccessResponse(safetyJson)
+        assertTrue(safetyRes is GeminiTurnResult.Success)
+        assertEquals("I can't help with that.", (safetyRes as GeminiTurnResult.Success).assistantText)
+
+        // 5. Malformed JSON
+        val malformedRes = client.parseSuccessResponse("not valid json")
+        assertTrue(malformedRes is GeminiTurnResult.ServerError)
+    }
+
+    @Test
+    fun geminiClient_buildGenerateContentPayload_includesThinkingConfigLow() {
+        val moshi = Moshi.Builder().addLast(KotlinJsonAdapterFactory()).build()
+        val apiKeyStore = ApiKeyStore(ContextWrapper(null))
+        val client = GeminiClient(
+            okHttpClient = OkHttpClient(),
+            moshi = moshi,
+            apiKeyStore = apiKeyStore
+        )
+
+        // A) Gemini 3.8 Flash includes thinkingConfig with thinkingLevel: "low"
+        val payload38 = client.buildGenerateContentPayload(
+            modelId = "gemini-3.8-flash",
+            systemInstruction = "You are Jarvis.",
+            messages = listOf(
+                ChatMessage(id = 1, role = MessageRole.USER, content = "Turn on the light"),
+                ChatMessage(id = 2, role = MessageRole.ASSISTANT, content = "Turning on", toolName = "toggle_flashlight"),
+                ChatMessage(id = 3, role = MessageRole.TOOL, content = "Flashlight enabled", toolName = "toggle_flashlight")
+            ),
+            tools = listOf(
+                ToolDescriptor("toggle_flashlight", "Toggles flashlight", "{}", RiskLevel.LOW.name)
+            ),
+            allowThinking = true
+        )
+
+        @Suppress("UNCHECKED_CAST")
+        val genConfig38 = payload38["generationConfig"] as Map<String, Any?>
+        assertNotNull(genConfig38["thinkingConfig"])
+        @Suppress("UNCHECKED_CAST")
+        val thinkingConfig38 = genConfig38["thinkingConfig"] as Map<String, Any?>
+        assertEquals("low", thinkingConfig38["thinkingLevel"])
+
+        // System instruction verified
+        @Suppress("UNCHECKED_CAST")
+        val sysInst = payload38["systemInstruction"] as Map<String, Any?>
+        @Suppress("UNCHECKED_CAST")
+        val sysParts = sysInst["parts"] as List<Map<String, Any?>>
+        assertEquals("You are Jarvis.", sysParts.first()["text"])
+
+        // Tools verified
+        @Suppress("UNCHECKED_CAST")
+        val toolsList = payload38["tools"] as List<Map<String, Any?>>
+        @Suppress("UNCHECKED_CAST")
+        val fnDecls = toolsList.first()["functionDeclarations"] as List<Map<String, Any?>>
+        assertEquals("toggle_flashlight", fnDecls.first()["name"])
+
+        // Contents verified
+        @Suppress("UNCHECKED_CAST")
+        val contents = payload38["contents"] as List<Map<String, Any?>>
+        assertEquals(3, contents.size)
+        assertEquals("user", contents[0]["role"])
+        assertEquals("model", contents[1]["role"])
+        assertEquals("user", contents[2]["role"]) // Tool response sent as user turn with functionResponse
+
+        // B) Gemini 3.8 Live (Voice) does NOT include thinkingConfig
+        val payloadLive = client.buildGenerateContentPayload(
+            modelId = "gemini-3.8-live",
+            systemInstruction = "You are Jarvis.",
+            messages = listOf(ChatMessage(role = MessageRole.USER, content = "Hello")),
+            tools = emptyList(),
+            allowThinking = true
+        )
+        @Suppress("UNCHECKED_CAST")
+        val genConfigLive = payloadLive["generationConfig"] as Map<String, Any?>
+        assertNull(genConfigLive["thinkingConfig"])
+    }
+
+    @Test
+    fun ttsManager_voiceResolutionAndGenderMapping_allSixVoices() {
+        // Test all 6 prebuilt voices
+        assertEquals("Puck", TtsManager.resolveLiveVoiceName("Puck", "MALE"))
+        assertEquals("Charon", TtsManager.resolveLiveVoiceName("Charon", "MALE"))
+        assertEquals("Fenrir", TtsManager.resolveLiveVoiceName("Fenrir", "MALE"))
+        assertEquals("Aoede", TtsManager.resolveLiveVoiceName("Aoede", "FEMALE"))
+        assertEquals("Kore", TtsManager.resolveLiveVoiceName("Kore", "FEMALE"))
+        assertEquals("Leda", TtsManager.resolveLiveVoiceName("Leda", "FEMALE"))
+
+        // Case insensitivity
+        assertEquals("Puck", TtsManager.resolveLiveVoiceName("puck", "MALE"))
+        assertEquals("Charon", TtsManager.resolveLiveVoiceName("CHARON", "MALE"))
+        assertEquals("Fenrir", TtsManager.resolveLiveVoiceName("fenrir", "MALE"))
+        assertEquals("Aoede", TtsManager.resolveLiveVoiceName("aoede", "FEMALE"))
+        assertEquals("Kore", TtsManager.resolveLiveVoiceName("KORE", "FEMALE"))
+        assertEquals("Leda", TtsManager.resolveLiveVoiceName("leda", "FEMALE"))
+
+        // Descriptive fallback queries
+        assertEquals("Charon", TtsManager.resolveLiveVoiceName("male deep", "MALE"))
+        assertEquals("Fenrir", TtsManager.resolveLiveVoiceName("male authoritative", "MALE"))
+        assertEquals("Aoede", TtsManager.resolveLiveVoiceName("female warm", "FEMALE"))
+        assertEquals("Leda", TtsManager.resolveLiveVoiceName("female clear", "FEMALE"))
+
+        // Default / empty fallback
+        assertEquals("Puck", TtsManager.resolveLiveVoiceName("", "MALE"))
+        assertEquals("Aoede", TtsManager.resolveLiveVoiceName("", "FEMALE"))
+        assertEquals("Puck", TtsManager.resolveLiveVoiceName("default", "MALE"))
+        assertEquals("Aoede", TtsManager.resolveLiveVoiceName("default", "FEMALE"))
+
+        // Verify GeminiVoice enum gender separation
+        val maleVoices = GeminiVoice.getVoicesForGender("MALE")
+        assertEquals(3, maleVoices.size)
+        assertEquals(listOf(GeminiVoice.PUCK, GeminiVoice.CHARON, GeminiVoice.FENRIR), maleVoices)
+
+        val femaleVoices = GeminiVoice.getVoicesForGender("FEMALE")
+        assertEquals(3, femaleVoices.size)
+        assertEquals(listOf(GeminiVoice.AOEDE, GeminiVoice.KORE, GeminiVoice.LEDA), femaleVoices)
+    }
+
+    @Test
+    fun ttsManager_cleanTextForSpeech_hindiAndEnglish() {
+        // Markdown, links, and code removal
+        val mdInput = "Here is **bold** text, *italic* word, `inline_code`, and [Google link](https://google.com)."
+        val mdCleaned = TtsManager.cleanTextForSpeech(mdInput)
+        assertFalse(mdCleaned.contains("**"))
+        assertFalse(mdCleaned.contains("*"))
+        assertFalse(mdCleaned.contains("`"))
+        assertFalse(mdCleaned.contains("https://"))
+        assertTrue(mdCleaned.contains("bold"))
+        assertTrue(mdCleaned.contains("italic"))
+        assertTrue(mdCleaned.contains("inline code") || mdCleaned.contains("inline_code"))
+        assertTrue(mdCleaned.contains("Google link"))
+
+        // Code fences and JSON removal
+        val codeAndJson = "Start ```kotlin val x = 10``` middle {\"status\": \"ok\", \"count\": 5} end."
+        val cleanedCodeJson = TtsManager.cleanTextForSpeech(codeAndJson)
+        assertFalse(cleanedCodeJson.contains("```"))
+        assertFalse(cleanedCodeJson.contains("val x = 10"))
+        assertFalse(cleanedCodeJson.contains("\"status\""))
+        assertTrue(cleanedCodeJson.contains("Start"))
+        assertTrue(cleanedCodeJson.contains("end."))
+
+        // Emojis removal
+        val emojiInput = "Flashlight turned on! 🔦✨ Happy to help 🚀😊"
+        val emojiCleaned = TtsManager.cleanTextForSpeech(emojiInput)
+        assertFalse(emojiCleaned.contains("🔦"))
+        assertFalse(emojiCleaned.contains("✨"))
+        assertFalse(emojiCleaned.contains("🚀"))
+        assertFalse(emojiCleaned.contains("😊"))
+        assertTrue(emojiCleaned.contains("Flashlight turned on!"))
+
+        // Numbers, percentages, currency expansion in English
+        assertEquals("Battery is at 85 percent", TtsManager.cleanTextForSpeech("Battery is at 85%"))
+        assertEquals("Total cost is 150 dollars", TtsManager.cleanTextForSpeech("Total cost is $150"))
+        assertEquals("Timer set for 15 minutes and 30 seconds", TtsManager.cleanTextForSpeech("Timer set for 15 min and 30 sec"))
+
+        // Hindi phrases with currency and numbers
+        assertEquals("Mummy ko 500 rupees bhej do", TtsManager.cleanTextForSpeech("Mummy ko ₹500 bhej do"))
+        assertEquals("Raste me 10 minutes lagenge", TtsManager.cleanTextForSpeech("Raste me 10 min lagenge"))
+
+        // Concise confirmation (< 2 sentences when confirmed/cancelled)
+        val longConfirm = "Action Confirmed. Your timer for 5 minutes is running. Extra detail here. Another sentence here."
+        val shortConfirm = TtsManager.cleanTextForSpeech(longConfirm)
+        val count = shortConfirm.split(Regex("(?<=[.!?])\\s+")).size
+        assertTrue("Long confirmation must be trimmed to <= 2 sentences", count <= 2)
+    }
+
+    @Test
+    fun localIntentRouter_hindiAndEnglishCommands_allResolveCorrectly() {
+        val testCases = listOf(
+            // Open App in Hindi (Suffix style)
+            "YouTube open karo" to Pair("open_app", mapOf("app_name" to "YouTube")),
+            "WhatsApp kholo" to Pair("open_app", mapOf("app_name" to "WhatsApp")),
+            "Instagram chalu karo" to Pair("open_app", mapOf("app_name" to "Instagram")),
+            "insta kholo" to Pair("open_app", mapOf("app_name" to "Instagram")),
+            "wa open karo" to Pair("open_app", mapOf("app_name" to "WhatsApp")),
+            "yt kholo" to Pair("open_app", mapOf("app_name" to "YouTube")),
+
+            // Open App in English (Prefix style)
+            "open YouTube" to Pair("open_app", mapOf("app_name" to "YouTube")),
+            "launch WhatsApp" to Pair("open_app", mapOf("app_name" to "WhatsApp")),
+            "start Instagram" to Pair("open_app", mapOf("app_name" to "Instagram")),
+            "open yt" to Pair("open_app", mapOf("app_name" to "YouTube")),
+            "open wa" to Pair("open_app", mapOf("app_name" to "WhatsApp")),
+            "open insta" to Pair("open_app", mapOf("app_name" to "Instagram")),
+            "open gpay" to Pair("open_app", mapOf("app_name" to "Google Pay")),
+            "open tg" to Pair("open_app", mapOf("app_name" to "Telegram")),
+
+            // Flashlight
+            "torch jala do" to Pair("toggle_flashlight", mapOf("enabled" to "true")),
+            "torch on" to Pair("toggle_flashlight", mapOf("enabled" to "true")),
+            "chalu karo torch" to Pair("toggle_flashlight", mapOf("enabled" to "true")),
+            "turn on flashlight" to Pair("toggle_flashlight", mapOf("enabled" to "true")),
+            "switch on flashlight" to Pair("toggle_flashlight", mapOf("enabled" to "true")),
+            "torch band karo" to Pair("toggle_flashlight", mapOf("enabled" to "false")),
+            "torch band kar do" to Pair("toggle_flashlight", mapOf("enabled" to "false")),
+            "torch bujha do" to Pair("toggle_flashlight", mapOf("enabled" to "false")),
+            "turn off flashlight" to Pair("toggle_flashlight", mapOf("enabled" to "false")),
+
+            // Volume
+            "volume up" to Pair("adjust_volume", mapOf("direction" to "up")),
+            "awaz tez karo" to Pair("adjust_volume", mapOf("direction" to "up")),
+            "volume down" to Pair("adjust_volume", mapOf("direction" to "down")),
+            "volume kam karo" to Pair("adjust_volume", mapOf("direction" to "down")),
+            "mute" to Pair("adjust_volume", mapOf("direction" to "mute")),
+            "set volume to 80 percent" to Pair("adjust_volume", mapOf("stream" to "music", "level_percent" to "80")),
+
+            // YouTube Media
+            "play jazz on youtube" to Pair("play_media", mapOf("query" to "jazz")),
+            "youtube pe lo-fi chalao" to Pair("play_media", mapOf("query" to "lo-fi")),
+
+            // Web Search
+            "google weather in delhi" to Pair("web_search", mapOf("query" to "weather in delhi")),
+            "search for latest news" to Pair("web_search", mapOf("query" to "latest news")),
+
+            // Calls & Messages
+            "call Rahul" to Pair("call_contact", mapOf("contact_name" to "Rahul")),
+            "phone karo Mummy" to Pair("call_contact", mapOf("contact_name" to "Mummy")),
+            "message Priya I will be late" to Pair("send_whatsapp_or_telegram", mapOf("contact_name" to "Priya", "message" to "I will be late", "app" to "whatsapp")),
+
+            // Navigation System
+            "go back" to Pair("system_navigation", mapOf("action" to "back")),
+            "go home" to Pair("system_navigation", mapOf("action" to "home")),
+            "recent apps" to Pair("system_navigation", mapOf("action" to "recents")),
+
+            // Quick Settings
+            "wifi settings" to Pair("open_app", mapOf("app_name" to "android.settings.WIFI_SETTINGS")),
+            "open bluetooth" to Pair("open_app", mapOf("app_name" to "android.settings.BLUETOOTH_SETTINGS")),
+            "brightness" to Pair("open_app", mapOf("app_name" to "android.settings.DISPLAY_SETTINGS")),
+            "dnd" to Pair("open_app", mapOf("app_name" to "android.settings.ZEN_MODE_SETTINGS")),
+
+            // Timers & Alarms
+            "set a timer for 10 minutes" to Pair("set_timer", mapOf("seconds" to "600", "label" to "JARVIS Timer")),
+            "set alarm for 7 am" to Pair("set_alarm", mapOf("hour" to "7", "minute" to "0", "label" to "JARVIS Alarm"))
+        )
+
+        for ((phrase, expected) in testCases) {
+            val result = LocalIntentRouter.route(phrase, null)
+            assertNotNull("Phrase failed to route: '$phrase'", result)
+            assertTrue(
+                "Phrase '$phrase' expected ToolAction but was $result",
+                result is LocalRouteResult.ToolAction
+            )
+            val action = result as LocalRouteResult.ToolAction
+            assertEquals("Tool name mismatch for '$phrase'", expected.first, action.toolName)
+            for ((k, v) in expected.second) {
+                assertEquals(
+                    "Arg '$k' mismatch for phrase '$phrase'",
+                    v,
+                    action.args[k]
+                )
+            }
+        }
+
+        // Direct replies
+        val directCases = listOf(
+            "battery kitni hai",
+            "battery percentage",
+            "what time is it",
+            "time kya hua"
+        )
+        for (phrase in directCases) {
+            val result = LocalIntentRouter.route(phrase, null)
+            assertNotNull("Direct reply phrase failed to route: '$phrase'", result)
+            assertTrue("Expected DirectReply for '$phrase'", result is LocalRouteResult.DirectReply)
+        }
+
+        // Emergency Stop
+        val stopResult = LocalIntentRouter.route("stop", null)
+        assertTrue(stopResult is LocalRouteResult.Stop)
+        val rukJaoResult = LocalIntentRouter.route("ruk jao", null)
+        assertTrue(rukJaoResult is LocalRouteResult.Stop)
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun settingsRepository_and_settingsViewModel_updatesAndPersistsDualModelAndVoicePreferences() = runBlocking {
+        val testDispatcher = StandardTestDispatcher()
+        Dispatchers.setMain(testDispatcher)
+        try {
+            val fakeSettingsRepo = FakeSettingsRepository()
+
+            // 1. Direct SettingsRepository testing
+            assertEquals("gemini-3.8-flash", fakeSettingsRepo.flow.value.selectedTextModelId)
+            assertEquals("gemini-3.8-live", fakeSettingsRepo.flow.value.selectedVoiceModelId)
+            assertEquals("MALE", fakeSettingsRepo.flow.value.selectedVoiceGender)
+            assertEquals("Puck", fakeSettingsRepo.flow.value.selectedLiveVoiceName)
+
+            fakeSettingsRepo.setSelectedTextModelId("gemini-3.8-flash")
+            fakeSettingsRepo.setSelectedVoiceModelId("gemini-3.8-live")
+            assertEquals("gemini-3.8-flash", fakeSettingsRepo.flow.value.selectedTextModelId)
+            assertEquals("gemini-3.8-live", fakeSettingsRepo.flow.value.selectedVoiceModelId)
+
+            fakeSettingsRepo.setSelectedVoiceGender("FEMALE")
+            fakeSettingsRepo.setSelectedLiveVoiceName("Aoede")
+            assertEquals("FEMALE", fakeSettingsRepo.flow.value.selectedVoiceGender)
+            assertEquals("Aoede", fakeSettingsRepo.flow.value.selectedLiveVoiceName)
+
+            // 2. SettingsViewModel testing with FakeSettingsRepository
+            val dummyContext = ContextWrapper(null)
+            val apiKeyStore = ApiKeyStore(dummyContext)
+            val moshi = Moshi.Builder().addLast(KotlinJsonAdapterFactory()).build()
+            val geminiClient = GeminiClient(OkHttpClient(), moshi, apiKeyStore)
+            val stt = FakeSpeechRecognizer()
+            val tts = FakeTtsEngine()
+            val voiceManager = VoiceSessionManager(stt, tts, null, FakeWakeWordEngine())
+            val killSwitch = KillSwitch()
+            val orchestrator = createTestOrchestrator(
+                backendRepository = object : AgentBackendRepository {
+                    override suspend fun runAgentStep(
+                        messages: List<ChatMessage>,
+                        tools: List<ToolDescriptor>,
+                        memories: List<MemoryFact>,
+                        screenContext: ScreenContextSnapshot?,
+                        language: AppLanguage,
+                        summaries: List<ConversationSummaryItem>,
+                        onTextChunk: ((String) -> Unit)?,
+                        isVoiceInput: Boolean
+                    ): AgentStepDecision = AgentStepDecision(assistantText = "OK")
+                },
+                tools = emptySet(),
+                killSwitch = killSwitch
+            )
+
+            val viewModel = SettingsViewModel(
+                appContext = dummyContext,
+                apiKeyStore = apiKeyStore,
+                geminiClient = geminiClient,
+                settingsRepository = fakeSettingsRepo,
+                voiceSessionManager = voiceManager,
+                speechRecognizer = stt,
+                ttsEngine = tts,
+                agentOrchestrator = orchestrator,
+                killSwitch = killSwitch
+            )
+
+            // Verify initial state
+            assertEquals("gemini-3.8-flash", viewModel.settings.value.selectedTextModelId)
+            assertEquals("gemini-3.8-live", viewModel.settings.value.selectedVoiceModelId)
+
+            // Change text model via ViewModel
+            viewModel.setSelectedTextModelId("gemini-3.8-flash")
+            testDispatcher.scheduler.advanceUntilIdle()
+            assertEquals("gemini-3.8-flash", fakeSettingsRepo.flow.value.selectedTextModelId)
+
+            // Change voice model via ViewModel
+            viewModel.setSelectedVoiceModelId("gemini-3.8-live")
+            testDispatcher.scheduler.advanceUntilIdle()
+            assertEquals("gemini-3.8-live", fakeSettingsRepo.flow.value.selectedVoiceModelId)
+
+            // Change gender to FEMALE: live voice should automatically switch to Aoede
+            viewModel.setSelectedVoiceGender("FEMALE")
+            testDispatcher.scheduler.advanceUntilIdle()
+            assertEquals("FEMALE", fakeSettingsRepo.flow.value.selectedVoiceGender)
+            assertEquals("Aoede", fakeSettingsRepo.flow.value.selectedLiveVoiceName)
+
+            // Select specific timbre: Kore
+            viewModel.setSelectedLiveVoiceName("Kore")
+            testDispatcher.scheduler.advanceUntilIdle()
+            assertEquals("Kore", fakeSettingsRepo.flow.value.selectedLiveVoiceName)
+            assertEquals("Kore", fakeSettingsRepo.flow.value.selectedVoiceName)
+
+            // Select specific timbre: Leda
+            viewModel.setSelectedLiveVoiceName("Leda")
+            testDispatcher.scheduler.advanceUntilIdle()
+            assertEquals("Leda", fakeSettingsRepo.flow.value.selectedLiveVoiceName)
+
+            // Switch back to MALE: live voice should automatically switch to Puck
+            viewModel.setSelectedVoiceGender("MALE")
+            testDispatcher.scheduler.advanceUntilIdle()
+            assertEquals("MALE", fakeSettingsRepo.flow.value.selectedVoiceGender)
+            assertEquals("Puck", fakeSettingsRepo.flow.value.selectedLiveVoiceName)
+
+            // Select male timbre: Charon
+            viewModel.setSelectedLiveVoiceName("Charon")
+            testDispatcher.scheduler.advanceUntilIdle()
+            assertEquals("Charon", fakeSettingsRepo.flow.value.selectedLiveVoiceName)
+
+            // Select male timbre: Fenrir
+            viewModel.setSelectedLiveVoiceName("Fenrir")
+            testDispatcher.scheduler.advanceUntilIdle()
+            assertEquals("Fenrir", fakeSettingsRepo.flow.value.selectedLiveVoiceName)
+        } finally {
+            Dispatchers.resetMain()
+        }
+    }
 }
+}
+

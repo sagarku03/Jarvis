@@ -37,6 +37,7 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -115,17 +116,11 @@ fun SettingsScreen(
     var phoneVoiceDropdownExpanded by remember { mutableStateOf(false) }
 
     val friendlyVoiceModelNames = mapOf(
-        "gemini-3.8-live" to "Gemini 3.8 Live (Recommended for Voice)",
-        "gemini-2.0-flash" to "Gemini 2.0 Flash (Fast Live Audio)",
-        "gemini-2.5-flash" to "Gemini 2.5 Flash",
-        "gemini-2.5-pro" to "Gemini 2.5 Pro"
+        "gemini-3.8-live" to "Gemini 3.8 Live (Recommended for Voice)"
     )
 
     val friendlyTextModelNames = mapOf(
-        "gemini-3.8-flash" to "Gemini 3.8 Flash (Recommended for Text)",
-        "gemini-2.5-flash" to "Gemini 2.5 Flash (Fast)",
-        "gemini-2.5-pro" to "Gemini 2.5 Pro (Smarter, Slower)",
-        "gemini-2.0-flash" to "Gemini 2.0 Flash"
+        "gemini-3.8-flash" to "Gemini 3.8 Flash (Recommended for Text)"
     )
 
     AuroraBackground {
@@ -441,6 +436,35 @@ fun SettingsScreen(
                                         }
                                     )
                                 }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        AuroraSecondaryButton(
+                            text = "Aawaz Test Karein / Test Voice",
+                            icon = Icons.Default.VolumeUp,
+                            onClick = { viewModel.testCurrentVoice() },
+                            modifier = Modifier.fillMaxWidth().testTag("settings_test_voice_button")
+                        )
+
+                        if (voicePreviewStatus != null) {
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.CheckCircle,
+                                    contentDescription = null,
+                                    tint = AuroraColors.Lavender,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Text(
+                                    text = voicePreviewStatus.orEmpty(),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = AuroraColors.Lavender
+                                )
                             }
                         }
                     } else {

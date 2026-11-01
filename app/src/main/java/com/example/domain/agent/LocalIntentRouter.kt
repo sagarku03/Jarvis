@@ -29,19 +29,23 @@ object LocalIntentRouter {
     private val TIME_REGEX = Regex("""\b(what time is it|what's the time|current time|time kya hua|time batao|kitne baje|baje hain)\b""", RegexOption.IGNORE_CASE)
     private val BATTERY_REGEX = Regex("""\b(battery|battery level|battery percentage|battery kitni hai|battery status|kitni battery)\b""", RegexOption.IGNORE_CASE)
 
-    private val FLASHLIGHT_ON_REGEX = Regex("""\b(torch|flashlight)\s*(on|chalu|jalao|start)\b|\b(turn on|switch on|jala do|chalu karo)\s*(torch|flashlight)\b""", RegexOption.IGNORE_CASE)
-    private val FLASHLIGHT_OFF_REGEX = Regex("""\b(torch|flashlight)\s*(off|band|bujhao|stop)\b|\b(turn off|switch off|band karo|bujha do)\s*(torch|flashlight)\b""", RegexOption.IGNORE_CASE)
+    private val FLASHLIGHT_ON_REGEX = Regex("""\b(torch|flashlight)\s*(on|chalu|jalao|start|jala do)\b|\b(turn on|switch on|jala do|chalu karo)\s*(torch|flashlight)\b""", RegexOption.IGNORE_CASE)
+    private val FLASHLIGHT_OFF_REGEX = Regex("""\b(torch|flashlight)\s*(off|band|bujhao|stop|bujha do|band kar do|band karo)\b|\b(turn off|switch off|band karo|bujha do|band kar do)\s*(torch|flashlight)\b""", RegexOption.IGNORE_CASE)
 
     private val VOL_UP_REGEX = Regex("""\b(volume|sound|awaz)\s*(badhao|up|increase|tez karo)\b|\b(increase|raise)\s*(volume|sound)\b""", RegexOption.IGNORE_CASE)
     private val VOL_DOWN_REGEX = Regex("""\b(volume|sound|awaz)\s*(kam karo|down|decrease|ghatao)\b|\b(decrease|lower)\s*(volume|sound)\b""", RegexOption.IGNORE_CASE)
     private val VOL_MUTE_REGEX = Regex("""\b(mute|silent|chup|awaz band)\b""", RegexOption.IGNORE_CASE)
     private val VOL_SET_REGEX = Regex("""\b(set volume to|volume)\s*(\d{1,3})\s*(%|percent)?\b""", RegexOption.IGNORE_CASE)
 
-    private val YOUTUBE_PLAY_REGEX = Regex("""\b(?:play\s+(.+?)\s+on\s+youtube|youtube\s+pe\s+(.+?)\s+chalao|play\s+(.+?)\s+on\s+yt)\b""", RegexOption.IGNORE_CASE)
+    private val YOUTUBE_PLAY_REGEX = Regex(
+        """\b(?:play\s+(.+?)\s+on\s+(?:youtube|yt)|(?:youtube|yt)\s+pe\s+(.+?)\s+(?:chalao|play\s*karo)|(.+?)\s+(?:chalao|play\s*karo)\s+(?:youtube|yt)\s+pe|(.+?)\s+(?:youtube|yt)\s+pe\s+(?:chalao|play\s*karo))\b""",
+        RegexOption.IGNORE_CASE
+    )
     private val NAV_REGEX = Regex("""\b(?:navigate to|directions to|rasta dikhao|take me to)\s+(.+)\b""", RegexOption.IGNORE_CASE)
 
     private val CALL_REGEX = Regex("""^(?:call|dial|phone karo|ko call karo|ko call lagao)\s+(.+)$|^(?:call)\s+(.+)$|^(.+?)\s+ko\s+call(?:\s+karo|\s+lagao)?$""", RegexOption.IGNORE_CASE)
     private val OPEN_APP_REGEX = Regex("""^(?:open|launch|start|kholo|chalu karo)\s+(.+)$""", RegexOption.IGNORE_CASE)
+    private val OPEN_APP_POSTFIX_REGEX = Regex("""^(.+?)\s+(?:open\s*karo|kholo|chalu\s*karo|open\s*kar\s*do|start\s*karo)$""", RegexOption.IGNORE_CASE)
 
     private val PLAY_STORE_REGEX = Regex("""\b(?:install|download|get)\s+(.+?)(?:\s+from\s+play\s*store)?$""", RegexOption.IGNORE_CASE)
     private val WEB_SEARCH_REGEX = Regex("""^(?:search(?:\s+for)?|google)\s+(.+)$|^(.+?)\s+search\s+karo$""", RegexOption.IGNORE_CASE)
@@ -275,7 +279,7 @@ object LocalIntentRouter {
         }
 
         // 16. Open App
-        val appMatch = OPEN_APP_REGEX.find(trimmed)
+        val appMatch = OPEN_APP_REGEX.find(trimmed) ?: OPEN_APP_POSTFIX_REGEX.find(trimmed)
         if (appMatch != null) {
             val appQuery = appMatch.groupValues[1].trim()
             if (appQuery.isNotEmpty()) {

@@ -214,6 +214,50 @@ class TtsManager @Inject constructor(
         }
     }
 
+    fun testVoice(
+        voiceName: String,
+        gender: String = "MALE",
+        onComplete: () -> Unit = {}
+    ) {
+        val sampleText = "Namaste, main Jarvis hoon. Aapki kya madad kar sakta hoon?"
+        stop()
+        activePlaybackJob = scope.launch {
+            val resolvedVoice = resolveLiveVoiceName(voiceName, gender)
+            val settings = settingsRepository.settingsFlow.first()
+            val chosenVoiceModel = settings.selectedVoiceModelId.ifBlank { "gemini-3.8-flash-tts" }
+            _isSpeaking.value = true
+            val naturalSuccess = trySpeakGeminiAudio(
+                sentence = sampleText,
+                voiceName = resolvedVoice,
+                modelId = chosenVoiceModel,
+                onAudioStarted = {
+                    _isSpeaking.value = true
+                    _isUsingFallbackChip.value = false
+                }
+            )
+            if (naturalSuccess) {
+                _isUsingFallbackChip.value = false
+                _isSpeaking.value = false
+                onComplete()
+            } else {
+                _isUsingFallbackChip.value = true
+                speakDeviceVoice(
+                    sentence = sampleText,
+                    language = AppLanguage.HINGLISH,
+                    voiceName = voiceName,
+                    speed = settings.speechSpeed,
+                    onAudioStarted = {
+                        _isSpeaking.value = true
+                    },
+                    onFinished = {
+                        _isSpeaking.value = false
+                        onComplete()
+                    }
+                )
+            }
+        }
+    }
+
     fun queueStreamingSentence(
         sentence: String,
         language: AppLanguage,
@@ -290,7 +334,7 @@ class TtsManager @Inject constructor(
                 raw = voiceName.ifBlank { settings.selectedLiveVoiceName }.ifBlank { settings.selectedVoiceName },
                 gender = settings.selectedVoiceGender
             )
-            val chosenVoiceModel = settings.selectedVoiceModelId.ifBlank { "gemini-3.8-live" }
+            val chosenVoiceModel = settings.selectedVoiceModelId.ifBlank { "gemini-3.8-flash-tts" }
 
             val naturalSuccess = trySpeakGeminiAudio(
                 sentence = sentence,
@@ -307,6 +351,7 @@ class TtsManager @Inject constructor(
             )
 
             if (naturalSuccess) {
+                _isUsingFallbackChip.value = false
                 onFinished()
                 return
             } else {
@@ -324,10 +369,38 @@ class TtsManager @Inject constructor(
         speakDeviceVoice(sentence, language, voiceName, speed, onAudioStarted, onFinished)
     }
 
+    private fun stripWavHeaderIfNeeded(bytes: ByteArray): ByteArray {
+        if (bytes.size > 44 &&
+            bytes[0] == 'R'.code.toByte() &&
+            bytes[1] == 'I'.code.toByte() &&
+            bytes[2] == 'F'.code.toByte() &&
+            bytes[3] == 'F'.code.toByte() &&
+            bytes[8] == 'W'.code.toByte() &&
+            bytes[9] == 'A'.code.toByte() &&
+            bytes[10] == 'V'.code.toByte() &&
+            bytes[11] == 'E'.code.toByte()
+        ) {
+            for (i in 12 until bytes.size - 8) {
+                if (bytes[i] == 'd'.code.toByte() &&
+                    bytes[i + 1] == 'a'.code.toByte() &&
+                    bytes[i + 2] == 't'.code.toByte() &&
+                    bytes[i + 3] == 'a'.code.toByte()
+                ) {
+                    val dataStart = i + 8
+                    if (dataStart < bytes.size) {
+                        return bytes.copyOfRange(dataStart, bytes.size)
+                    }
+                }
+            }
+            return bytes.copyOfRange(44, bytes.size)
+        }
+        return bytes
+    }
+
     private suspend fun trySpeakGeminiAudio(
         sentence: String,
         voiceName: String,
-        modelId: String = "gemini-3.8-live",
+        modelId: String = "gemini-3.8-flash-tts",
         onAudioStarted: () -> Unit
     ): Boolean = withContext(Dispatchers.IO) {
         val apiKey = apiKeyStore.get()?.trim()
@@ -341,6 +414,7 @@ class TtsManager @Inject constructor(
         }.getOrNull()
 
         if (cachedPcm != null) {
+            _isUsingFallbackChip.value = false
             playPcmAudio(cachedPcm, onAudioStarted)
             return@withContext true
         }
@@ -349,7 +423,7 @@ class TtsManager @Inject constructor(
             "contents" to listOf(
                 mapOf(
                     "role" to "user",
-                    "parts" to listOf(mapOf("text" to "Read this aloud clearly: $sentence"))
+                    "parts" to listOf(mapOf("text" to sentence))
                 )
             ),
             "generationConfig" to mapOf(
@@ -365,10 +439,11 @@ class TtsManager @Inject constructor(
         )
 
         val bodyJson = mapAdapter.toJson(promptPayload)
-        val initialModel = modelId.removePrefix("models/").trim().ifEmpty { "gemini-3.8-live" }
-        val modelsToTry = mutableListOf(initialModel)
-        if (!modelsToTry.contains("gemini-2.0-flash")) {
-            modelsToTry.add("gemini-2.0-flash")
+        val initialModel = modelId.removePrefix("models/").trim().ifEmpty { "gemini-3.8-flash-tts" }
+        val modelsToTry = mutableListOf<String>()
+        modelsToTry.add(initialModel)
+        if (!modelsToTry.contains("gemini-3.8-flash-tts")) {
+            modelsToTry.add("gemini-3.8-flash-tts")
         }
 
         for (activeModel in modelsToTry) {
@@ -391,22 +466,24 @@ class TtsManager @Inject constructor(
                     val content = firstCandidate?.get("content") as? Map<*, *>
                     val parts = (content?.get("parts") as? List<*>).orEmpty()
 
-                    var pcmBytes: ByteArray? = null
+                    var rawAudioBytes: ByteArray? = null
                     for (p in parts) {
                         val pMap = p as? Map<*, *> ?: continue
                         val inlineData = pMap["inlineData"] as? Map<*, *>
                         if (inlineData != null) {
                             val dataBase64 = inlineData["data"] as? String
                             if (!dataBase64.isNullOrEmpty()) {
-                                pcmBytes = Base64.decode(dataBase64, Base64.DEFAULT)
+                                rawAudioBytes = Base64.decode(dataBase64, Base64.DEFAULT)
                                 break
                             }
                         }
                     }
 
-                    if (pcmBytes != null && pcmBytes.isNotEmpty()) {
+                    if (rawAudioBytes != null && rawAudioBytes.isNotEmpty()) {
+                        val pcmBytes = stripWavHeaderIfNeeded(rawAudioBytes)
                         memoryPcmCache[cacheKey] = pcmBytes
                         runCatching { File(diskCacheDir, "$cacheKey.pcm").writeBytes(pcmBytes) }
+                        _isUsingFallbackChip.value = false
                         playPcmAudio(pcmBytes, onAudioStarted)
                         Pair(true, false)
                     } else {
@@ -415,6 +492,7 @@ class TtsManager @Inject constructor(
                 }
 
                 if (success) {
+                    _isUsingFallbackChip.value = false
                     return@withContext true
                 }
                 if (!is404) {

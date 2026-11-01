@@ -7,10 +7,13 @@ import com.example.data.local.ApiKeyStore
 import com.example.data.local.JarvisDatabase
 import com.example.data.repository.ChatRepositoryImpl
 import com.example.data.repository.MemoryRepositoryImpl
+import com.example.domain.agent.LocalIntentRouter
+import com.example.domain.agent.LocalRouteResult
 import com.example.domain.model.ChatMessage
 import com.example.domain.model.MemoryCategory
 import com.example.domain.model.MemorySource
 import com.example.domain.model.MessageRole
+import com.example.ui.viewmodel.SettingsViewModel
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
 import kotlinx.coroutines.flow.first
@@ -186,5 +189,68 @@ class ExampleRobolectricTest {
 
         val msgsAfter = chatRepository.getMessagesForConversation(convId)
         assertTrue(msgsAfter.isEmpty())
+    }
+
+    @Test
+    fun `settingsRepository dual-model selection voice gender and timbre persistence`() = runBlocking {
+        val app = context as JarvisApplication
+        val settingsRepo = app.appContainer.settingsRepository
+
+        // 1. Dual model persistence
+        settingsRepo.setSelectedTextModelId("gemini-3.8-flash")
+        settingsRepo.setSelectedVoiceModelId("gemini-3.8-live")
+
+        val state1 = settingsRepo.settingsFlow.first()
+        assertEquals("gemini-3.8-flash", state1.selectedTextModelId)
+        assertEquals("gemini-3.8-live", state1.selectedVoiceModelId)
+
+        // 2. Voice gender and live voice name persistence
+        settingsRepo.setSelectedVoiceGender("FEMALE")
+        settingsRepo.setSelectedLiveVoiceName("Aoede")
+
+        val state2 = settingsRepo.settingsFlow.first()
+        assertEquals("FEMALE", state2.selectedVoiceGender)
+        assertEquals("Aoede", state2.selectedLiveVoiceName)
+
+        // 3. Changing live voice timbre to Kore
+        settingsRepo.setSelectedLiveVoiceName("Kore")
+        val state3 = settingsRepo.settingsFlow.first()
+        assertEquals("Kore", state3.selectedLiveVoiceName)
+
+        // 4. Changing voice gender to MALE and timbre to Fenrir
+        settingsRepo.setSelectedVoiceGender("MALE")
+        settingsRepo.setSelectedLiveVoiceName("Fenrir")
+        val state4 = settingsRepo.settingsFlow.first()
+        assertEquals("MALE", state4.selectedVoiceGender)
+        assertEquals("Fenrir", state4.selectedLiveVoiceName)
+    }
+
+    @Test
+    fun `localIntentRouter resolves Hindi and English phrases in Robolectric context`() {
+        val phrases = listOf(
+            "YouTube open karo" to Pair("open_app", "YouTube"),
+            "WhatsApp kholo" to Pair("open_app", "WhatsApp"),
+            "Instagram chalu karo" to Pair("open_app", "Instagram"),
+            "open YouTube" to Pair("open_app", "YouTube"),
+            "torch jala do" to Pair("toggle_flashlight", "true"),
+            "torch band karo" to Pair("toggle_flashlight", "false"),
+            "battery kitni hai" to null // DirectReply
+        )
+        for ((phrase, expected) in phrases) {
+            val res = LocalIntentRouter.route(phrase, context)
+            assertNotNull("Phrase '$phrase' should route cleanly", res)
+            if (expected == null) {
+                assertTrue(res is LocalRouteResult.DirectReply)
+            } else {
+                assertTrue(res is LocalRouteResult.ToolAction)
+                val action = res as LocalRouteResult.ToolAction
+                assertEquals(expected.first, action.toolName)
+                if (action.toolName == "open_app") {
+                    assertEquals(expected.second, action.args["app_name"])
+                } else if (action.toolName == "toggle_flashlight") {
+                    assertEquals(expected.second, action.args["enabled"])
+                }
+            }
+        }
     }
 }

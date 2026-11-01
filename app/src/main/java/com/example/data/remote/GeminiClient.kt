@@ -36,7 +36,7 @@ sealed class KeyVerificationResult {
     ) : KeyVerificationResult()
 
     data class Invalid(val message: String) : KeyVerificationResult()
-    data class RateLimited(val message: String, val availableModels: List<String> = listOf("gemini-2.5-flash")) : KeyVerificationResult()
+    data class RateLimited(val message: String, val availableModels: List<String> = listOf("gemini-3.8-flash", "gemini-3.8-live")) : KeyVerificationResult()
     data class NetworkError(val message: String) : KeyVerificationResult()
 }
 
@@ -76,9 +76,9 @@ class GeminiClient @Inject constructor(
         const val DEFAULT_BASE_URL = "https://generativelanguage.googleapis.com"
         const val DEFAULT_TEXT_MODEL = "gemini-3.8-flash"
         const val DEFAULT_VOICE_MODEL = "gemini-3.8-live"
-        const val DEFAULT_FALLBACK_MODEL = "gemini-2.0-flash"
-        const val DEFAULT_STABLE_FALLBACK_MODEL = "gemini-2.5-flash"
-        const val DEFAULT_LIGHT_FALLBACK_MODEL = "gemini-2.5-flash-lite"
+        const val DEFAULT_FALLBACK_MODEL = "gemini-3.8-flash"
+        const val DEFAULT_STABLE_FALLBACK_MODEL = "gemini-3.8-flash"
+        const val DEFAULT_LIGHT_FALLBACK_MODEL = "gemini-3.8-flash"
         private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
         private val ALLOWED_SCHEMA_KEYS = setOf("type", "properties", "required", "description", "enum", "items")
 
@@ -106,29 +106,30 @@ class GeminiClient @Inject constructor(
         fun getNextFallbackModel(failedModel: String): String {
             val clean = failedModel.removePrefix("models/").lowercase(Locale.US)
             return when {
-                clean.contains("3.8") || clean.contains("3-8") || clean.contains("live") -> "gemini-2.0-flash"
-                clean.contains("2.0") || clean.contains("2-0") -> "gemini-2.5-flash"
-                clean.contains("2.5-flash") && !clean.contains("lite") -> "gemini-2.5-flash-lite"
-                else -> DEFAULT_LIGHT_FALLBACK_MODEL
+                clean.contains("live") || clean.contains("3.8-live") || clean.contains("3-8-live") -> DEFAULT_TEXT_MODEL
+                else -> DEFAULT_TEXT_MODEL
             }
         }
 
         fun selectDefaultModel(models: List<String>): String {
             return models.firstOrNull { it.contains("3.8-flash", ignoreCase = true) }
+                ?: models.firstOrNull { it.contains("3.8", ignoreCase = true) }
                 ?: models.firstOrNull { id ->
                     val lower = id.lowercase()
-                    lower.contains("flash") && !lower.contains("lite") && !lower.contains("pro")
-                } ?: models.firstOrNull { it.lowercase().contains("flash") }
+                    lower.contains("flash") && !lower.contains("lite") && !lower.contains("pro") && !lower.contains("2.0")
+                } ?: models.firstOrNull { it.lowercase().contains("flash") && !it.lowercase().contains("2.0") }
+                ?: models.firstOrNull { !it.lowercase().contains("2.0") }
                 ?: models.firstOrNull()
                 ?: DEFAULT_TEXT_MODEL
         }
 
         fun selectFallbackModel(models: List<String>, currentModel: String): String {
-            val others = models.filterNot { it.equals(currentModel, ignoreCase = true) }
-            return others.firstOrNull { it.lowercase().contains("flash-lite") || it.lowercase().contains("lite") }
+            val others = models.filterNot { it.equals(currentModel, ignoreCase = true) || it.contains("2.0") }
+            return others.firstOrNull { it.contains("3.8-flash", ignoreCase = true) }
+                ?: others.firstOrNull { it.lowercase().contains("flash") && !it.lowercase().contains("lite") }
                 ?: others.firstOrNull { it.lowercase().contains("flash") }
                 ?: others.firstOrNull()
-                ?: DEFAULT_LIGHT_FALLBACK_MODEL
+                ?: DEFAULT_FALLBACK_MODEL
         }
     }
 
@@ -174,10 +175,11 @@ class GeminiClient @Inject constructor(
                                 .orEmpty()
                             val lowerName = name.lowercase(Locale.US)
                             val isExcluded = EXCLUDED_MODEL_PATTERNS.any { lowerName.contains(it) }
-                            if ("generateContent" in methods && !isExcluded) name else null
+                            val isDead = lowerName.contains("2.0") || lowerName.contains("2-0")
+                            if ("generateContent" in methods && !isExcluded && !isDead) name else null
                         }.distinct()
 
-                        val finalModels = supportedModels.ifEmpty { listOf(DEFAULT_FALLBACK_MODEL, DEFAULT_LIGHT_FALLBACK_MODEL) }
+                        val finalModels = supportedModels.ifEmpty { listOf(DEFAULT_TEXT_MODEL, DEFAULT_VOICE_MODEL) }
                         val defaultModel = selectDefaultModel(finalModels)
                         DiagnosticsLogger.log("GeminiClient", "Key verified. Available stable models: ${finalModels.size}")
                         KeyVerificationResult.Valid(
@@ -238,7 +240,7 @@ class GeminiClient @Inject constructor(
         }
 
         val baseUrl = baseUrlProvider().trimEnd('/')
-        val url = "$baseUrl/v1beta/models/$DEFAULT_FALLBACK_MODEL:generateContent"
+        val url = "$baseUrl/v1beta/models/$DEFAULT_TEXT_MODEL:generateContent"
         val payload = mapOf(
             "contents" to listOf(
                 mapOf(
@@ -337,11 +339,13 @@ class GeminiClient @Inject constructor(
                             }
                         }
                         code == 404 -> {
-                            // Model not found -> switch through fallback chain (gemini-2.0-flash -> gemini-2.5-flash / lite)
+                            DiagnosticsLogger.log("GeminiClient", "HTTP 404 model not found ($activeModel). Response: $bodyStr")
                             val nextModel = getNextFallbackModel(activeModel)
-                            DiagnosticsLogger.log("GeminiClient", "HTTP 404 model not found ($activeModel). Switching to fallback ($nextModel).")
+                            DiagnosticsLogger.log("GeminiClient", "Switching to fallback ($nextModel).")
                             if (activeModel.equals(nextModel, ignoreCase = true)) {
-                                GeminiTurnResult.BadRequest("Model $activeModel not found.")
+                                val err = parseErrorDetails(bodyStr)
+                                val desc = if (err.message.isNotBlank()) err.message else "Model $activeModel not found (404)."
+                                GeminiTurnResult.BadRequest("Gemini model not found: $desc")
                             } else {
                                 activeModel = nextModel
                                 url = "$baseUrl/v1beta/models/$activeModel:generateContent"
@@ -359,7 +363,7 @@ class GeminiClient @Inject constructor(
                         }
                         code == 400 -> {
                             val err = parseErrorDetails(bodyStr)
-                            DiagnosticsLogger.log("GeminiClient", "HTTP 400 INVALID_ARGUMENT: ${err.status} - ${err.message}")
+                            DiagnosticsLogger.log("GeminiClient", "HTTP 400 INVALID_ARGUMENT on $activeModel: ${err.status} - ${err.message}. Response: $bodyStr")
 
                             // If error was about thinking config, remember that for this model
                             if (err.message.contains("thinking", ignoreCase = true) || err.message.contains("thinkingConfig", ignoreCase = true)) {
@@ -386,7 +390,12 @@ class GeminiClient @Inject constructor(
                                     includeTools = false
                                 )
                             }
-                            GeminiTurnResult.BadRequest("Something went wrong. Please try again.")
+                            val cleanMsg = if (err.message.isNotBlank()) {
+                                "Gemini API error (400): ${err.message}"
+                            } else {
+                                "Bad request to Gemini API (400). Please check model parameters."
+                            }
+                            GeminiTurnResult.BadRequest(cleanMsg)
                         }
                         code == 429 -> {
                             val retrySec = response.header("Retry-After")?.toLongOrNull()
@@ -401,9 +410,9 @@ class GeminiClient @Inject constructor(
                             }
                         }
                         code in 500..599 -> {
-                            DiagnosticsLogger.log("GeminiClient", "HTTP $code server error on $activeModel")
-                            if (activeModel != DEFAULT_LIGHT_FALLBACK_MODEL) {
-                                activeModel = DEFAULT_LIGHT_FALLBACK_MODEL
+                            DiagnosticsLogger.log("GeminiClient", "HTTP $code server error on $activeModel. Response: $bodyStr")
+                            if (activeModel != DEFAULT_TEXT_MODEL) {
+                                activeModel = DEFAULT_TEXT_MODEL
                                 url = "$baseUrl/v1beta/models/$activeModel:generateContent"
                                 val fallbackPayload = buildGenerateContentPayload(
                                     modelId = activeModel,
@@ -485,6 +494,8 @@ class GeminiClient @Inject constructor(
             okHttpClient.newCall(request).execute().use { response ->
                 val code = response.code
                 if (!response.isSuccessful) {
+                    val errorBody = response.body?.string().orEmpty()
+                    DiagnosticsLogger.log("GeminiClient", "streamGenerateContent failed HTTP $code on $activeModel. Response: $errorBody")
                     // Fall back to non-streaming generateContent so all recovery and classification rules apply
                     return@withContext generateContent(
                         modelId = activeModel,
@@ -708,10 +719,10 @@ class GeminiClient @Inject constructor(
         // Minimum thinking configuration per model family
         if (allowThinking) {
             val lowerModel = modelId.lowercase(Locale.US)
-            if (lowerModel.contains("2.5") && (lowerModel.contains("flash") || lowerModel.contains("lite"))) {
+            if (!lowerModel.contains("live") && (lowerModel.contains("3-") || lowerModel.contains("gemini-3") || lowerModel.contains("3.8"))) {
+                generationConfig["thinkingConfig"] = mapOf("thinkingLevel" to "low")
+            } else if (lowerModel.contains("2.5")) {
                 generationConfig["thinkingConfig"] = mapOf("thinkingBudget" to 0)
-            } else if (!lowerModel.contains("live") && (lowerModel.contains("3-") || lowerModel.contains("gemini-3") || lowerModel.contains("3.8"))) {
-                generationConfig["thinkingConfig"] = mapOf("thinkingLevel" to "LOW")
             }
         }
 
@@ -732,7 +743,7 @@ class GeminiClient @Inject constructor(
         return result
     }
 
-    private fun sanitizeOpenApiSchema(raw: Map<String, Any?>?): Map<String, Any?> {
+    internal fun sanitizeOpenApiSchema(raw: Map<String, Any?>?): Map<String, Any?> {
         if (raw == null) {
             return mapOf("type" to "OBJECT", "properties" to emptyMap<String, Any?>())
         }

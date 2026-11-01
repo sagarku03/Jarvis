@@ -50,6 +50,7 @@ import com.example.services.RoutineTriggerReceiver
 import com.example.services.VoiceForegroundService
 import com.example.services.voice.SpeechRecognizerWrapper
 import com.example.services.voice.TtsEngineWrapper
+import com.example.services.voice.TtsManager
 import com.example.services.voice.VoiceSessionManager
 import com.example.tools.MemorySafetyFilter
 import com.example.domain.model.GeminiVoice
@@ -117,11 +118,11 @@ class SetupViewModel(
     val verificationSuccess: StateFlow<Boolean> = _verificationSuccess.asStateFlow()
 
     private val _availableModels = MutableStateFlow(
-        listOf("gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash")
+        listOf("gemini-3.8-flash", "gemini-3.8-live", "gemini-2.5-flash", "gemini-2.5-pro")
     )
     val availableModels: StateFlow<List<String>> = _availableModels.asStateFlow()
 
-    private val _selectedModelId = MutableStateFlow("gemini-2.5-flash")
+    private val _selectedModelId = MutableStateFlow("gemini-3.8-flash")
     val selectedModelId: StateFlow<String> = _selectedModelId.asStateFlow()
 
     private val _userNameInput = MutableStateFlow("")
@@ -283,8 +284,17 @@ class SetupViewModel(
             when (val result = geminiClient.verifyKeyAndListModels(candidate)) {
                 is KeyVerificationResult.Valid -> {
                     apiKeyStore.save(candidate)
-                    val models = result.availableModels
-                    val defaultModel = result.defaultModelId
+                    val rawModels = result.availableModels.filterNot { it.contains("2.0") }
+                    val models = buildList {
+                        add(GeminiClient.DEFAULT_TEXT_MODEL)
+                        add(GeminiClient.DEFAULT_VOICE_MODEL)
+                        addAll(rawModels)
+                    }.distinct()
+                    val defaultModel = if (models.contains(GeminiClient.DEFAULT_TEXT_MODEL)) {
+                        GeminiClient.DEFAULT_TEXT_MODEL
+                    } else {
+                        result.defaultModelId
+                    }
                     _availableModels.value = models
                     _selectedModelId.value = defaultModel
                     settingsRepository.setAvailableModels(models)
@@ -1038,7 +1048,8 @@ class SettingsViewModel(
     private val speechRecognizer: SpeechRecognizerWrapper,
     private val ttsEngine: TtsEngineWrapper,
     private val agentOrchestrator: AgentOrchestrator,
-    private val killSwitch: KillSwitch
+    private val killSwitch: KillSwitch,
+    private val ttsManager: TtsManager? = null
 ) : ViewModel() {
 
     val settings: StateFlow<UserSettings> = settingsRepository.settingsFlow
@@ -1124,11 +1135,17 @@ class SettingsViewModel(
                 is KeyVerificationResult.Valid -> {
                     apiKeyStore.save(trimmed)
                     _maskedApiKey.value = apiKeyStore.mask()
-                    val models = res.availableModels
+                    val rawModels = res.availableModels.filterNot { it.contains("2.0") }
+                    val models = buildList {
+                        add(GeminiClient.DEFAULT_TEXT_MODEL)
+                        add(GeminiClient.DEFAULT_VOICE_MODEL)
+                        addAll(rawModels)
+                    }.distinct()
                     settingsRepository.setAvailableModels(models)
+                    val currentSelected = settings.value.selectedModelId
                     val chosen = when {
-                        models.contains(settings.value.selectedModelId) -> settings.value.selectedModelId
-                        else -> res.defaultModelId
+                        !currentSelected.contains("2.0") && models.contains(currentSelected) -> currentSelected
+                        else -> GeminiClient.DEFAULT_TEXT_MODEL
                     }
                     settingsRepository.setSelectedModelId(chosen)
                     settingsRepository.setSetupComplete(true)
@@ -1255,6 +1272,49 @@ class SettingsViewModel(
                 }
             }
         )
+    }
+
+    fun testCurrentVoice() {
+        val current = settings.value
+        _voicePreviewStatus.value = "Testing voice audio..."
+        val voiceToPreview = if (current.voiceEngine == com.example.domain.model.VoiceEngineOption.NATURAL_GOOGLE) {
+            current.selectedLiveVoiceName.ifBlank { current.selectedVoiceName.ifBlank { "Aoede" } }
+        } else {
+            current.selectedVoiceName
+        }
+        val samplePhrase = "Namaste, main Jarvis hoon. Aapki kya madad kar sakta hoon?"
+        if (ttsManager != null) {
+            ttsManager.testVoice(
+                voiceName = voiceToPreview,
+                gender = current.selectedVoiceGender,
+                onComplete = {
+                    _voicePreviewStatus.value = "Preview completed"
+                    viewModelScope.launch {
+                        delay(2500L)
+                        if (_voicePreviewStatus.value == "Preview completed") {
+                            _voicePreviewStatus.value = null
+                        }
+                    }
+                }
+            )
+        } else {
+            voiceSessionManager.speakReply(
+                rawText = samplePhrase,
+                language = current.language,
+                selectedVoiceName = voiceToPreview,
+                speed = current.speechSpeed,
+                followUpListening = false,
+                onFinished = {
+                    _voicePreviewStatus.value = "Preview completed"
+                    viewModelScope.launch {
+                        delay(2500L)
+                        if (_voicePreviewStatus.value == "Preview completed") {
+                            _voicePreviewStatus.value = null
+                        }
+                    }
+                }
+            )
+        }
     }
 
     fun setAutoLearnEnabled(enabled: Boolean) {
@@ -1391,7 +1451,8 @@ class JarvisViewModelFactory(
                 speechRecognizer = container.speechRecognizerWrapper,
                 ttsEngine = container.ttsEngineWrapper,
                 agentOrchestrator = container.agentOrchestrator,
-                killSwitch = container.killSwitch
+                killSwitch = container.killSwitch,
+                ttsManager = container.ttsManager
             ) as T
 
             else -> throw IllegalArgumentException("Unknown ViewModel class: ${modelClass.name}")
