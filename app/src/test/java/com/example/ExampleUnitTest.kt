@@ -796,26 +796,6 @@ class ExampleUnitTest {
         override suspend fun exportAllAsJson(): String = "{}"
     }
 
-    private fun createTestOrchestrator(
-        backendRepository: AgentBackendRepository,
-        chatRepository: ChatRepository = FakeChatRepository(),
-        tools: Set<Tool>,
-        killSwitch: KillSwitch = KillSwitch()
-    ): AgentOrchestrator {
-        val memoryRepo = FakeMemoryRepository()
-        val logRepo = object : ActivityLogRepository {
-            override val logsFlow: Flow<List<ActivityLogEntry>> = MutableStateFlow(emptyList())
-            override suspend fun recordLog(entry: ActivityLogEntry) {}
-            override suspend fun clearAllLogs() {}
-        }
-        val routineRepo = object : RoutineRepository {
-            override val routinesFlow: Flow<List<RoutineItem>> = MutableStateFlow(emptyList())
-            override suspend fun upsertRoutine(routine: RoutineItem): Long = 1L
-            override suspend fun toggleRoutine(id: Long, enabled: Boolean) {}
-            override suspend fun deleteRoutine(id: Long) {}
-            override suspend fun markRoutineRun(id: Long, timestampMs: Long) {}
-            override suspend fun findMatchingVoiceRoutine(utterance: String): RoutineItem? = null
-        }
     private class FakeSettingsRepository(
         initialSettings: UserSettings = UserSettings()
     ) : SettingsRepository {
@@ -1858,7 +1838,7 @@ class ExampleUnitTest {
                         summaries: List<ConversationSummaryItem>,
                         onTextChunk: ((String) -> Unit)?,
                         isVoiceInput: Boolean
-                    ): AgentStepDecision = AgentStepDecision(assistantText = "OK")
+                    ): AgentStepDecision = AgentStepDecision(assistantText = "OK", toolCalls = emptyList())
                 },
                 tools = emptySet(),
                 killSwitch = killSwitch
