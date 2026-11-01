@@ -267,6 +267,36 @@ enum class VoiceEngineOption(val code: String, val labelEn: String) {
     }
 }
 
+enum class GeminiVoice(
+    val voiceName: String,
+    val gender: String,
+    val description: String,
+    val displayName: String = "$voiceName ($description)"
+) {
+    // Male voices
+    PUCK("Puck", "MALE", "Dynamic"),
+    CHARON("Charon", "MALE", "Deep"),
+    FENRIR("Fenrir", "MALE", "Authoritative"),
+
+    // Female voices
+    AOEDE("Aoede", "FEMALE", "Warm"),
+    KORE("Kore", "FEMALE", "Calm"),
+    LEDA("Leda", "FEMALE", "Clear");
+
+    companion object {
+        fun fromVoiceName(name: String): GeminiVoice =
+            entries.firstOrNull { it.voiceName.equals(name.trim(), ignoreCase = true) } ?: PUCK
+
+        fun getVoicesForGender(gender: String): List<GeminiVoice> {
+            val clean = gender.trim().uppercase()
+            return entries.filter { it.gender.equals(clean, ignoreCase = true) }
+        }
+
+        val MALE_VOICES = entries.filter { it.gender == "MALE" }
+        val FEMALE_VOICES = entries.filter { it.gender == "FEMALE" }
+    }
+}
+
 data class VoiceEvent(
     val timestampMs: Long = System.currentTimeMillis(),
     val type: String,
@@ -283,6 +313,10 @@ data class UserFacingError(
 data class UserSettings(
     val setupComplete: Boolean = false,
     val selectedModelId: String = "gemini-2.5-flash",
+    val selectedTextModelId: String = "gemini-3.8-flash",
+    val selectedVoiceModelId: String = "gemini-3.8-live",
+    val selectedVoiceGender: String = "MALE",
+    val selectedLiveVoiceName: String = "Puck",
     val availableModels: List<String> = listOf("gemini-2.5-flash"),
     val language: AppLanguage = AppLanguage.EN_IN,
     val voiceEngine: VoiceEngineOption = VoiceEngineOption.NATURAL_GOOGLE,

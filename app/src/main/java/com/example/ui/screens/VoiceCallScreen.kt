@@ -101,11 +101,13 @@ fun VoiceCallScreen(
         telephonyManager?.listen(listener, PhoneStateListener.LISTEN_CALL_STATE)
 
         // Automatically start listening on entry
+        viewModel.setInVoiceCall(true)
         viewModel.startPushToTalk()
 
         onDispose {
             activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             telephonyManager?.listen(listener, PhoneStateListener.LISTEN_NONE)
+            viewModel.setInVoiceCall(false)
             viewModel.cancelCurrentTurn()
         }
     }

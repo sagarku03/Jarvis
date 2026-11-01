@@ -65,11 +65,44 @@ class TtsManager @Inject constructor(
         private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
 
         val FRIENDLY_NATURAL_VOICES = listOf(
-            DeviceVoiceOption("Kore", "Voice 1 — Female", "en-US", 4, false),
-            DeviceVoiceOption("Puck", "Voice 2 — Male", "en-US", 4, false),
-            DeviceVoiceOption("Aoede", "Voice 3 — Warm Female", "en-US", 4, false),
-            DeviceVoiceOption("Fenrir", "Voice 4 — Warm Male", "en-US", 4, false)
+            // Male voices
+            DeviceVoiceOption("Puck", "Puck — Dynamic (Male)", "en-US", 4, false),
+            DeviceVoiceOption("Charon", "Charon — Deep (Male)", "en-US", 4, false),
+            DeviceVoiceOption("Fenrir", "Fenrir — Authoritative (Male)", "en-US", 4, false),
+            // Female voices
+            DeviceVoiceOption("Aoede", "Aoede — Warm (Female)", "en-US", 4, false),
+            DeviceVoiceOption("Kore", "Kore — Calm (Female)", "en-US", 4, false),
+            DeviceVoiceOption("Leda", "Leda — Clear (Female)", "en-US", 4, false)
         )
+
+        fun resolveLiveVoiceName(raw: String, gender: String = "MALE"): String {
+            val clean = raw.trim()
+            if (clean.isBlank() || clean.equals("default", ignoreCase = true)) {
+                return if (gender.equals("FEMALE", ignoreCase = true)) "Aoede" else "Puck"
+            }
+            val match = com.example.domain.model.GeminiVoice.entries.firstOrNull {
+                it.voiceName.equals(clean, ignoreCase = true) || clean.startsWith(it.voiceName, ignoreCase = true)
+            }
+            if (match != null) return match.voiceName
+
+            val lower = clean.lowercase(Locale.US)
+            return when {
+                lower.contains("charon") -> "Charon"
+                lower.contains("fenrir") -> "Fenrir"
+                lower.contains("puck") -> "Puck"
+                lower.contains("aoede") -> "Aoede"
+                lower.contains("leda") -> "Leda"
+                lower.contains("kore") -> "Kore"
+                lower.contains("male") && (lower.contains("deep") || lower.contains("2")) -> "Charon"
+                lower.contains("male") && lower.contains("authoritative") -> "Fenrir"
+                lower.contains("male") -> "Puck"
+                lower.contains("female") && (lower.contains("warm") || lower.contains("3")) -> "Aoede"
+                lower.contains("female") && lower.contains("clear") -> "Leda"
+                lower.contains("female") -> "Kore"
+                gender.equals("FEMALE", ignoreCase = true) -> "Aoede"
+                else -> "Puck"
+            }
+        }
 
         fun cleanTextForSpeech(raw: String): String {
             if (raw.isBlank()) return ""
@@ -253,15 +286,22 @@ class TtsManager @Inject constructor(
         val startTime = SystemClock.elapsedRealtime()
 
         if (canUseNatural) {
+            val chosenVoiceName = resolveLiveVoiceName(
+                raw = voiceName.ifBlank { settings.selectedLiveVoiceName }.ifBlank { settings.selectedVoiceName },
+                gender = settings.selectedVoiceGender
+            )
+            val chosenVoiceModel = settings.selectedVoiceModelId.ifBlank { "gemini-3.8-live" }
+
             val naturalSuccess = trySpeakGeminiAudio(
                 sentence = sentence,
-                voiceName = voiceName.ifBlank { "Kore" },
+                voiceName = chosenVoiceName,
+                modelId = chosenVoiceModel,
                 onAudioStarted = {
                     _isSpeaking.value = true
                     _isUsingFallbackChip.value = false
                     val latency = SystemClock.elapsedRealtime() - startTime
                     _firstAudioLatencyMs.value = latency
-                    DiagnosticsLogger.logVoiceEvent("TTS_PLAY", "Natural voice playing", latency)
+                    DiagnosticsLogger.logVoiceEvent("TTS_PLAY", "Natural voice ($chosenVoiceName / $chosenVoiceModel) playing", latency)
                     onAudioStarted()
                 }
             )
@@ -287,6 +327,7 @@ class TtsManager @Inject constructor(
     private suspend fun trySpeakGeminiAudio(
         sentence: String,
         voiceName: String,
+        modelId: String = "gemini-3.8-live",
         onAudioStarted: () -> Unit
     ): Boolean = withContext(Dispatchers.IO) {
         val apiKey = apiKeyStore.get()?.trim()
@@ -304,67 +345,85 @@ class TtsManager @Inject constructor(
             return@withContext true
         }
 
-        try {
-            val promptPayload = mapOf(
-                "contents" to listOf(
-                    mapOf(
-                        "role" to "user",
-                        "parts" to listOf(mapOf("text" to "Read this aloud clearly: $sentence"))
-                    )
-                ),
-                "generationConfig" to mapOf(
-                    "responseModalities" to listOf("AUDIO"),
-                    "speechConfig" to mapOf(
-                        "voiceConfig" to mapOf(
-                            "prebuiltVoiceConfig" to mapOf(
-                                "voiceName" to voiceName
-                            )
+        val promptPayload = mapOf(
+            "contents" to listOf(
+                mapOf(
+                    "role" to "user",
+                    "parts" to listOf(mapOf("text" to "Read this aloud clearly: $sentence"))
+                )
+            ),
+            "generationConfig" to mapOf(
+                "responseModalities" to listOf("AUDIO"),
+                "speechConfig" to mapOf(
+                    "voiceConfig" to mapOf(
+                        "prebuiltVoiceConfig" to mapOf(
+                            "voiceName" to voiceName
                         )
                     )
                 )
             )
+        )
 
-            val bodyJson = mapAdapter.toJson(promptPayload)
-            val request = Request.Builder()
-                .url("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent")
-                .header("x-goog-api-key", apiKey)
-                .header("Content-Type", "application/json")
-                .post(bodyJson.toRequestBody(JSON_MEDIA_TYPE))
-                .build()
+        val bodyJson = mapAdapter.toJson(promptPayload)
+        val initialModel = modelId.removePrefix("models/").trim().ifEmpty { "gemini-3.8-live" }
+        val modelsToTry = mutableListOf(initialModel)
+        if (!modelsToTry.contains("gemini-2.0-flash")) {
+            modelsToTry.add("gemini-2.0-flash")
+        }
 
-            okHttpClient.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) {
-                    return@withContext false
-                }
-                val rawBody = response.body?.string().orEmpty()
-                val parsed = runCatching { mapAdapter.fromJson(rawBody) }.getOrNull() ?: return@withContext false
-                val candidates = parsed["candidates"] as? List<*>
-                val firstCandidate = candidates?.firstOrNull() as? Map<*, *>
-                val content = firstCandidate?.get("content") as? Map<*, *>
-                val parts = (content?.get("parts") as? List<*>).orEmpty()
+        for (activeModel in modelsToTry) {
+            try {
+                val request = Request.Builder()
+                    .url("https://generativelanguage.googleapis.com/v1beta/models/$activeModel:generateContent")
+                    .header("x-goog-api-key", apiKey)
+                    .header("Content-Type", "application/json")
+                    .post(bodyJson.toRequestBody(JSON_MEDIA_TYPE))
+                    .build()
 
-                var pcmBytes: ByteArray? = null
-                for (p in parts) {
-                    val pMap = p as? Map<*, *> ?: continue
-                    val inlineData = pMap["inlineData"] as? Map<*, *>
-                    if (inlineData != null) {
-                        val dataBase64 = inlineData["data"] as? String
-                        if (!dataBase64.isNullOrEmpty()) {
-                            pcmBytes = Base64.decode(dataBase64, Base64.DEFAULT)
-                            break
+                val (success, is404) = okHttpClient.newCall(request).execute().use { response ->
+                    if (!response.isSuccessful) {
+                        return@use Pair(false, response.code == 404)
+                    }
+                    val rawBody = response.body?.string().orEmpty()
+                    val parsed = runCatching { mapAdapter.fromJson(rawBody) }.getOrNull() ?: return@use Pair(false, false)
+                    val candidates = parsed["candidates"] as? List<*>
+                    val firstCandidate = candidates?.firstOrNull() as? Map<*, *>
+                    val content = firstCandidate?.get("content") as? Map<*, *>
+                    val parts = (content?.get("parts") as? List<*>).orEmpty()
+
+                    var pcmBytes: ByteArray? = null
+                    for (p in parts) {
+                        val pMap = p as? Map<*, *> ?: continue
+                        val inlineData = pMap["inlineData"] as? Map<*, *>
+                        if (inlineData != null) {
+                            val dataBase64 = inlineData["data"] as? String
+                            if (!dataBase64.isNullOrEmpty()) {
+                                pcmBytes = Base64.decode(dataBase64, Base64.DEFAULT)
+                                break
+                            }
                         }
+                    }
+
+                    if (pcmBytes != null && pcmBytes.isNotEmpty()) {
+                        memoryPcmCache[cacheKey] = pcmBytes
+                        runCatching { File(diskCacheDir, "$cacheKey.pcm").writeBytes(pcmBytes) }
+                        playPcmAudio(pcmBytes, onAudioStarted)
+                        Pair(true, false)
+                    } else {
+                        Pair(false, false)
                     }
                 }
 
-                if (pcmBytes != null && pcmBytes.isNotEmpty()) {
-                    memoryPcmCache[cacheKey] = pcmBytes
-                    runCatching { File(diskCacheDir, "$cacheKey.pcm").writeBytes(pcmBytes) }
-                    playPcmAudio(pcmBytes, onAudioStarted)
+                if (success) {
                     return@withContext true
                 }
+                if (!is404) {
+                    break
+                }
+                DiagnosticsLogger.log("TtsManager", "Voice model $activeModel returned 404, falling back...")
+            } catch (_: Exception) {
+                break
             }
-        } catch (_: Exception) {
-            // Network error / timeout / quota
         }
         false
     }

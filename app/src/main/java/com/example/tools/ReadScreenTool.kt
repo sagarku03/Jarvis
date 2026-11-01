@@ -20,13 +20,30 @@ class ReadScreenTool @Inject constructor() : Tool {
             ?: return ToolExecutionResult(
                 toolName = name,
                 success = false,
-                outputEn = JarvisAccessibilityService.ACCESSIBILITY_DISABLED_EN
+                outputEn = JarvisAccessibilityService.ACCESSIBILITY_DISABLED_EN,
+                outputHi = "स्क्रीन पढ़ने के लिए एक्सेसिबिलिटी सर्विस सक्षम नहीं है। सेटिंग्स में जाकर सक्षम करें।"
             )
+
+        if (snap.isSecureScreen) {
+            return ToolExecutionResult(
+                toolName = name,
+                success = false,
+                outputEn = "Cannot read screen: current screen (${snap.packageName}) is marked secure or contains sensitive fields.",
+                outputHi = "स्क्रीन नहीं पढ़ सकते: वर्तमान स्क्रीन (${snap.packageName}) सुरक्षित या संवेदनशील है।"
+            )
+        }
+
+        val contentPreview = when {
+            snap.summaryText.isNotBlank() -> " Visible content: ${snap.summaryText.take(300)}"
+            snap.compactJson.isNotBlank() && snap.compactJson != "[]" -> " Nodes: ${snap.compactJson.take(300)}"
+            else -> ""
+        }
 
         return ToolExecutionResult(
             toolName = name,
             success = true,
-            outputEn = "Screen read from ${snap.packageName}: ${snap.structuredNodes.size} nodes (secure=${snap.isSecureScreen})."
+            outputEn = "Screen read from ${snap.packageName}: ${snap.structuredNodes.size} nodes.$contentPreview",
+            outputHi = "${snap.packageName} से स्क्रीन पढ़ी गई: ${snap.structuredNodes.size} तत्व मिले।$contentPreview"
         )
     }
 }

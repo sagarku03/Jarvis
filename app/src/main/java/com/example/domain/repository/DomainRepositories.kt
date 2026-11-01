@@ -23,7 +23,8 @@ interface AgentBackendRepository {
         screenContext: ScreenContextSnapshot?,
         language: AppLanguage,
         summaries: List<ConversationSummaryItem> = emptyList(),
-        onTextChunk: ((String) -> Unit)? = null
+        onTextChunk: ((String) -> Unit)? = null,
+        isVoiceInput: Boolean = false
     ): AgentStepDecision
 }
 
@@ -94,6 +95,10 @@ interface SettingsRepository {
     val settingsFlow: Flow<UserSettings>
     suspend fun setSetupComplete(complete: Boolean)
     suspend fun setSelectedModelId(modelId: String)
+    suspend fun setSelectedTextModelId(modelId: String)
+    suspend fun setSelectedVoiceModelId(modelId: String)
+    suspend fun setSelectedVoiceGender(gender: String)
+    suspend fun setSelectedLiveVoiceName(voiceName: String)
     suspend fun setAvailableModels(models: List<String>)
     suspend fun setLanguage(language: AppLanguage)
     suspend fun setSelectedVoiceName(voiceName: String)

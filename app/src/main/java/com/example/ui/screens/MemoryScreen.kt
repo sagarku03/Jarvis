@@ -93,6 +93,7 @@ fun MemoryScreen(viewModel: MemoryViewModel) {
     val selectedConversationMessages by viewModel.selectedConversationMessages.collectAsStateWithLifecycle()
     val memoryStatusBanner by viewModel.memoryStatusBanner.collectAsStateWithLifecycle()
     val isAddSheetOpen by viewModel.isAddSheetOpen.collectAsStateWithLifecycle()
+    val canUndoDelete by viewModel.canUndoDelete.collectAsStateWithLifecycle()
 
     var selectedTabIndex by remember { mutableIntStateOf(0) }
     var addSheetPromptText by remember { mutableStateOf("") }
@@ -273,6 +274,14 @@ fun MemoryScreen(viewModel: MemoryViewModel) {
                         color = AuroraColors.TextPrimary,
                         modifier = Modifier.weight(1f)
                     )
+                    if (canUndoDelete) {
+                        AuroraTextButton(
+                            text = stringResource(R.string.memory_undo_button),
+                            onClick = { viewModel.undoDeleteFact() },
+                            testTag = "memory_undo_delete_button"
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                    }
                     AuroraIconButton(
                         icon = Icons.Default.Close,
                         contentDescription = "Dismiss",

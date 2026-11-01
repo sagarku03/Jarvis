@@ -1,5 +1,6 @@
 package com.example.tools
 
+import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -22,7 +23,12 @@ class OpenUrlTool @Inject constructor(
     override suspend fun execute(args: Map<String, String>): ToolExecutionResult {
         val rawUrl = args["url"].orEmpty().trim()
         if (rawUrl.isBlank()) {
-            return ToolExecutionResult(name, false, "Parameter 'url' is required.")
+            return ToolExecutionResult(
+                toolName = name,
+                success = false,
+                outputEn = "Parameter 'url' is required.",
+                outputHi = "यूआरएल (url) आवश्यक है।"
+            )
         }
         val normalizedUrl = if (rawUrl.startsWith("http://") || rawUrl.startsWith("https://")) {
             rawUrl
@@ -34,13 +40,29 @@ class OpenUrlTool @Inject constructor(
             val intent = Intent(Intent.ACTION_VIEW, Uri.parse(normalizedUrl)).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
-            if (intent.resolveActivity(context.packageManager) == null) {
-                return ToolExecutionResult(name, false, "No browser app is available to open $normalizedUrl.")
+            try {
+                context.startActivity(intent)
+            } catch (e: ActivityNotFoundException) {
+                return ToolExecutionResult(
+                    toolName = name,
+                    success = false,
+                    outputEn = "No browser app is available to open $normalizedUrl.",
+                    outputHi = "$normalizedUrl खोलने के लिए कोई ब्राउज़र ऐप उपलब्ध नहीं है।"
+                )
             }
-            context.startActivity(intent)
-            ToolExecutionResult(name, true, "Opened $normalizedUrl in browser.")
+            ToolExecutionResult(
+                toolName = name,
+                success = true,
+                outputEn = "Opened $normalizedUrl in browser.",
+                outputHi = "ब्राउज़र में $normalizedUrl खोल दिया गया है।"
+            )
         } catch (e: Exception) {
-            ToolExecutionResult(name, false, "Failed to open URL: ${e.localizedMessage ?: "error"}.")
+            ToolExecutionResult(
+                toolName = name,
+                success = false,
+                outputEn = "Failed to open URL: ${e.localizedMessage ?: "error"}.",
+                outputHi = "यूआरएल खोलने में विफल: ${e.localizedMessage ?: "त्रुटि"}।"
+            )
         }
     }
 }

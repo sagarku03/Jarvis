@@ -73,6 +73,9 @@ class ExampleRobolectricTest {
         assertTrue(fullControlTools.any { it.name == "forget_memory" })
         assertTrue(fullControlTools.any { it.name == "search_memory" })
         assertTrue(fullControlTools.any { it.name == "search_history" })
+        assertTrue(fullControlTools.any { it.name == "adjust_volume" })
+        assertNotNull(app.appContainer.toolRegistry.findTool("set_volume"))
+        assertNotNull(app.appContainer.toolRegistry.findTool("adjust_volume"))
 
         val storeSafeTools = app.appContainer.toolRegistry.getAvailableTools(fullControlOverride = false)
         assertEquals(18, storeSafeTools.size)

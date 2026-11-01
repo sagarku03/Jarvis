@@ -260,7 +260,11 @@ fun HomeScreen(
                             AuroraTextButton(
                                 text = err.actionLabel,
                                 onClick = {
-                                    if (err.isOpenSettings) onOpenSettings()
+                                    if (err.isOpenSettings) {
+                                        onOpenSettings()
+                                    } else {
+                                        viewModel.retryLastCommand()
+                                    }
                                     viewModel.clearUserFacingError()
                                 },
                                 testTag = "home_error_action_button"
@@ -488,7 +492,7 @@ fun HomeScreen(
                         testTag = "home_send_button",
                         enabled = inputDraft.isNotBlank() && !isKilled,
                         activeFillColor = AuroraColors.Violet,
-                        onClick = { viewModel.sendTextCommand() }
+                        onClick = { viewModel.sendTextCommand(isVoice = false) }
                     )
                 }
             }

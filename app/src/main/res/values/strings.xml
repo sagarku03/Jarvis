@@ -202,7 +202,14 @@
     <string name="settings_speed_normal">Normal</string>
     <string name="settings_speed_fast">Fast</string>
     <string name="settings_voice_preview">Preview voice</string>
+    <string name="voice_preview_button">Preview Voice</string>
+    <string name="voice_preview_testing">Testing voice audio...</string>
+    <string name="voice_preview_completed">Preview completed</string>
     <string name="settings_voice_preview_phrase">Hi, I\'m Jarvis. How can I help you today?</string>
+
+    <!-- Dual Models -->
+    <string name="model_voice_title">Voice Conversation Model (Gemini 3.8 Live)</string>
+    <string name="model_text_title">Text Conversation Model (Gemini 3.8 Flash)</string>
 
     <string name="settings_section_language">Language</string>
     <string name="settings_language_desc">Speech recognition language</string>
@@ -293,6 +300,20 @@
     <string name="voice_using_phone_chip">Using phone voice</string>
     <string name="voice_test_button">Test voice</string>
     <string name="voice_get_better_voices">Get better phone voices</string>
+
+    <!-- Voice Gender selection -->
+    <string name="voice_gender_title">Voice Gender</string>
+    <string name="voice_gender_male">Male</string>
+    <string name="voice_gender_female">Female</string>
+
+    <!-- Gemini Live Voices -->
+    <string name="voice_male_puck">Puck (Dynamic)</string>
+    <string name="voice_male_charon">Charon (Deep)</string>
+    <string name="voice_male_fenrir">Fenrir (Authoritative)</string>
+    <string name="voice_female_aoede">Aoede (Warm)</string>
+    <string name="voice_female_kore">Kore (Calm)</string>
+    <string name="voice_female_leda">Leda (Clear)</string>
+
     <string name="voice_name_female_1">Voice 1 — Female</string>
     <string name="voice_name_male_1">Voice 2 — Male</string>
     <string name="voice_name_female_2">Voice 3 — Warm Female</string>

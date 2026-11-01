@@ -118,7 +118,7 @@ class VoiceForegroundService : Service() {
                 onFinalTranscript = { transcript ->
                     if (transcript.isNotBlank()) {
                         serviceScope.launch {
-                            val reply = container.agentOrchestrator.handleUserCommand(transcript)
+                            val reply = container.agentOrchestrator.handleUserCommand(transcript, isVoice = true)
                             if (!container.killSwitch.isKilled.value) {
                                 container.voiceSessionManager.speakReply(
                                     rawText = reply,

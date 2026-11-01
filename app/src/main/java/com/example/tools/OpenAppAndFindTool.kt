@@ -33,7 +33,8 @@ class OpenAppAndFindTool @Inject constructor(
             ?: return ToolExecutionResult(
                 toolName = name,
                 success = true,
-                outputEn = "${openResult.outputEn} (Accessibility service is not enabled to search for '$findText'.)"
+                outputEn = "${openResult.outputEn} (Accessibility service is not enabled to search for '$findText'.)",
+                outputHi = "${openResult.outputHi} ('$findText' खोजने के लिए एक्सेसिबिलिटी सेवा सक्षम नहीं है।)"
             )
 
         delay(450L)
@@ -47,13 +48,15 @@ class OpenAppAndFindTool @Inject constructor(
             ToolExecutionResult(
                 toolName = name,
                 success = true,
-                outputEn = "${openResult.outputEn} Found element '$label' at ${match.bounds}."
+                outputEn = "${openResult.outputEn} Found element '$label' at ${match.bounds}.",
+                outputHi = "${openResult.outputHi} स्क्रीन पर '$label' (${match.bounds}) मिल गया।"
             )
         } else {
             ToolExecutionResult(
                 toolName = name,
                 success = true,
-                outputEn = "${openResult.outputEn} Element '$findText' was not immediately visible on screen."
+                outputEn = "${openResult.outputEn} Element '$findText' was not immediately visible on screen.",
+                outputHi = "${openResult.outputHi} स्क्रीन पर '$findText' तुरंत नहीं दिखा।"
             )
         }
     }

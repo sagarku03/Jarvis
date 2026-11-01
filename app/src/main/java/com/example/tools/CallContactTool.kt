@@ -1,6 +1,7 @@
 package com.example.tools
 
 import android.Manifest
+import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -41,7 +42,8 @@ class CallContactTool @Inject constructor(
                 return ToolExecutionResult(
                     toolName = name,
                     success = false,
-                    outputEn = "Contact '$contactName' was not found in your Contacts or saved Memory facts."
+                    outputEn = "Contact '$contactName' was not found in your Contacts or saved Memory facts.",
+                    outputHi = "संपर्क '$contactName' आपके कॉन्टैक्ट्स या मेमोरी में नहीं मिला।"
                 )
             }
             if (candidates.size > 1) {
@@ -49,7 +51,8 @@ class CallContactTool @Inject constructor(
                 return ToolExecutionResult(
                     toolName = name,
                     success = false,
-                    outputEn = "Multiple contacts match '$contactName': $options. Please specify which one to call."
+                    outputEn = "Multiple contacts match '$contactName': $options. Please specify which one to call.",
+                    outputHi = "'$contactName' के लिए कई संपर्क मिले: $options। कृपया बताएं किसे कॉल करना है।"
                 )
             }
             candidates.first()
@@ -66,25 +69,41 @@ class CallContactTool @Inject constructor(
                 data = Uri.parse("tel:${Uri.encode(targetCandidate.phoneNumber)}")
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
-            if (callIntent.resolveActivity(context.packageManager) == null) {
-                return ToolExecutionResult(
-                    toolName = name,
-                    success = false,
-                    outputEn = "No phone dialer app is available on this device."
-                )
+
+            try {
+                context.startActivity(callIntent)
+            } catch (e: ActivityNotFoundException) {
+                if (action == Intent.ACTION_CALL) {
+                    val dialIntent = Intent(Intent.ACTION_DIAL).apply {
+                        data = Uri.parse("tel:${Uri.encode(targetCandidate.phoneNumber)}")
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    context.startActivity(dialIntent)
+                } else {
+                    return ToolExecutionResult(
+                        toolName = name,
+                        success = false,
+                        outputEn = "No phone dialer app is available on this device.",
+                        outputHi = "इस डिवाइस पर कोई फोन डायलर ऐप उपलब्ध नहीं है।"
+                    )
+                }
             }
-            context.startActivity(callIntent)
-            val verb = if (hasCallPerm) "Calling" else "Opened dialer for"
+
+            val verbEn = if (hasCallPerm) "Calling" else "Opened dialer for"
+            val verbHi = if (hasCallPerm) "कॉल की जा रही है" else "डायलर खोला गया"
+
             ToolExecutionResult(
                 toolName = name,
                 success = true,
-                outputEn = "$verb ${targetCandidate.displayName} (${targetCandidate.maskedNumber})."
+                outputEn = "$verbEn ${targetCandidate.displayName} (${targetCandidate.maskedNumber}).",
+                outputHi = "$verbHi: ${targetCandidate.displayName} (${targetCandidate.maskedNumber})।"
             )
         } catch (e: Exception) {
             ToolExecutionResult(
                 toolName = name,
                 success = false,
-                outputEn = "Failed to place call: ${e.localizedMessage}"
+                outputEn = "Failed to place call: ${e.localizedMessage ?: "error"}",
+                outputHi = "कॉल करने में विफल: ${e.localizedMessage ?: "त्रुटि"}"
             )
         }
     }

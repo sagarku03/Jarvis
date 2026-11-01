@@ -119,13 +119,19 @@ class SaveMemoryTool(
         val importance = args["importance"]?.toIntOrNull()?.coerceIn(1, 5) ?: 3
 
         if (key.isEmpty() || value.isEmpty()) {
-            return ToolExecutionResult(name, false, "Both 'key' and 'value' are required to save a memory.")
+            return ToolExecutionResult(
+                name,
+                false,
+                "Both 'key' and 'value' are required to save a memory.",
+                "मेमोरी में सहेजने के लिए 'key' और 'value' दोनों आवश्यक हैं।"
+            )
         }
         if (MemorySafetyFilter.isSensitiveOrForbidden(key, value)) {
             return ToolExecutionResult(
                 name,
                 false,
-                "Refused to save sensitive data (passwords, PINs, OTPs, or card numbers are never stored)."
+                "Refused to save sensitive data (passwords, PINs, OTPs, or card numbers are never stored).",
+                "संवेदनशील डेटा सहेजने से इनकार (पासवर्ड, पिन, ओटीपी या कार्ड नंबर कभी संग्रहीत नहीं किए जाते)।"
             )
         }
 
@@ -139,9 +145,19 @@ class SaveMemoryTool(
             pinned = category == "PROFILE" || category == "CONTACT"
         )
         return if (id > 0L) {
-            ToolExecutionResult(name, true, "Saved to memory: [$category] $key = $value")
+            ToolExecutionResult(
+                name,
+                true,
+                "Saved to memory: [$category] $key = $value",
+                "मेमोरी में सहेजा गया: [$category] $key = $value"
+            )
         } else {
-            ToolExecutionResult(name, false, "Could not save memory fact.")
+            ToolExecutionResult(
+                name,
+                false,
+                "Could not save memory fact.",
+                "मेमोरी तथ्य सहेजने में विफल।"
+            )
         }
     }
 }
@@ -169,13 +185,28 @@ class ForgetMemoryTool(
     override suspend fun execute(args: Map<String, String>): ToolExecutionResult {
         val query = (args["key_or_query"] ?: args["key"] ?: args["query"]).orEmpty().trim()
         if (query.isEmpty()) {
-            return ToolExecutionResult(name, false, "Please specify which memory key or topic to forget.")
+            return ToolExecutionResult(
+                name,
+                false,
+                "Please specify which memory key or topic to forget.",
+                "कृपया बताएं कि मेमोरी से कौन सी 'key' या विषय भुलाना है।"
+            )
         }
         val deletedCount = memoryRepository.deleteMemoriesByKeyOrQuery(query)
         return if (deletedCount > 0) {
-            ToolExecutionResult(name, true, "Forgot $deletedCount memory fact(s) matching '$query'.")
+            ToolExecutionResult(
+                name,
+                true,
+                "Forgot $deletedCount memory fact(s) matching '$query'.",
+                "'$query' से मेल खाते $deletedCount तथ्य भुला दिए गए।"
+            )
         } else {
-            ToolExecutionResult(name, false, "No saved memory facts matched '$query'.")
+            ToolExecutionResult(
+                name,
+                false,
+                "No saved memory facts matched '$query'.",
+                "'$query' से मेल खाता कोई सहेजा गया तथ्य नहीं मिला।"
+            )
         }
     }
 }
@@ -207,10 +238,20 @@ class SearchMemoryTool(
             memoryRepository.searchTopFactsForContext(query, limit = 10)
         }
         if (matches.isEmpty()) {
-            return ToolExecutionResult(name, true, "No matching facts found in memory for '$query'.")
+            return ToolExecutionResult(
+                name,
+                true,
+                "No matching facts found in memory for '$query'.",
+                "मेमोरी में '$query' से संबंधित कोई तथ्य नहीं मिला।"
+            )
         }
         val formatted = matches.joinToString("; ") { "[${it.category}] ${it.key} = ${it.value}" }
-        return ToolExecutionResult(name, true, "Found ${matches.size} fact(s): $formatted")
+        return ToolExecutionResult(
+            name,
+            true,
+            "Found ${matches.size} fact(s): $formatted",
+            "${matches.size} तथ्य मिले: $formatted"
+        )
     }
 }
 
@@ -240,16 +281,31 @@ class SearchHistoryTool(
     override suspend fun execute(args: Map<String, String>): ToolExecutionResult {
         val query = args["query"].orEmpty().trim()
         if (query.isEmpty()) {
-            return ToolExecutionResult(name, false, "Please provide a search query for conversation history.")
+            return ToolExecutionResult(
+                name,
+                false,
+                "Please provide a search query for conversation history.",
+                "बातचीत के इतिहास को खोजने के लिए कृपया 'query' प्रदान करें।"
+            )
         }
         val matches = chatRepository.searchMessages(query)
         if (matches.isEmpty()) {
-            return ToolExecutionResult(name, true, "No past messages matched '$query'.")
+            return ToolExecutionResult(
+                name,
+                true,
+                "No past messages matched '$query'.",
+                "'$query' से मेल खाता कोई पिछला संदेश नहीं मिला।"
+            )
         }
         val fmt = SimpleDateFormat("dd MMM HH:mm", Locale.US)
         val snippet = matches.take(8).joinToString(" | ") { msg ->
             "${fmt.format(Date(msg.timestampMs))} [${msg.role.name}]: ${msg.content.take(90)}"
         }
-        return ToolExecutionResult(name, true, "Past conversation matches: $snippet")
+        return ToolExecutionResult(
+            name,
+            true,
+            "Past conversation matches: $snippet",
+            "पिछली बातचीत के परिणाम: $snippet"
+        )
     }
 }

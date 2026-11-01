@@ -10,13 +10,19 @@ class ToolRegistry @Inject constructor(
 ) {
     fun getAllTools(): List<Tool> = tools.sortedBy { it.name }
 
-    fun getTool(name: String): Tool? =
-        tools.firstOrNull { it.name.equals(name.trim(), ignoreCase = true) }
+    fun getTool(name: String): Tool? {
+        val cleanName = name.trim()
+        return tools.firstOrNull { it.name.equals(cleanName, ignoreCase = true) }
+            ?: if (cleanName.equals("set_volume", ignoreCase = true)) tools.firstOrNull { it.name == "adjust_volume" } else null
+    }
 
     fun findTool(name: String, fullControlOverride: Boolean = BuildConfig.FULL_CONTROL_MODE): Tool? {
+        val cleanName = name.trim()
         return getAvailableTools(fullControlOverride).firstOrNull {
-            it.name.equals(name.trim(), ignoreCase = true)
-        }
+            it.name.equals(cleanName, ignoreCase = true)
+        } ?: if (cleanName.equals("set_volume", ignoreCase = true)) {
+            getAvailableTools(fullControlOverride).firstOrNull { it.name == "adjust_volume" }
+        } else null
     }
 
     fun getAvailableTools(fullControlOverride: Boolean = BuildConfig.FULL_CONTROL_MODE): List<Tool> {

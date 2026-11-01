@@ -74,7 +74,8 @@ class AgentBackendRepositoryImpl @Inject constructor(
         screenContext: ScreenContextSnapshot?,
         language: AppLanguage,
         summaries: List<ConversationSummaryItem>,
-        onTextChunk: ((String) -> Unit)?
+        onTextChunk: ((String) -> Unit)?,
+        isVoiceInput: Boolean
     ): AgentStepDecision {
         val lastUserMsg = messages.lastOrNull { it.role == MessageRole.USER }?.content.orEmpty()
         val lastNonUserIsTool = messages.lastOrNull()?.role == MessageRole.TOOL
@@ -91,6 +92,11 @@ class AgentBackendRepositoryImpl @Inject constructor(
         }
 
         val settings = settingsRepository.settingsFlow.first()
+        val chosenModelId = if (isVoiceInput) {
+            settings.selectedVoiceModelId.ifBlank { "gemini-3.8-live" }
+        } else {
+            settings.selectedTextModelId.ifBlank { "gemini-3.8-flash" }
+        }
         val pinnedFacts = memories.filter {
             it.pinned || it.category == MemoryCategory.PROFILE.name || it.category == MemoryCategory.CONTACT.name
         }
@@ -116,7 +122,7 @@ class AgentBackendRepositoryImpl @Inject constructor(
         return try {
             val result = if (onTextChunk != null) {
                 geminiClient.streamGenerateContent(
-                    modelId = settings.selectedModelId,
+                    modelId = chosenModelId,
                     systemInstruction = systemInstruction,
                     messages = messages,
                     tools = tools,
@@ -124,7 +130,7 @@ class AgentBackendRepositoryImpl @Inject constructor(
                 )
             } else {
                 geminiClient.generateContent(
-                    modelId = settings.selectedModelId,
+                    modelId = chosenModelId,
                     systemInstruction = systemInstruction,
                     messages = messages,
                     tools = tools
@@ -885,6 +891,10 @@ class SettingsRepositoryImpl @Inject constructor(
     private object Keys {
         val SETUP_COMPLETE = booleanPreferencesKey("setup_complete")
         val SELECTED_MODEL_ID = stringPreferencesKey("selected_model_id")
+        val SELECTED_TEXT_MODEL_ID = stringPreferencesKey("selected_text_model_id")
+        val SELECTED_VOICE_MODEL_ID = stringPreferencesKey("selected_voice_model_id")
+        val SELECTED_VOICE_GENDER = stringPreferencesKey("selected_voice_gender")
+        val SELECTED_LIVE_VOICE_NAME = stringPreferencesKey("selected_live_voice_name")
         val AVAILABLE_MODELS = stringPreferencesKey("available_models_delimited")
         val LANGUAGE = stringPreferencesKey("language_code")
         val SELECTED_VOICE_NAME = stringPreferencesKey("selected_voice_name")
@@ -923,6 +933,10 @@ class SettingsRepositoryImpl @Inject constructor(
         UserSettings(
             setupComplete = prefs[Keys.SETUP_COMPLETE] ?: false,
             selectedModelId = prefs[Keys.SELECTED_MODEL_ID] ?: rawModels.first(),
+            selectedTextModelId = prefs[Keys.SELECTED_TEXT_MODEL_ID] ?: "gemini-3.8-flash",
+            selectedVoiceModelId = prefs[Keys.SELECTED_VOICE_MODEL_ID] ?: "gemini-3.8-live",
+            selectedVoiceGender = prefs[Keys.SELECTED_VOICE_GENDER] ?: "MALE",
+            selectedLiveVoiceName = prefs[Keys.SELECTED_LIVE_VOICE_NAME] ?: "Puck",
             availableModels = rawModels,
             language = AppLanguage.fromCode(prefs[Keys.LANGUAGE] ?: AppLanguage.EN_IN.code),
             voiceEngine = com.example.domain.model.VoiceEngineOption.fromCode(
@@ -957,6 +971,22 @@ class SettingsRepositoryImpl @Inject constructor(
 
     override suspend fun setSelectedModelId(modelId: String) {
         dataStore.edit { it[Keys.SELECTED_MODEL_ID] = modelId.removePrefix("models/").trim() }
+    }
+
+    override suspend fun setSelectedTextModelId(modelId: String) {
+        dataStore.edit { it[Keys.SELECTED_TEXT_MODEL_ID] = modelId.removePrefix("models/").trim() }
+    }
+
+    override suspend fun setSelectedVoiceModelId(modelId: String) {
+        dataStore.edit { it[Keys.SELECTED_VOICE_MODEL_ID] = modelId.removePrefix("models/").trim() }
+    }
+
+    override suspend fun setSelectedVoiceGender(gender: String) {
+        dataStore.edit { it[Keys.SELECTED_VOICE_GENDER] = gender.trim().uppercase() }
+    }
+
+    override suspend fun setSelectedLiveVoiceName(voiceName: String) {
+        dataStore.edit { it[Keys.SELECTED_LIVE_VOICE_NAME] = voiceName.trim() }
     }
 
     override suspend fun setAvailableModels(models: List<String>) {

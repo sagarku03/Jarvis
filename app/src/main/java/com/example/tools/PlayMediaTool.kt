@@ -1,5 +1,6 @@
 package com.example.tools
 
+import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -22,7 +23,12 @@ class PlayMediaTool @Inject constructor(
     override suspend fun execute(args: Map<String, String>): ToolExecutionResult {
         val query = args["query"].orEmpty().trim()
         if (query.isBlank()) {
-            return ToolExecutionResult(name, false, "Parameter 'query' is required to play media.")
+            return ToolExecutionResult(
+                toolName = name,
+                success = false,
+                outputEn = "Parameter 'query' is required to play media.",
+                outputHi = "मीडिया चलाने के लिए 'query' आवश्यक है।"
+            )
         }
 
         return try {
@@ -33,29 +39,51 @@ class PlayMediaTool @Inject constructor(
             ).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
-            if (intent.resolveActivity(context.packageManager) == null) {
-                return ToolExecutionResult(name, false, "No YouTube or browser app is available to play '$query'.")
+            try {
+                context.startActivity(intent)
+            } catch (e: ActivityNotFoundException) {
+                return ToolExecutionResult(
+                    toolName = name,
+                    success = false,
+                    outputEn = "No YouTube or browser app is available to play '$query'.",
+                    outputHi = "'$query' चलाने के लिए कोई यूट्यूब या ब्राउज़र ऐप उपलब्ध नहीं है।"
+                )
             }
-            context.startActivity(intent)
 
             // If accessibility is enabled, auto-click the first video result
             val isAccessibilityOn = com.example.services.JarvisAccessibilityService.isConnected.value
             if (isAccessibilityOn) {
-                val (clicked, msg) = com.example.services.JarvisAccessibilityService.clickFirstYouTubeVideoResult()
+                val (clicked, _) = com.example.services.JarvisAccessibilityService.clickFirstYouTubeVideoResult()
                 if (clicked) {
-                    ToolExecutionResult(toolName = name, success = true, outputEn = "Playing '$query' on YouTube.")
+                    ToolExecutionResult(
+                        toolName = name,
+                        success = true,
+                        outputEn = "Playing '$query' on YouTube.",
+                        outputHi = "यूट्यूब पर '$query' चलाया जा रहा है।"
+                    )
                 } else {
-                    ToolExecutionResult(toolName = name, success = true, outputEn = "Opened results for '$query' on YouTube.")
+                    ToolExecutionResult(
+                        toolName = name,
+                        success = true,
+                        outputEn = "Opened results for '$query' on YouTube.",
+                        outputHi = "यूट्यूब पर '$query' के परिणाम खोल दिए गए हैं।"
+                    )
                 }
             } else {
                 ToolExecutionResult(
                     toolName = name,
                     success = true,
-                    outputEn = "I opened the results — enable Accessibility to let me play it automatically."
+                    outputEn = "Opened results for '$query' on YouTube. Enable Accessibility to play automatically.",
+                    outputHi = "यूट्यूब पर '$query' के परिणाम खोल दिए गए हैं। स्वचालित रूप से चलाने के लिए एक्सेसिबिलिटी सक्षम करें।"
                 )
             }
         } catch (e: Exception) {
-            ToolExecutionResult(toolName = name, success = false, outputEn = "Failed to play media: ${e.localizedMessage ?: "error"}.")
+            ToolExecutionResult(
+                toolName = name,
+                success = false,
+                outputEn = "Failed to play media: ${e.localizedMessage ?: "error"}.",
+                outputHi = "मीडिया चलाने में विफल: ${e.localizedMessage ?: "त्रुटि"}।"
+            )
         }
     }
 }

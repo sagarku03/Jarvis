@@ -1,5 +1,6 @@
 package com.example.tools
 
+import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -38,7 +39,8 @@ class WhatsAppTelegramTool @Inject constructor(
                 return ToolExecutionResult(
                     toolName = name,
                     success = false,
-                    outputEn = "Contact '$contactName' was not found in Contacts or Memory."
+                    outputEn = "Contact '$contactName' was not found in Contacts or Memory.",
+                    outputHi = "संपर्क '$contactName' कॉन्टैक्ट्स या मेमोरी में नहीं मिला।"
                 )
             }
             candidates.first()
@@ -54,26 +56,29 @@ class WhatsAppTelegramTool @Inject constructor(
                     putExtra(Intent.EXTRA_TEXT, messageBody)
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 }
-                val resolvedIntent = if (tgIntent.resolveActivity(context.packageManager) != null) {
-                    tgIntent
-                } else {
-                    Intent(
+                try {
+                    context.startActivity(tgIntent)
+                } catch (e: ActivityNotFoundException) {
+                    val webIntent = Intent(
                         Intent.ACTION_VIEW,
                         Uri.parse("https://t.me/+$cleanDigits")
                     ).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+                    try {
+                        context.startActivity(webIntent)
+                    } catch (e2: Exception) {
+                        return ToolExecutionResult(
+                            toolName = name,
+                            success = false,
+                            outputEn = "Telegram is not installed on this device.",
+                            outputHi = "इस डिवाइस पर टेलीग्राम ऐप इंस्टॉल नहीं है।"
+                        )
+                    }
                 }
-                if (resolvedIntent.resolveActivity(context.packageManager) == null) {
-                    return ToolExecutionResult(
-                        toolName = name,
-                        success = false,
-                        outputEn = "Telegram is not installed on this device."
-                    )
-                }
-                context.startActivity(resolvedIntent)
                 ToolExecutionResult(
                     toolName = name,
                     success = true,
                     outputEn = "Opened Telegram for ${targetCandidate.displayName} (${targetCandidate.maskedNumber}): \"$messageBody\"",
+                    outputHi = "${targetCandidate.displayName} (${targetCandidate.maskedNumber}) के लिए टेलीग्राम खोला गया: \"$messageBody\"",
                     requiresFollowUpScreenRead = true
                 )
             } else {
@@ -84,25 +89,28 @@ class WhatsAppTelegramTool @Inject constructor(
                     setPackage("com.whatsapp")
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 }
-                val finalIntent = if (waIntent.resolveActivity(context.packageManager) != null) {
-                    waIntent
-                } else {
-                    Intent(Intent.ACTION_VIEW, waUri).apply {
+                try {
+                    context.startActivity(waIntent)
+                } catch (e: ActivityNotFoundException) {
+                    val fallbackIntent = Intent(Intent.ACTION_VIEW, waUri).apply {
                         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     }
+                    try {
+                        context.startActivity(fallbackIntent)
+                    } catch (e2: Exception) {
+                        return ToolExecutionResult(
+                            toolName = name,
+                            success = false,
+                            outputEn = "WhatsApp is not installed on this device.",
+                            outputHi = "इस डिवाइस पर व्हाट्सएप ऐप इंस्टॉल नहीं है।"
+                        )
+                    }
                 }
-                if (finalIntent.resolveActivity(context.packageManager) == null) {
-                    return ToolExecutionResult(
-                        toolName = name,
-                        success = false,
-                        outputEn = "WhatsApp is not installed on this device."
-                    )
-                }
-                context.startActivity(finalIntent)
                 ToolExecutionResult(
                     toolName = name,
                     success = true,
                     outputEn = "Opened WhatsApp chat for ${targetCandidate.displayName} (${targetCandidate.maskedNumber}): \"$messageBody\"",
+                    outputHi = "${targetCandidate.displayName} (${targetCandidate.maskedNumber}) के लिए व्हाट्सएप चैट खोली गई: \"$messageBody\"",
                     requiresFollowUpScreenRead = true
                 )
             }
@@ -110,7 +118,8 @@ class WhatsAppTelegramTool @Inject constructor(
             ToolExecutionResult(
                 toolName = name,
                 success = false,
-                outputEn = "Failed to open $appChoice: ${e.localizedMessage}"
+                outputEn = "Failed to open $appChoice: ${e.localizedMessage ?: "error"}",
+                outputHi = "$appChoice खोलने में विफल: ${e.localizedMessage ?: "त्रुटि"}"
             )
         }
     }

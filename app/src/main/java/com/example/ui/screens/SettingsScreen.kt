@@ -72,6 +72,7 @@ import com.example.R
 import com.example.data.local.DiagnosticsLogger
 import com.example.domain.model.AppLanguage
 import com.example.domain.model.ConfirmationLevel
+import com.example.domain.model.GeminiVoice
 import com.example.ui.components.AuroraBackground
 import com.example.ui.components.AuroraDangerButton
 import com.example.ui.components.AuroraGlassCard
@@ -100,17 +101,29 @@ fun SettingsScreen(
     val availableVoices by viewModel.availableDeviceVoices.collectAsStateWithLifecycle()
     val diagnostics by viewModel.voiceDiagnostics.collectAsStateWithLifecycle()
 
+    val voicePreviewStatus by viewModel.voicePreviewStatus.collectAsStateWithLifecycle()
+
     var showChangeKeyDialog by remember { mutableStateOf(false) }
     var newKeyInput by remember { mutableStateOf("") }
     var showRemoveKeyDialog by remember { mutableStateOf(false) }
     var showPrivacyPolicyDialog by remember { mutableStateOf(false) }
     var showWakeConsentDialog by remember { mutableStateOf(false) }
     var advancedExpanded by remember { mutableStateOf(false) }
-    var modelDropdownExpanded by remember { mutableStateOf(false) }
-    var voiceDropdownExpanded by remember { mutableStateOf(false) }
+    var voiceModelDropdownExpanded by remember { mutableStateOf(false) }
+    var textModelDropdownExpanded by remember { mutableStateOf(false) }
+    var liveVoiceDropdownExpanded by remember { mutableStateOf(false) }
+    var phoneVoiceDropdownExpanded by remember { mutableStateOf(false) }
 
-    val friendlyModelNames = mapOf(
-        "gemini-2.5-flash" to "Gemini 2.5 Flash (Fast, Recommended)",
+    val friendlyVoiceModelNames = mapOf(
+        "gemini-3.8-live" to "Gemini 3.8 Live (Recommended for Voice)",
+        "gemini-2.0-flash" to "Gemini 2.0 Flash (Fast Live Audio)",
+        "gemini-2.5-flash" to "Gemini 2.5 Flash",
+        "gemini-2.5-pro" to "Gemini 2.5 Pro"
+    )
+
+    val friendlyTextModelNames = mapOf(
+        "gemini-3.8-flash" to "Gemini 3.8 Flash (Recommended for Text)",
+        "gemini-2.5-flash" to "Gemini 2.5 Flash (Fast)",
         "gemini-2.5-pro" to "Gemini 2.5 Pro (Smarter, Slower)",
         "gemini-2.0-flash" to "Gemini 2.0 Flash"
     )
@@ -212,9 +225,9 @@ fun SettingsScreen(
 
                     Spacer(modifier = Modifier.height(14.dp))
 
-                    // Model Selection
+                    // Voice Model Selection
                     Text(
-                        text = stringResource(R.string.setup_model_label),
+                        text = stringResource(R.string.model_voice_title),
                         style = MaterialTheme.typography.bodySmall,
                         color = AuroraColors.TextSecondary
                     )
@@ -227,13 +240,13 @@ fun SettingsScreen(
                                 .clip(RoundedCornerShape(10.dp))
                                 .background(AuroraColors.GlassFillLight)
                                 .border(1.dp, AuroraColors.GlassBorder, RoundedCornerShape(10.dp))
-                                .clickable { modelDropdownExpanded = true }
+                                .clickable { voiceModelDropdownExpanded = true }
                                 .padding(horizontal = 12.dp, vertical = 10.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            val displayName = friendlyModelNames[settings.selectedModelId]
-                                ?: settings.selectedModelId
+                            val displayName = friendlyVoiceModelNames[settings.selectedVoiceModelId]
+                                ?: settings.selectedVoiceModelId
                             Text(
                                 text = displayName,
                                 style = MaterialTheme.typography.bodySmall,
@@ -242,19 +255,62 @@ fun SettingsScreen(
                             Icon(Icons.Default.ArrowDropDown, null, tint = AuroraColors.Lavender)
                         }
                         DropdownMenu(
-                            expanded = modelDropdownExpanded,
-                            onDismissRequest = { modelDropdownExpanded = false }
+                            expanded = voiceModelDropdownExpanded,
+                            onDismissRequest = { voiceModelDropdownExpanded = false }
                         ) {
-                            val models = settings.availableModels.ifEmpty {
-                                listOf("gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash")
-                            }
-                            models.forEach { model ->
-                                val label = friendlyModelNames[model] ?: model
+                            friendlyVoiceModelNames.forEach { (modelId, label) ->
                                 DropdownMenuItem(
                                     text = { Text(label) },
                                     onClick = {
-                                        viewModel.setSelectedModelId(model)
-                                        modelDropdownExpanded = false
+                                        viewModel.setSelectedVoiceModelId(modelId)
+                                        voiceModelDropdownExpanded = false
+                                    }
+                                )
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // Text Model Selection
+                    Text(
+                        text = stringResource(R.string.model_text_title),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = AuroraColors.TextSecondary
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    Box(modifier = Modifier.fillMaxWidth()) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(AuroraColors.GlassFillLight)
+                                .border(1.dp, AuroraColors.GlassBorder, RoundedCornerShape(10.dp))
+                                .clickable { textModelDropdownExpanded = true }
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            val displayName = friendlyTextModelNames[settings.selectedTextModelId]
+                                ?: settings.selectedTextModelId
+                            Text(
+                                text = displayName,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = AuroraColors.TextPrimary
+                            )
+                            Icon(Icons.Default.ArrowDropDown, null, tint = AuroraColors.Lavender)
+                        }
+                        DropdownMenu(
+                            expanded = textModelDropdownExpanded,
+                            onDismissRequest = { textModelDropdownExpanded = false }
+                        ) {
+                            friendlyTextModelNames.forEach { (modelId, label) ->
+                                DropdownMenuItem(
+                                    text = { Text(label) },
+                                    onClick = {
+                                        viewModel.setSelectedTextModelId(modelId)
+                                        textModelDropdownExpanded = false
                                     }
                                 )
                             }
@@ -308,20 +364,51 @@ fun SettingsScreen(
 
                     Spacer(modifier = Modifier.height(12.dp))
 
-                    Text(
-                        text = stringResource(R.string.settings_voice_title),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = AuroraColors.TextSecondary
-                    )
-                    Spacer(modifier = Modifier.height(6.dp))
-
                     if (settings.voiceEngine == com.example.domain.model.VoiceEngineOption.NATURAL_GOOGLE) {
-                        val naturalVoiceLabels = listOf(
-                            stringResource(R.string.voice_name_female_1),
-                            stringResource(R.string.voice_name_male_1),
-                            stringResource(R.string.voice_name_female_2),
-                            stringResource(R.string.voice_name_male_2)
+                        // Voice Gender Selection
+                        Text(
+                            text = stringResource(R.string.voice_gender_title),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = AuroraColors.TextSecondary
                         )
+                        Spacer(modifier = Modifier.height(6.dp))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            FilterChip(
+                                selected = settings.selectedVoiceGender.equals("MALE", ignoreCase = true),
+                                onClick = { viewModel.setSelectedVoiceGender("MALE") },
+                                label = { Text(stringResource(R.string.voice_gender_male)) },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = AuroraColors.Violet,
+                                    selectedLabelColor = AuroraColors.TextPrimary
+                                )
+                            )
+                            FilterChip(
+                                selected = settings.selectedVoiceGender.equals("FEMALE", ignoreCase = true),
+                                onClick = { viewModel.setSelectedVoiceGender("FEMALE") },
+                                label = { Text(stringResource(R.string.voice_gender_female)) },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = AuroraColors.Violet,
+                                    selectedLabelColor = AuroraColors.TextPrimary
+                                )
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        Text(
+                            text = stringResource(R.string.settings_voice_title),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = AuroraColors.TextSecondary
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+
+                        val availableLiveVoices = GeminiVoice.getVoicesForGender(settings.selectedVoiceGender)
+                        val currentLiveVoice = GeminiVoice.fromVoiceName(settings.selectedLiveVoiceName)
+
                         Box(modifier = Modifier.fillMaxWidth()) {
                             Row(
                                 modifier = Modifier
@@ -329,35 +416,42 @@ fun SettingsScreen(
                                     .clip(RoundedCornerShape(10.dp))
                                     .background(AuroraColors.GlassFillLight)
                                     .border(1.dp, AuroraColors.GlassBorder, RoundedCornerShape(10.dp))
-                                    .clickable { voiceDropdownExpanded = true }
+                                    .clickable { liveVoiceDropdownExpanded = true }
                                     .padding(horizontal = 12.dp, vertical = 10.dp),
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                val currentVoice = settings.selectedVoiceName.ifBlank { naturalVoiceLabels.first() }
                                 Text(
-                                    text = currentVoice,
+                                    text = currentLiveVoice.displayName,
                                     style = MaterialTheme.typography.bodySmall,
                                     color = AuroraColors.TextPrimary
                                 )
                                 Icon(Icons.Default.ArrowDropDown, null, tint = AuroraColors.Lavender)
                             }
                             DropdownMenu(
-                                expanded = voiceDropdownExpanded,
-                                onDismissRequest = { voiceDropdownExpanded = false }
+                                expanded = liveVoiceDropdownExpanded,
+                                onDismissRequest = { liveVoiceDropdownExpanded = false }
                             ) {
-                                naturalVoiceLabels.forEach { vLabel ->
+                                availableLiveVoices.forEach { voice ->
                                     DropdownMenuItem(
-                                        text = { Text(vLabel) },
+                                        text = { Text(voice.displayName) },
                                         onClick = {
-                                            viewModel.setSelectedVoiceName(vLabel)
-                                            voiceDropdownExpanded = false
+                                            viewModel.setSelectedLiveVoiceName(voice.voiceName)
+                                            liveVoiceDropdownExpanded = false
                                         }
                                     )
                                 }
                             }
                         }
                     } else {
+                        // Phone Voice Engine
+                        Text(
+                            text = stringResource(R.string.settings_voice_title),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = AuroraColors.TextSecondary
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+
                         Box(modifier = Modifier.fillMaxWidth()) {
                             Row(
                                 modifier = Modifier
@@ -365,7 +459,7 @@ fun SettingsScreen(
                                     .clip(RoundedCornerShape(10.dp))
                                     .background(AuroraColors.GlassFillLight)
                                     .border(1.dp, AuroraColors.GlassBorder, RoundedCornerShape(10.dp))
-                                    .clickable { voiceDropdownExpanded = true }
+                                    .clickable { phoneVoiceDropdownExpanded = true }
                                     .padding(horizontal = 12.dp, vertical = 10.dp),
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
@@ -379,14 +473,14 @@ fun SettingsScreen(
                                 Icon(Icons.Default.ArrowDropDown, null, tint = AuroraColors.Lavender)
                             }
                             DropdownMenu(
-                                expanded = voiceDropdownExpanded,
-                                onDismissRequest = { voiceDropdownExpanded = false }
+                                expanded = phoneVoiceDropdownExpanded,
+                                onDismissRequest = { phoneVoiceDropdownExpanded = false }
                             ) {
                                 DropdownMenuItem(
                                     text = { Text(stringResource(R.string.voice_name_device_default)) },
                                     onClick = {
                                         viewModel.setSelectedVoiceName("")
-                                        voiceDropdownExpanded = false
+                                        phoneVoiceDropdownExpanded = false
                                     }
                                 )
                                 availableVoices.forEachIndexed { idx, v ->
@@ -394,7 +488,7 @@ fun SettingsScreen(
                                         text = { Text(v.displayName.ifBlank { "Voice ${idx + 1}" }) },
                                         onClick = {
                                             viewModel.setSelectedVoiceName(v.id)
-                                            voiceDropdownExpanded = false
+                                            phoneVoiceDropdownExpanded = false
                                         }
                                     )
                                 }
@@ -407,11 +501,26 @@ fun SettingsScreen(
                             text = stringResource(R.string.voice_get_better_voices),
                             onClick = {
                                 runCatching {
-                                    context.startActivity(
-                                        Intent("com.android.settings.TTS_SETTINGS").apply {
-                                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                        }
-                                    )
+                                    val ttsIntent = Intent("com.android.settings.TTS_SETTINGS").apply {
+                                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                    }
+                                    if (ttsIntent.resolveActivity(context.packageManager) != null) {
+                                        context.startActivity(ttsIntent)
+                                    } else {
+                                        context.startActivity(
+                                            Intent(Settings.ACTION_SETTINGS).apply {
+                                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                            }
+                                        )
+                                    }
+                                }.onFailure {
+                                    runCatching {
+                                        context.startActivity(
+                                            Intent(Settings.ACTION_SETTINGS).apply {
+                                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                            }
+                                        )
+                                    }
                                 }
                             }
                         )
@@ -457,11 +566,31 @@ fun SettingsScreen(
                     Spacer(modifier = Modifier.height(10.dp))
 
                     AuroraSecondaryButton(
-                        text = stringResource(R.string.settings_voice_preview),
+                        text = stringResource(R.string.voice_preview_button),
                         icon = Icons.Default.PlayArrow,
-                        onClick = { viewModel.previewVoice("Hi, I'm Jarvis. How can I help you today?") },
+                        onClick = { viewModel.previewVoice(context.getString(R.string.settings_voice_preview_phrase)) },
                         modifier = Modifier.widthIn(min = 88.dp)
                     )
+
+                    if (voicePreviewStatus != null) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.CheckCircle,
+                                contentDescription = null,
+                                tint = AuroraColors.Lavender,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Text(
+                                text = voicePreviewStatus.orEmpty(),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = AuroraColors.Lavender
+                            )
+                        }
+                    }
                 }
             }
 

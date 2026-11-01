@@ -1,5 +1,6 @@
 package com.example.tools
 
+import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.provider.Settings
@@ -15,25 +16,83 @@ class OpenAppTool @Inject constructor(
 ) : Tool {
 
     override val name: String = "open_app"
-    override val description: String = "Launch an installed Android application by app name or package name."
+    override val description: String = "Launch an installed Android application by app name, package name, or system settings intent action."
     override val jsonSchema: String = """{"type":"object","properties":{"appName":{"type":"string"},"app_name":{"type":"string"}}}"""
     override val riskLevel: RiskLevel = RiskLevel.LOW
 
     override suspend fun execute(args: Map<String, String>): ToolExecutionResult {
         val targetApp = (args["appName"] ?: args["app_name"]).orEmpty().trim()
         if (targetApp.isBlank()) {
-            return ToolExecutionResult(name, false, "Parameter 'appName' is required.")
+            return ToolExecutionResult(
+                toolName = name,
+                success = false,
+                outputEn = "Parameter 'appName' is required.",
+                outputHi = "ऐप का नाम (appName) आवश्यक है।"
+            )
         }
 
         return try {
-            if (targetApp.equals("settings", ignoreCase = true) ||
-                targetApp.equals("system settings", ignoreCase = true)
-            ) {
-                val settingsIntent = Intent(Settings.ACTION_SETTINGS).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            // Check direct settings actions
+            if (targetApp.startsWith("android.settings.") || targetApp.startsWith("android.intent.action.")) {
+                val intent = Intent(targetApp).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+                try {
+                    context.startActivity(intent)
+                    val label = targetApp.substringAfterLast(".").replace("_", " ").lowercase()
+                    return ToolExecutionResult(
+                        toolName = name,
+                        success = true,
+                        outputEn = "Opened $label.",
+                        outputHi = "$label खोल दिया गया है।"
+                    )
+                } catch (e: ActivityNotFoundException) {
+                    val fallbackIntent = Intent(Settings.ACTION_SETTINGS).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    context.startActivity(fallbackIntent)
+                    return ToolExecutionResult(
+                        toolName = name,
+                        success = true,
+                        outputEn = "Opened System Settings.",
+                        outputHi = "सिस्टम सेटिंग्स खोल दी गई हैं।"
+                    )
                 }
-                context.startActivity(settingsIntent)
-                return ToolExecutionResult(name, true, "Opened System Settings.")
+            }
+
+            val lowerTarget = targetApp.lowercase()
+            when {
+                lowerTarget == "settings" || lowerTarget == "system settings" -> {
+                    context.startActivity(Intent(Settings.ACTION_SETTINGS).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    })
+                    return ToolExecutionResult(
+                        toolName = name,
+                        success = true,
+                        outputEn = "Opened System Settings.",
+                        outputHi = "सिस्टम सेटिंग्स खोल दी गई हैं।"
+                    )
+                }
+                lowerTarget == "wifi" || lowerTarget == "wi-fi" || lowerTarget == "wifi settings" -> {
+                    context.startActivity(Intent(Settings.ACTION_WIFI_SETTINGS).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    })
+                    return ToolExecutionResult(
+                        toolName = name,
+                        success = true,
+                        outputEn = "Opened Wi-Fi Settings.",
+                        outputHi = "वाई-फाई सेटिंग्स खोल दी गई हैं।"
+                    )
+                }
+                lowerTarget == "bluetooth" || lowerTarget == "bluetooth settings" -> {
+                    context.startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    })
+                    return ToolExecutionResult(
+                        toolName = name,
+                        success = true,
+                        outputEn = "Opened Bluetooth Settings.",
+                        outputHi = "ब्लूटूथ सेटिंग्स खोल दी गई हैं।"
+                    )
+                }
             }
 
             val pm = context.packageManager
@@ -41,7 +100,12 @@ class OpenAppTool @Inject constructor(
             if (directLaunch != null) {
                 directLaunch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 context.startActivity(directLaunch)
-                return ToolExecutionResult(name, true, "Opened $targetApp.")
+                return ToolExecutionResult(
+                    toolName = name,
+                    success = true,
+                    outputEn = "Opened $targetApp.",
+                    outputHi = "$targetApp खोल दिया गया है।"
+                )
             }
 
             val mainIntent = Intent(Intent.ACTION_MAIN, null).apply {
@@ -60,13 +124,28 @@ class OpenAppTool @Inject constructor(
                 if (launchIntent != null) {
                     launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     context.startActivity(launchIntent)
-                    return ToolExecutionResult(name, true, "Opened $appLabel.")
+                    return ToolExecutionResult(
+                        toolName = name,
+                        success = true,
+                        outputEn = "Opened $appLabel.",
+                        outputHi = "$appLabel खोल दिया गया है।"
+                    )
                 }
             }
 
-            ToolExecutionResult(name, false, "App '$targetApp' is not installed on this device.")
+            ToolExecutionResult(
+                toolName = name,
+                success = false,
+                outputEn = "App '$targetApp' is not installed on this device.",
+                outputHi = "ऐप '$targetApp' इस डिवाइस पर इंस्टॉल नहीं है।"
+            )
         } catch (e: Exception) {
-            ToolExecutionResult(name, false, "Failed to open '$targetApp': ${e.localizedMessage ?: "error"}.")
+            ToolExecutionResult(
+                toolName = name,
+                success = false,
+                outputEn = "Failed to open '$targetApp': ${e.localizedMessage ?: "error"}.",
+                outputHi = "'$targetApp' खोलने में विफल: ${e.localizedMessage ?: "त्रुटि"}।"
+            )
         }
     }
 }

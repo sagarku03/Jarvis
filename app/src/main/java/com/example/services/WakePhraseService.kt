@@ -71,7 +71,12 @@ class WakePhraseService : Service() {
             addAction(Intent.ACTION_SCREEN_OFF)
             addAction(Intent.ACTION_SCREEN_ON)
         }
-        registerReceiver(screenReceiver, filter)
+        ContextCompat.registerReceiver(
+            this,
+            screenReceiver,
+            filter,
+            ContextCompat.RECEIVER_NOT_EXPORTED
+        )
 
         val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager
         isScreenInteractive = pm?.isInteractive ?: true

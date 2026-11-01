@@ -1,5 +1,6 @@
 package com.example.tools
 
+import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -37,7 +38,8 @@ class SendSmsTool @Inject constructor(
                 return ToolExecutionResult(
                     toolName = name,
                     success = false,
-                    outputEn = "Contact '$contactName' was not found in Contacts or Memory."
+                    outputEn = "Contact '$contactName' was not found in Contacts or Memory.",
+                    outputHi = "संपर्क '$contactName' आपके कॉन्टैक्ट्स या मेमोरी में नहीं मिला।"
                 )
             }
             candidates.first()
@@ -49,24 +51,28 @@ class SendSmsTool @Inject constructor(
                 putExtra("sms_body", messageBody)
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
-            if (smsIntent.resolveActivity(context.packageManager) == null) {
+            try {
+                context.startActivity(smsIntent)
+            } catch (e: ActivityNotFoundException) {
                 return ToolExecutionResult(
                     toolName = name,
                     success = false,
-                    outputEn = "No SMS messaging app is installed on this device."
+                    outputEn = "No SMS messaging app is installed on this device.",
+                    outputHi = "इस डिवाइस पर कोई एसएमएस मैसेजिंग ऐप इंस्टॉल नहीं है।"
                 )
             }
-            context.startActivity(smsIntent)
             ToolExecutionResult(
                 toolName = name,
                 success = true,
-                outputEn = "Prepared SMS to ${targetCandidate.displayName} (${targetCandidate.maskedNumber}): \"$messageBody\""
+                outputEn = "Prepared SMS to ${targetCandidate.displayName} (${targetCandidate.maskedNumber}): \"$messageBody\"",
+                outputHi = "${targetCandidate.displayName} (${targetCandidate.maskedNumber}) के लिए एसएमएस तैयार किया गया: \"$messageBody\""
             )
         } catch (e: Exception) {
             ToolExecutionResult(
                 toolName = name,
                 success = false,
-                outputEn = "Failed to prepare SMS: ${e.localizedMessage}"
+                outputEn = "Failed to prepare SMS: ${e.localizedMessage ?: "error"}",
+                outputHi = "एसएमएस तैयार करने में विफल: ${e.localizedMessage ?: "त्रुटि"}"
             )
         }
     }

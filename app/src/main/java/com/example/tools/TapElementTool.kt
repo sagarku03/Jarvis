@@ -12,7 +12,7 @@ class TapElementTool @Inject constructor() : Tool {
 
     override val name: String = "tap_element"
     override val description: String = "Tap a visible UI element by text/description or screen coordinates using Accessibility."
-    override val jsonSchema: String = """{"type":"object","properties":{"targetText":{"type":"string"},"text":{"type":"string"},"x":{"type":"number"},"y":{"type":"number"}}}"""
+    override val jsonSchema: String = """{"type":"object","properties":{"targetText":{"type":"string"},"text":{"type":"string"},"target_text":{"type":"string"},"x":{"type":"number"},"y":{"type":"number"}}}"""
     override val riskLevel: RiskLevel = RiskLevel.MEDIUM
     override val requiresFullControlMode: Boolean = true
 
@@ -21,6 +21,16 @@ class TapElementTool @Inject constructor() : Tool {
         val x = args["x"]?.toFloatOrNull()
         val y = args["y"]?.toFloatOrNull()
         val (ok, msg) = JarvisAccessibilityService.executeTap(targetText, x, y)
-        return ToolExecutionResult(toolName = name, success = ok, outputEn = msg)
+        val hiMsg = if (ok) {
+            if (targetText != null) "'$targetText' पर सफलतापूर्वक टैप किया गया।"
+            else "निर्देशित स्थान पर टैप किया गया।"
+        } else {
+            if (msg.contains(JarvisAccessibilityService.ACCESSIBILITY_DISABLED_EN)) {
+                "टैप करने के लिए एक्सेसिबिलिटी सर्विस सक्षम नहीं है। कृपया सेटिंग्स में जाकर इसे सक्षम करें।"
+            } else {
+                "टैप करने में विफल: $msg"
+            }
+        }
+        return ToolExecutionResult(toolName = name, success = ok, outputEn = msg, outputHi = hiMsg)
     }
 }

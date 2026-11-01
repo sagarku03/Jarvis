@@ -148,7 +148,8 @@ class AgentOrchestrator @Inject constructor(
 
     suspend fun handleUserCommand(
         userText: String,
-        screenContext: ScreenContextSnapshot? = null
+        screenContext: ScreenContextSnapshot? = null,
+        isVoice: Boolean = false
     ): String = coroutineScope {
         val settings = settingsRepository.settingsFlow.first()
 
@@ -171,7 +172,7 @@ class AgentOrchestrator @Inject constructor(
             val routineOutputs = mutableListOf<String>()
             for (subCommand in matchedRoutine.actionsJson) {
                 if (killSwitch.isKilled.value) break
-                val subReply = executeSingleTurnWithBudget(subCommand, screenContext)
+                val subReply = executeSingleTurnWithBudget(subCommand, screenContext, isVoice)
                 routineOutputs.add(subReply)
             }
             val combined = "Routine '${matchedRoutine.title}' completed: ${routineOutputs.joinToString(" | ")}"
@@ -179,21 +180,23 @@ class AgentOrchestrator @Inject constructor(
             return@coroutineScope combined
         }
 
-        executeSingleTurnWithBudget(userText, screenContext)
+        executeSingleTurnWithBudget(userText, screenContext, isVoice)
     }
 
     private class TurnTimeoutException(message: String) : Exception(message)
 
     private suspend fun executeSingleTurnWithBudget(
         userText: String,
-        initialScreenContext: ScreenContextSnapshot?
+        initialScreenContext: ScreenContextSnapshot?,
+        isVoice: Boolean = false
     ): String = coroutineScope {
         var finalOutput = ""
         val job = launch {
             try {
                 finalOutput = executeCommandInternal(
                     userText = userText,
-                    initialScreenContext = initialScreenContext
+                    initialScreenContext = initialScreenContext,
+                    isVoice = isVoice
                 )
             } catch (_: TurnTimeoutException) {
                 val timeoutMsg = "That took too long. Try again."
@@ -221,7 +224,8 @@ class AgentOrchestrator @Inject constructor(
 
     private suspend fun executeCommandInternal(
         userText: String,
-        initialScreenContext: ScreenContextSnapshot?
+        initialScreenContext: ScreenContextSnapshot?,
+        isVoice: Boolean = false
     ): String = coroutineScope {
         val settings = settingsRepository.settingsFlow.first()
         var activeExecutionElapsedMs = 0L
@@ -427,7 +431,8 @@ class AgentOrchestrator @Inject constructor(
                                 )
                             }
                         }
-                    }
+                    },
+                    isVoiceInput = isVoice
                 )
 
                 val remainingSentence = sentenceBuffer.toString().trim()

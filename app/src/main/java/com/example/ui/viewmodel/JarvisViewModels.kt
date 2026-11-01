@@ -52,7 +52,9 @@ import com.example.services.voice.SpeechRecognizerWrapper
 import com.example.services.voice.TtsEngineWrapper
 import com.example.services.voice.VoiceSessionManager
 import com.example.tools.MemorySafetyFilter
+import com.example.domain.model.GeminiVoice
 import java.util.Locale
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -60,6 +62,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -428,6 +431,16 @@ class HomeViewModel(
         }
     }
 
+    private var lastCommand: String? = null
+    private var lastCommandIsVoice: Boolean = false
+
+    private val _isInVoiceCall = MutableStateFlow(false)
+    val isInVoiceCall: StateFlow<Boolean> = _isInVoiceCall.asStateFlow()
+
+    fun setInVoiceCall(inCall: Boolean) {
+        _isInVoiceCall.value = inCall
+    }
+
     fun toggleInputVisibility() {
         _isInputVisible.value = !_isInputVisible.value
     }
@@ -452,38 +465,55 @@ class HomeViewModel(
         agentOrchestrator.clearUserFacingError()
     }
 
+    fun retryLastCommand() {
+        agentOrchestrator.clearUserFacingError()
+        lastCommand?.let { cmd ->
+            sendTextCommand(cmd, isVoice = lastCommandIsVoice)
+        }
+    }
+
     fun startNewChat() {
         viewModelScope.launch {
             voiceSessionManager.stopAll()
+            agentOrchestrator.cancelActiveTurn()
             chatRepository.startNewConversation()
             _sttStatusBanner.value = null
             agentOrchestrator.clearUserFacingError()
+            agentOrchestrator.clearKeyRejectedBanner()
+            agentOrchestrator.setOrbState(AssistantOrbState.IDLE)
         }
     }
 
     fun sendSampleCommand(command: String) {
-        sendTextCommand(command)
+        sendTextCommand(command, isVoice = false)
     }
 
-    fun sendTextCommand(textOverride: String? = null) {
+    fun sendTextCommand(textOverride: String? = null, isVoice: Boolean = false) {
         val text = (textOverride ?: _inputDraft.value).trim()
         if (text.isEmpty()) return
         if (textOverride == null) {
             _inputDraft.value = ""
         }
+        lastCommand = text
+        lastCommandIsVoice = isVoice
         _sttStatusBanner.value = null
         agentOrchestrator.clearUserFacingError()
 
         viewModelScope.launch {
             voiceSessionManager.enterThinking()
-            val reply = agentOrchestrator.handleUserCommand(text)
+            val reply = agentOrchestrator.handleUserCommand(text, isVoice = isVoice)
             val currentSettings = settings.value
             if (!killSwitch.isKilled.value) {
-                val wantsFollowUp = reply.trimEnd().endsWith("?")
+                val wantsFollowUp = _isInVoiceCall.value || reply.trimEnd().endsWith("?")
+                val activeVoice = if (currentSettings.voiceEngine == com.example.domain.model.VoiceEngineOption.NATURAL_GOOGLE) {
+                    currentSettings.selectedLiveVoiceName.ifBlank { currentSettings.selectedVoiceName.ifBlank { "Aoede" } }
+                } else {
+                    currentSettings.selectedVoiceName
+                }
                 voiceSessionManager.speakReply(
                     rawText = reply,
                     language = currentSettings.language,
-                    selectedVoiceName = currentSettings.selectedVoiceName,
+                    selectedVoiceName = activeVoice,
                     speed = currentSettings.speechSpeed,
                     followUpListening = wantsFollowUp,
                     onFollowUpReady = {
@@ -510,7 +540,7 @@ class HomeViewModel(
                     language = lang,
                     onFinalTranscript = { transcript ->
                         if (transcript.isNotBlank()) {
-                            sendTextCommand(transcript)
+                            sendTextCommand(transcript, isVoice = true)
                         }
                     },
                     onError = { friendlyError ->
@@ -537,7 +567,7 @@ class HomeViewModel(
             language = lang,
             onFinalTranscript = { transcript ->
                 if (transcript.isNotBlank()) {
-                    sendTextCommand(transcript)
+                    sendTextCommand(transcript, isVoice = true)
                 }
             },
             onError = { friendlyError ->
@@ -715,13 +745,52 @@ class MemoryViewModel(
         }
     }
 
+    private var lastDeletedFact: MemoryFact? = null
+    private val _canUndoDelete = MutableStateFlow(false)
+    val canUndoDelete: StateFlow<Boolean> = _canUndoDelete.asStateFlow()
+
     fun deleteMemory(id: Long) {
         viewModelScope.launch {
+            val fact = memories.value.firstOrNull { it.id == id }
+            if (fact != null) {
+                lastDeletedFact = fact
+                _canUndoDelete.value = true
+                _memoryStatusBanner.value = "Memory '${fact.key}' deleted"
+            }
             memoryRepository.deleteMemory(id)
         }
     }
 
+    fun deleteMemory(fact: MemoryFact) {
+        lastDeletedFact = fact
+        _canUndoDelete.value = true
+        _memoryStatusBanner.value = "Memory '${fact.key}' deleted"
+        viewModelScope.launch {
+            memoryRepository.deleteMemory(fact.id)
+        }
+    }
+
+    fun undoDeleteFact() {
+        val factToRestore = lastDeletedFact ?: return
+        lastDeletedFact = null
+        _canUndoDelete.value = false
+        viewModelScope.launch {
+            memoryRepository.upsertMemory(
+                category = factToRestore.category,
+                key = factToRestore.key,
+                value = factToRestore.value,
+                source = factToRestore.source,
+                confidence = factToRestore.confidence,
+                importance = factToRestore.importance,
+                pinned = factToRestore.pinned
+            )
+            _memoryStatusBanner.value = "Restored '${factToRestore.key}'"
+        }
+    }
+
     fun undoLearnedFact(fact: MemoryFact) {
+        lastDeletedFact = fact
+        _canUndoDelete.value = true
         viewModelScope.launch {
             memoryRepository.deleteMemory(fact.id)
             _memoryStatusBanner.value = "Undid learned fact: ${fact.key}"
@@ -1109,6 +1178,41 @@ class SettingsViewModel(
         }
     }
 
+    fun setSelectedTextModelId(modelId: String) {
+        viewModelScope.launch {
+            settingsRepository.setSelectedTextModelId(modelId)
+        }
+    }
+
+    fun setSelectedVoiceModelId(modelId: String) {
+        viewModelScope.launch {
+            settingsRepository.setSelectedVoiceModelId(modelId)
+        }
+    }
+
+    private val _voicePreviewStatus = MutableStateFlow<String?>(null)
+    val voicePreviewStatus: StateFlow<String?> = _voicePreviewStatus.asStateFlow()
+
+    fun setSelectedVoiceGender(gender: String) {
+        viewModelScope.launch {
+            settingsRepository.setSelectedVoiceGender(gender)
+            val currentLive = settings.value.selectedLiveVoiceName
+            val validVoices = GeminiVoice.getVoicesForGender(gender)
+            if (validVoices.none { it.voiceName.equals(currentLive, ignoreCase = true) }) {
+                val defaultVoice = validVoices.firstOrNull()?.voiceName ?: if (gender.equals("FEMALE", ignoreCase = true)) "Aoede" else "Puck"
+                settingsRepository.setSelectedLiveVoiceName(defaultVoice)
+                settingsRepository.setSelectedVoiceName(defaultVoice)
+            }
+        }
+    }
+
+    fun setSelectedLiveVoiceName(voiceName: String) {
+        viewModelScope.launch {
+            settingsRepository.setSelectedLiveVoiceName(voiceName)
+            settingsRepository.setSelectedVoiceName(voiceName)
+        }
+    }
+
     fun setLanguage(language: AppLanguage) {
         viewModelScope.launch {
             settingsRepository.setLanguage(language)
@@ -1127,14 +1231,29 @@ class SettingsViewModel(
         }
     }
 
-    fun previewVoice(samplePhrase: String) {
+    fun previewVoice(samplePhrase: String = "Hi, I'm Jarvis. How can I help you today?") {
         val current = settings.value
+        _voicePreviewStatus.value = "Testing voice audio..."
+        val voiceToPreview = if (current.voiceEngine == com.example.domain.model.VoiceEngineOption.NATURAL_GOOGLE) {
+            current.selectedLiveVoiceName.ifBlank { current.selectedVoiceName.ifBlank { "Aoede" } }
+        } else {
+            current.selectedVoiceName
+        }
         voiceSessionManager.speakReply(
             rawText = samplePhrase,
             language = current.language,
-            selectedVoiceName = current.selectedVoiceName,
+            selectedVoiceName = voiceToPreview,
             speed = current.speechSpeed,
-            followUpListening = false
+            followUpListening = false,
+            onComplete = {
+                _voicePreviewStatus.value = "Preview completed"
+                viewModelScope.launch {
+                    delay(2500L)
+                    if (_voicePreviewStatus.value == "Preview completed") {
+                        _voicePreviewStatus.value = null
+                    }
+                }
+            }
         )
     }
 

@@ -19,6 +19,15 @@ class ScrollTool @Inject constructor() : Tool {
     override suspend fun execute(args: Map<String, String>): ToolExecutionResult {
         val direction = args["direction"] ?: "down"
         val (ok, msg) = JarvisAccessibilityService.executeScroll(direction)
-        return ToolExecutionResult(toolName = name, success = ok, outputEn = msg)
+        val hiMsg = if (ok) {
+            if (direction == "up") "स्क्रीन ऊपर स्क्रॉल की गई।" else "स्क्रीन नीचे स्क्रॉल की गई।"
+        } else {
+            if (msg.contains(JarvisAccessibilityService.ACCESSIBILITY_DISABLED_EN)) {
+                "स्क्रॉल करने के लिए एक्सेसिबिलिटी सर्विस सक्षम नहीं है। सेटिंग्स में जाकर सक्षम करें।"
+            } else {
+                "स्क्रॉल करने में विफल: $msg"
+            }
+        }
+        return ToolExecutionResult(toolName = name, success = ok, outputEn = msg, outputHi = hiMsg)
     }
 }

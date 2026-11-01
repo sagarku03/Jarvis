@@ -18,6 +18,7 @@ import com.example.domain.model.ConfirmationLevel
 import com.example.domain.model.ConversationItem
 import com.example.domain.model.ConversationSummaryItem
 import com.example.domain.model.DeviceVoiceOption
+import com.example.domain.model.GeminiVoice
 import com.example.domain.model.MemoryCategory
 import com.example.domain.model.MemoryFact
 import com.example.domain.model.MessageRole
@@ -534,7 +535,8 @@ class ExampleUnitTest {
                 screenContext: ScreenContextSnapshot?,
                 language: AppLanguage,
                 summaries: List<ConversationSummaryItem>,
-                onTextChunk: ((String) -> Unit)?
+                onTextChunk: ((String) -> Unit)?,
+                isVoiceInput: Boolean
             ): AgentStepDecision {
                 return AgentStepDecision(
                     assistantText = null,
@@ -809,6 +811,10 @@ class ExampleUnitTest {
             override val settingsFlow: Flow<UserSettings> = MutableStateFlow(UserSettings())
             override suspend fun setSetupComplete(complete: Boolean) {}
             override suspend fun setSelectedModelId(modelId: String) {}
+            override suspend fun setSelectedTextModelId(modelId: String) {}
+            override suspend fun setSelectedVoiceModelId(modelId: String) {}
+            override suspend fun setSelectedVoiceGender(gender: String) {}
+            override suspend fun setSelectedLiveVoiceName(voiceName: String) {}
             override suspend fun setAvailableModels(models: List<String>) {}
             override suspend fun setLanguage(language: AppLanguage) {}
             override suspend fun setSelectedVoiceName(voiceName: String) {}
@@ -964,5 +970,250 @@ class ExampleUnitTest {
         assertEquals("Instagram", com.example.domain.agent.LocalIntentRouter.resolveAppName("insta", null))
         assertEquals("Google Pay", com.example.domain.agent.LocalIntentRouter.resolveAppName("gpay", null))
         assertEquals("Telegram", com.example.domain.agent.LocalIntentRouter.resolveAppName("tg", null))
+    }
+
+    @Test
+    fun dualModelArchitecture_defaultsAndFriendlyNames() {
+        assertEquals("gemini-3.8-flash", GeminiClient.DEFAULT_TEXT_MODEL)
+        assertEquals("gemini-3.8-live", GeminiClient.DEFAULT_VOICE_MODEL)
+
+        assertEquals("Gemini 3.8 Live (Voice)", GeminiClient.friendlyModelName("gemini-3.8-live"))
+        assertEquals("Gemini 3.8 Live (Voice)", GeminiClient.friendlyModelName("models/gemini-3.8-live"))
+        assertEquals("Gemini 3.8 Flash (Text)", GeminiClient.friendlyModelName("gemini-3.8-flash"))
+        assertEquals("Gemini 3.8 Flash (Text)", GeminiClient.friendlyModelName("models/gemini-3.8-flash"))
+
+        val settings = UserSettings()
+        assertEquals("gemini-3.8-flash", settings.selectedTextModelId)
+        assertEquals("gemini-3.8-live", settings.selectedVoiceModelId)
+        assertEquals("MALE", settings.selectedVoiceGender)
+        assertEquals("Puck", settings.selectedLiveVoiceName)
+    }
+
+    @Test
+    fun dualModelArchitecture_fallbackChainGracefullyResolves() {
+        // Fallback chain: 3.8 -> 2.0-flash -> 2.5-flash -> 2.5-flash-lite
+        assertEquals("gemini-2.0-flash", GeminiClient.getNextFallbackModel("gemini-3.8-live"))
+        assertEquals("gemini-2.0-flash", GeminiClient.getNextFallbackModel("gemini-3.8-flash"))
+        assertEquals("gemini-2.5-flash", GeminiClient.getNextFallbackModel("gemini-2.0-flash"))
+        assertEquals("gemini-2.5-flash-lite", GeminiClient.getNextFallbackModel("gemini-2.5-flash"))
+    }
+
+    @Test
+    fun geminiVoice_supportsMaleAndFemaleVoices() {
+        // Male: Puck (Dynamic), Charon (Deep), Fenrir (Authoritative)
+        assertEquals(GeminiVoice.PUCK, GeminiVoice.fromVoiceName("Puck"))
+        assertEquals("MALE", GeminiVoice.PUCK.gender)
+        assertEquals("Dynamic", GeminiVoice.PUCK.description)
+
+        assertEquals(GeminiVoice.CHARON, GeminiVoice.fromVoiceName("Charon"))
+        assertEquals("MALE", GeminiVoice.CHARON.gender)
+        assertEquals("Deep", GeminiVoice.CHARON.description)
+
+        assertEquals(GeminiVoice.FENRIR, GeminiVoice.fromVoiceName("Fenrir"))
+        assertEquals("MALE", GeminiVoice.FENRIR.gender)
+        assertEquals("Authoritative", GeminiVoice.FENRIR.description)
+
+        // Female: Aoede (Warm), Kore (Calm), Leda (Clear)
+        assertEquals(GeminiVoice.AOEDE, GeminiVoice.fromVoiceName("Aoede"))
+        assertEquals("FEMALE", GeminiVoice.AOEDE.gender)
+        assertEquals("Warm", GeminiVoice.AOEDE.description)
+
+        assertEquals(GeminiVoice.KORE, GeminiVoice.fromVoiceName("Kore"))
+        assertEquals("FEMALE", GeminiVoice.KORE.gender)
+        assertEquals("Calm", GeminiVoice.KORE.description)
+
+        assertEquals(GeminiVoice.LEDA, GeminiVoice.fromVoiceName("Leda"))
+        assertEquals("FEMALE", GeminiVoice.LEDA.gender)
+        assertEquals("Clear", GeminiVoice.LEDA.description)
+
+        val maleVoices = GeminiVoice.getVoicesForGender("MALE")
+        assertEquals(3, maleVoices.size)
+        assertTrue(maleVoices.any { it.voiceName == "Puck" })
+        assertTrue(maleVoices.any { it.voiceName == "Charon" })
+        assertTrue(maleVoices.any { it.voiceName == "Fenrir" })
+
+        val femaleVoices = GeminiVoice.getVoicesForGender("FEMALE")
+        assertEquals(3, femaleVoices.size)
+        assertTrue(femaleVoices.any { it.voiceName == "Aoede" })
+        assertTrue(femaleVoices.any { it.voiceName == "Kore" })
+        assertTrue(femaleVoices.any { it.voiceName == "Leda" })
+    }
+
+    @Test
+    fun ttsManager_resolvesLiveVoiceNameAccurately() {
+        assertEquals("Puck", com.example.services.voice.TtsManager.resolveLiveVoiceName("Puck", "MALE"))
+        assertEquals("Charon", com.example.services.voice.TtsManager.resolveLiveVoiceName("Charon", "MALE"))
+        assertEquals("Fenrir", com.example.services.voice.TtsManager.resolveLiveVoiceName("Fenrir", "MALE"))
+        assertEquals("Aoede", com.example.services.voice.TtsManager.resolveLiveVoiceName("Aoede", "FEMALE"))
+        assertEquals("Kore", com.example.services.voice.TtsManager.resolveLiveVoiceName("Kore", "FEMALE"))
+        assertEquals("Leda", com.example.services.voice.TtsManager.resolveLiveVoiceName("Leda", "FEMALE"))
+
+        // Legacy / fallback checks
+        assertEquals("Puck", com.example.services.voice.TtsManager.resolveLiveVoiceName("", "MALE"))
+        assertEquals("Aoede", com.example.services.voice.TtsManager.resolveLiveVoiceName("", "FEMALE"))
+    }
+
+    @Test
+    fun volumeTool_verifiesAdjustVolumeNameParametersAndBilingualOutput() = runBlocking {
+        val dummyContext = ContextWrapper(null)
+        val volTool = com.example.tools.VolumeTool(dummyContext)
+        assertEquals("adjust_volume", volTool.name)
+        assertTrue(volTool.jsonSchema.contains("direction"))
+        assertTrue(volTool.jsonSchema.contains("level_percent"))
+
+        // Null audio manager in plain context should return graceful bilingual failure without throwing
+        val res = volTool.execute(mapOf("direction" to "up"))
+        assertFalse(res.success)
+        assertTrue(res.outputEn.isNotBlank())
+        assertTrue(res.outputHi.isNotBlank())
+    }
+
+    @Test
+    fun allTools_returnNonEmptyBilingualEnglishAndHindiOutputs() = runBlocking {
+        val dummyContext = ContextWrapper(null)
+        val memoryRepo = FakeMemoryRepository()
+        val resolver = ContactsResolver(dummyContext, memoryRepo)
+
+        // 1. CallContactTool
+        val callRes = com.example.tools.CallContactTool(dummyContext, resolver).execute(mapOf("contact_name" to "NonExistent"))
+        assertFalse(callRes.success)
+        assertTrue(callRes.outputEn.isNotEmpty())
+        assertTrue(callRes.outputHi.isNotEmpty())
+
+        // 2. SendSmsTool
+        val smsRes = com.example.tools.SendSmsTool(dummyContext, resolver).execute(mapOf("contact_name" to "NonExistent", "message" to "Hello"))
+        assertFalse(smsRes.success)
+        assertTrue(smsRes.outputEn.isNotEmpty())
+        assertTrue(smsRes.outputHi.isNotEmpty())
+
+        // 3. WhatsAppTelegramTool
+        val waRes = com.example.tools.WhatsAppTelegramTool(dummyContext, resolver).execute(mapOf("contact_name" to "NonExistent", "message" to "Hello"))
+        assertFalse(waRes.success)
+        assertTrue(waRes.outputEn.isNotEmpty())
+        assertTrue(waRes.outputHi.isNotEmpty())
+
+        // 4. OpenAppTool
+        val appRes = com.example.tools.OpenAppTool(dummyContext).execute(emptyMap())
+        assertFalse(appRes.success)
+        assertTrue(appRes.outputEn.isNotEmpty())
+        assertTrue(appRes.outputHi.isNotEmpty())
+
+        // 5. OpenUrlTool
+        val urlRes = com.example.tools.OpenUrlTool(dummyContext).execute(emptyMap())
+        assertFalse(urlRes.success)
+        assertTrue(urlRes.outputEn.isNotEmpty())
+        assertTrue(urlRes.outputHi.isNotEmpty())
+
+        // 6. PlayMediaTool
+        val mediaRes = com.example.tools.PlayMediaTool(dummyContext).execute(emptyMap())
+        assertFalse(mediaRes.success)
+        assertTrue(mediaRes.outputEn.isNotEmpty())
+        assertTrue(mediaRes.outputHi.isNotEmpty())
+
+        // 7. WebSearchTool
+        val searchRes = com.example.tools.WebSearchTool(dummyContext).execute(emptyMap())
+        assertFalse(searchRes.success)
+        assertTrue(searchRes.outputEn.isNotEmpty())
+        assertTrue(searchRes.outputHi.isNotEmpty())
+
+        // 8. NavigateTool
+        val navRes = com.example.tools.NavigateTool(dummyContext).execute(emptyMap())
+        assertFalse(navRes.success)
+        assertTrue(navRes.outputEn.isNotEmpty())
+        assertTrue(navRes.outputHi.isNotEmpty())
+
+        // 9. SetAlarmTool
+        val alarmRes = com.example.tools.SetAlarmTool(dummyContext).execute(emptyMap())
+        assertFalse(alarmRes.success)
+        assertTrue(alarmRes.outputEn.isNotEmpty())
+        assertTrue(alarmRes.outputHi.isNotEmpty())
+
+        // 10. SetTimerTool
+        val timerRes = com.example.tools.SetTimerTool(dummyContext).execute(emptyMap())
+        assertFalse(timerRes.success)
+        assertTrue(timerRes.outputEn.isNotEmpty())
+        assertTrue(timerRes.outputHi.isNotEmpty())
+
+        // 11. ReadScreenTool
+        val readRes = com.example.tools.ReadScreenTool().execute(emptyMap())
+        assertFalse(readRes.success)
+        assertTrue(readRes.outputEn.isNotEmpty())
+        assertTrue(readRes.outputHi.isNotEmpty())
+
+        // 12. TapElementTool
+        val tapRes = com.example.tools.TapElementTool().execute(mapOf("target_text" to "Button"))
+        assertFalse(tapRes.success)
+        assertTrue(tapRes.outputEn.isNotEmpty())
+        assertTrue(tapRes.outputHi.isNotEmpty())
+
+        // 13. TypeTextTool
+        val typeRes = com.example.tools.TypeTextTool().execute(emptyMap())
+        assertFalse(typeRes.success)
+        assertTrue(typeRes.outputEn.isNotEmpty())
+        assertTrue(typeRes.outputHi.isNotEmpty())
+
+        // 14. ScrollTool
+        val scrollRes = com.example.tools.ScrollTool().execute(emptyMap())
+        assertFalse(scrollRes.success)
+        assertTrue(scrollRes.outputEn.isNotEmpty())
+        assertTrue(scrollRes.outputHi.isNotEmpty())
+
+        // 15. WaitForElementTool
+        val waitRes = com.example.tools.WaitForElementTool().execute(emptyMap())
+        assertFalse(waitRes.success)
+        assertTrue(waitRes.outputEn.isNotEmpty())
+        assertTrue(waitRes.outputHi.isNotEmpty())
+
+        // 16. SystemNavigationTool
+        val navSysRes = com.example.tools.SystemNavigationTool().execute(mapOf("action" to "back"))
+        assertFalse(navSysRes.success)
+        assertTrue(navSysRes.outputEn.isNotEmpty())
+        assertTrue(navSysRes.outputHi.isNotEmpty())
+
+        // 17. NotificationActionTool
+        val notifRes = com.example.tools.NotificationActionTool(dummyContext).execute(mapOf("action" to "list"))
+        assertTrue(notifRes.outputEn.isNotEmpty())
+        assertTrue(notifRes.outputHi.isNotEmpty())
+
+        // 18. SaveMemoryTool
+        val saveMemRes = com.example.tools.SaveMemoryTool(memoryRepo).execute(emptyMap())
+        assertFalse(saveMemRes.success)
+        assertTrue(saveMemRes.outputEn.isNotEmpty())
+        assertTrue(saveMemRes.outputHi.isNotEmpty())
+
+        // 19. ForgetMemoryTool
+        val forgetMemRes = com.example.tools.ForgetMemoryTool(memoryRepo).execute(emptyMap())
+        assertFalse(forgetMemRes.success)
+        assertTrue(forgetMemRes.outputEn.isNotEmpty())
+        assertTrue(forgetMemRes.outputHi.isNotEmpty())
+
+        // 20. SearchMemoryTool
+        val searchMemRes = com.example.tools.SearchMemoryTool(memoryRepo).execute(mapOf("query" to "Coffee"))
+        assertTrue(searchMemRes.outputEn.isNotEmpty())
+        assertTrue(searchMemRes.outputHi.isNotEmpty())
+
+        // 21. SearchHistoryTool
+        val searchHistRes = com.example.tools.SearchHistoryTool(FakeChatRepository()).execute(emptyMap())
+        assertFalse(searchHistRes.success)
+        assertTrue(searchHistRes.outputEn.isNotEmpty())
+        assertTrue(searchHistRes.outputHi.isNotEmpty())
+    }
+
+    @Test
+    fun toolRegistry_resolvesAdjustVolumeAndSetVolumeAlias() {
+        val dummyContext = ContextWrapper(null)
+        val registry = ToolRegistry(setOf(com.example.tools.VolumeTool(dummyContext)))
+        val adjustVol = registry.getTool("adjust_volume")
+        assertNotNull(adjustVol)
+        assertEquals("adjust_volume", adjustVol?.name)
+
+        val setVol = registry.getTool("set_volume")
+        assertNotNull("set_volume must resolve to VolumeTool alias", setVol)
+        assertEquals("adjust_volume", setVol?.name)
+
+        val foundAdjust = registry.findTool("adjust_volume", fullControlOverride = true)
+        assertNotNull(foundAdjust)
+        val foundSet = registry.findTool("set_volume", fullControlOverride = true)
+        assertNotNull(foundSet)
     }
 }
