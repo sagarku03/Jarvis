@@ -89,22 +89,45 @@ class MemoryLearner @Inject constructor(
         )
     )
 
+    private var turnCounter = 0
+
     suspend fun extractFactsFromTurn(
         userText: String,
         assistantReply: String,
         screenContext: ScreenContextSnapshot?
-    ) {
+    ): List<String> {
+        val learnedKeys = mutableListOf<String>()
         val settings = settingsRepository.settingsFlow.first()
-        if (!settings.autoLearnEnabled) return
+        if (!settings.autoLearnEnabled) return learnedKeys
         val isSensitiveScreen = SafetyGate.isSensitiveScreen(screenContext)
-        if (isSensitiveScreen) return
+        if (isSensitiveScreen) return learnedKeys
+
+        // Never learn from error turns, tool outputs, or OTP/auth phrases
+        val lowerUser = userText.lowercase()
+        val lowerReply = assistantReply.lowercase()
+        if (lowerUser.contains("otp") || lowerUser.contains("verification code") ||
+            lowerUser.contains("password") || lowerUser.contains("pin") ||
+            lowerReply.contains("error") || lowerReply.contains("failed to") ||
+            lowerUser.startsWith("tool:") || lowerUser.contains("toolresult")
+        ) {
+            return learnedKeys
+        }
 
         // 1. Deterministic high-confidence extraction for explicit user statements
         extractExplicitHeuristicFacts(userText, isSensitiveScreen)
 
-        // 2. Schema-constrained Gemini extraction for implicit durable facts
-        val client = geminiClient ?: return
-        if (userText.length < 8) return
+        // 2. Only run heavier LLM auto-learn on personal statements once every 3 turns
+        turnCounter++
+        if (turnCounter % 3 != 0) return learnedKeys
+
+        val isPersonalStatement = lowerUser.contains("my ") || lowerUser.contains("i am ") ||
+            lowerUser.contains("i live ") || lowerUser.contains("i work ") ||
+            lowerUser.contains("i prefer ") || lowerUser.contains("i like ") ||
+            lowerUser.contains("remember ") || lowerUser.contains("favourite") || lowerUser.contains("favorite")
+        if (!isPersonalStatement) return learnedKeys
+
+        val client = geminiClient ?: return learnedKeys
+        if (userText.length < 8) return learnedKeys
 
         val systemInstruction = """
             Extract only durable personal facts about the user from this conversation turn.
@@ -121,7 +144,7 @@ class MemoryLearner @Inject constructor(
             modelId = settings.selectedModelId,
             systemInstruction = systemInstruction,
             userPrompt = prompt
-        ) ?: return
+        ) ?: return learnedKeys
 
         val parsedList = runCatching { listMapAdapter.fromJson(rawJson.trim()) }.getOrNull().orEmpty()
         for (item in parsedList) {
@@ -144,7 +167,9 @@ class MemoryLearner @Inject constructor(
                 importance = importance,
                 pinned = category == "PROFILE" || category == "CONTACT"
             )
+            learnedKeys.add(key)
         }
+        return learnedKeys
     }
 
     internal suspend fun extractExplicitHeuristicFacts(

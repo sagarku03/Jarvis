@@ -43,6 +43,19 @@ object LocalIntentRouter {
     private val CALL_REGEX = Regex("""^(?:call|dial|phone karo|ko call karo|ko call lagao)\s+(.+)$|^(?:call)\s+(.+)$|^(.+?)\s+ko\s+call(?:\s+karo|\s+lagao)?$""", RegexOption.IGNORE_CASE)
     private val OPEN_APP_REGEX = Regex("""^(?:open|launch|start|kholo|chalu karo)\s+(.+)$""", RegexOption.IGNORE_CASE)
 
+    private val PLAY_STORE_REGEX = Regex("""\b(?:install|download|get)\s+(.+?)(?:\s+from\s+play\s*store)?$""", RegexOption.IGNORE_CASE)
+    private val WEB_SEARCH_REGEX = Regex("""^(?:search(?:\s+for)?|google)\s+(.+)$|^(.+?)\s+search\s+karo$""", RegexOption.IGNORE_CASE)
+    private val MESSAGE_REGEX = Regex("""^(?:message|text|whatsapp)\s+([a-zA-Z0-9\s]+?)\s+(?:that|saying)?\s*(.+)$""", RegexOption.IGNORE_CASE)
+
+    private val WIFI_SETTINGS_REGEX = Regex("""\b(?:wifi|wi-fi)\s*(?:settings|kholo|open|toggle)?\b|\bopen\s*(?:wifi|wi-fi)\b""", RegexOption.IGNORE_CASE)
+    private val BLUETOOTH_SETTINGS_REGEX = Regex("""\b(?:bluetooth)\s*(?:settings|kholo|open|toggle)?\b|\bopen\s*bluetooth\b""", RegexOption.IGNORE_CASE)
+    private val BRIGHTNESS_REGEX = Regex("""\b(?:brightness|screen brightness|display settings)\b""", RegexOption.IGNORE_CASE)
+    private val DND_REGEX = Regex("""\b(?:do not disturb|dnd|mute notifications)\b""", RegexOption.IGNORE_CASE)
+
+    private val BACK_NAV_REGEX = Regex("""^(?:go\s+back|back|piche\s+jao)$""", RegexOption.IGNORE_CASE)
+    private val HOME_NAV_REGEX = Regex("""^(?:go\s+home|home\s+screen|home)$""", RegexOption.IGNORE_CASE)
+    private val RECENTS_NAV_REGEX = Regex("""^(?:recent\s+apps|recents|open\s+recents)$""", RegexOption.IGNORE_CASE)
+
     fun route(utterance: String, context: Context? = null): LocalRouteResult? {
         val trimmed = utterance.trim()
         if (trimmed.isEmpty()) return null
@@ -52,13 +65,66 @@ object LocalIntentRouter {
             return LocalRouteResult.Stop
         }
 
-        // 2. What time is it
+        // 2. System Navigation (back, home, recents)
+        if (BACK_NAV_REGEX.containsMatchIn(trimmed)) {
+            return LocalRouteResult.ToolAction(
+                toolName = "system_navigation",
+                args = mapOf("action" to "back"),
+                templateReply = "Going back."
+            )
+        }
+        if (HOME_NAV_REGEX.containsMatchIn(trimmed)) {
+            return LocalRouteResult.ToolAction(
+                toolName = "system_navigation",
+                args = mapOf("action" to "home"),
+                templateReply = "Going to home screen."
+            )
+        }
+        if (RECENTS_NAV_REGEX.containsMatchIn(trimmed)) {
+            return LocalRouteResult.ToolAction(
+                toolName = "system_navigation",
+                args = mapOf("action" to "recents"),
+                templateReply = "Opening recent apps."
+            )
+        }
+
+        // 3. Quick System Settings (Wi-Fi, Bluetooth, Brightness, DND)
+        if (WIFI_SETTINGS_REGEX.containsMatchIn(trimmed)) {
+            return LocalRouteResult.ToolAction(
+                toolName = "open_app",
+                args = mapOf("app_name" to "android.settings.WIFI_SETTINGS"),
+                templateReply = "Opening Wi-Fi settings."
+            )
+        }
+        if (BLUETOOTH_SETTINGS_REGEX.containsMatchIn(trimmed)) {
+            return LocalRouteResult.ToolAction(
+                toolName = "open_app",
+                args = mapOf("app_name" to "android.settings.BLUETOOTH_SETTINGS"),
+                templateReply = "Opening Bluetooth settings."
+            )
+        }
+        if (BRIGHTNESS_REGEX.containsMatchIn(trimmed)) {
+            return LocalRouteResult.ToolAction(
+                toolName = "open_app",
+                args = mapOf("app_name" to "android.settings.DISPLAY_SETTINGS"),
+                templateReply = "Opening Display settings."
+            )
+        }
+        if (DND_REGEX.containsMatchIn(trimmed)) {
+            return LocalRouteResult.ToolAction(
+                toolName = "open_app",
+                args = mapOf("app_name" to "android.settings.ZEN_MODE_SETTINGS"),
+                templateReply = "Opening Do Not Disturb settings."
+            )
+        }
+
+        // 4. What time is it
         if (TIME_REGEX.containsMatchIn(trimmed)) {
             val formatted = SimpleDateFormat("h:mm a", Locale.US).format(Date())
             return LocalRouteResult.DirectReply("It's $formatted.")
         }
 
-        // 3. Battery status
+        // 5. Battery status
         if (BATTERY_REGEX.containsMatchIn(trimmed)) {
             val level = getBatteryPercent(context)
             return if (level != null) {
@@ -68,7 +134,7 @@ object LocalIntentRouter {
             }
         }
 
-        // 4. Flashlight / Torch
+        // 6. Flashlight / Torch
         if (FLASHLIGHT_ON_REGEX.containsMatchIn(trimmed)) {
             return LocalRouteResult.ToolAction(
                 toolName = "toggle_flashlight",
@@ -84,7 +150,7 @@ object LocalIntentRouter {
             )
         }
 
-        // 5. Volume control
+        // 7. Volume control
         val volSetMatch = VOL_SET_REGEX.find(trimmed)
         if (volSetMatch != null) {
             val pct = volSetMatch.groupValues[2].toIntOrNull()?.coerceIn(0, 100) ?: 50
@@ -116,15 +182,29 @@ object LocalIntentRouter {
             )
         }
 
-        // 6. Alarms
+        // 8. Alarms
         val alarmResult = parseAlarmCommand(trimmed)
         if (alarmResult != null) return alarmResult
 
-        // 7. Timers
+        // 9. Timers
         val timerResult = parseTimerCommand(trimmed)
         if (timerResult != null) return timerResult
 
-        // 8. YouTube Media
+        // 10. Play Store listing
+        val playStoreMatch = PLAY_STORE_REGEX.find(trimmed)
+        if (playStoreMatch != null) {
+            val appTarget = playStoreMatch.groupValues[1].trim()
+            if (appTarget.isNotBlank() && !appTarget.equals("an alarm", ignoreCase = true) && !appTarget.equals("timer", ignoreCase = true)) {
+                val encoded = runCatching { java.net.URLEncoder.encode(appTarget, "UTF-8") }.getOrDefault(appTarget)
+                return LocalRouteResult.ToolAction(
+                    toolName = "open_url",
+                    args = mapOf("url" to "https://play.google.com/store/search?q=$encoded&c=apps"),
+                    templateReply = "Opening $appTarget on Google Play Store."
+                )
+            }
+        }
+
+        // 11. YouTube Media
         val ytMatch = YOUTUBE_PLAY_REGEX.find(trimmed)
         if (ytMatch != null) {
             val q = ytMatch.groupValues.drop(1).firstOrNull { it.isNotBlank() }?.trim().orEmpty()
@@ -137,7 +217,20 @@ object LocalIntentRouter {
             }
         }
 
-        // 9. Navigation
+        // 12. Web Search / Google
+        val searchMatch = WEB_SEARCH_REGEX.find(trimmed)
+        if (searchMatch != null) {
+            val query = searchMatch.groupValues.drop(1).firstOrNull { it.isNotBlank() }?.trim().orEmpty()
+            if (query.isNotEmpty()) {
+                return LocalRouteResult.ToolAction(
+                    toolName = "web_search",
+                    args = mapOf("query" to query),
+                    templateReply = "Searching the web for $query."
+                )
+            }
+        }
+
+        // 13. Navigation
         val navMatch = NAV_REGEX.find(trimmed)
         if (navMatch != null) {
             val dest = navMatch.groupValues[1].trim()
@@ -150,7 +243,25 @@ object LocalIntentRouter {
             }
         }
 
-        // 10. Call Contact
+        // 14. Message Contact
+        val msgMatch = MESSAGE_REGEX.find(trimmed)
+        if (msgMatch != null) {
+            val recipient = msgMatch.groupValues[1].trim()
+            val text = msgMatch.groupValues[2].trim()
+            if (recipient.isNotEmpty() && text.isNotEmpty()) {
+                return LocalRouteResult.ToolAction(
+                    toolName = "send_whatsapp_or_telegram",
+                    args = mapOf(
+                        "contact_name" to recipient,
+                        "message" to text,
+                        "app" to "whatsapp"
+                    ),
+                    templateReply = "Sending message to $recipient."
+                )
+            }
+        }
+
+        // 15. Call Contact
         val callMatch = CALL_REGEX.find(trimmed)
         if (callMatch != null) {
             val target = callMatch.groupValues.drop(1).firstOrNull { it.isNotBlank() }?.trim().orEmpty()
@@ -163,7 +274,7 @@ object LocalIntentRouter {
             }
         }
 
-        // 11. Open App
+        // 16. Open App
         val appMatch = OPEN_APP_REGEX.find(trimmed)
         if (appMatch != null) {
             val appQuery = appMatch.groupValues[1].trim()
@@ -278,11 +389,11 @@ object LocalIntentRouter {
         )
     }
 
-    private fun resolveAppName(query: String, context: Context?): String {
+    internal fun resolveAppName(query: String, context: Context?): String {
         val clean = query.trim().lowercase(Locale.US)
         val canonical = when {
-            clean.contains("youtube") -> "YouTube"
-            clean.contains("whatsapp") -> "WhatsApp"
+            clean == "yt" || clean.contains("youtube") -> "YouTube"
+            clean == "wa" || clean.contains("whatsapp") -> "WhatsApp"
             clean.contains("chrome") -> "Chrome"
             clean.contains("camera") -> "Camera"
             clean.contains("settings") -> "Settings"
@@ -291,8 +402,15 @@ object LocalIntentRouter {
             clean.contains("spotify") -> "Spotify"
             clean.contains("calc") -> "Calculator"
             clean.contains("clock") -> "Clock"
-            clean.contains("telegram") -> "Telegram"
-            clean.contains("instagram") -> "Instagram"
+            clean == "tg" || clean.contains("telegram") -> "Telegram"
+            clean == "insta" || clean.contains("instagram") -> "Instagram"
+            clean == "fb" || clean.contains("facebook") -> "Facebook"
+            clean == "gpay" || clean.contains("google pay") -> "Google Pay"
+            clean.contains("paytm") -> "Paytm"
+            clean.contains("zomato") -> "Zomato"
+            clean.contains("swiggy") -> "Swiggy"
+            clean.contains("uber") -> "Uber"
+            clean.contains("ola") -> "Ola"
             else -> query.trim().replaceFirstChar { it.uppercase() }
         }
         return canonical

@@ -84,6 +84,13 @@
             android:exported="false"
             android:foregroundServiceType="microphone" />
 
+        <!-- Foreground Wake Phrase Service -->
+        <service
+            android:name=".services.WakePhraseService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="microphone" />
+
         <!-- Quick Settings Tile Service for Push-to-Talk -->
         <service
             android:name=".services.JarvisTileService"

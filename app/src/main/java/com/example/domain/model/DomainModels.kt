@@ -257,6 +257,23 @@ data class MemoryFact(
     }
 }
 
+enum class VoiceEngineOption(val code: String, val labelEn: String) {
+    NATURAL_GOOGLE("NATURAL_GOOGLE", "Natural (Google)"),
+    PHONE_VOICE("PHONE_VOICE", "Phone voice");
+
+    companion object {
+        fun fromCode(code: String): VoiceEngineOption =
+            entries.firstOrNull { it.code.equals(code, ignoreCase = true) } ?: NATURAL_GOOGLE
+    }
+}
+
+data class VoiceEvent(
+    val timestampMs: Long = System.currentTimeMillis(),
+    val type: String,
+    val message: String,
+    val latencyMs: Long = 0L
+)
+
 data class UserFacingError(
     val message: String,
     val actionLabel: String = "Try again",
@@ -268,10 +285,14 @@ data class UserSettings(
     val selectedModelId: String = "gemini-2.5-flash",
     val availableModels: List<String> = listOf("gemini-2.5-flash"),
     val language: AppLanguage = AppLanguage.EN_IN,
+    val voiceEngine: VoiceEngineOption = VoiceEngineOption.NATURAL_GOOGLE,
     val selectedVoiceName: String = "",
     val speechSpeed: Float = 1.0f,
     val speechPitch: Float = 1.0f,
     val floatingOrbEnabled: Boolean = false,
+    val wakePhraseEnabled: Boolean = false,
+    val wakePhraseScreenOnOnly: Boolean = true,
+    val wakePhraseStopAfter30m: Boolean = true,
     val confirmationLevel: ConfirmationLevel = ConfirmationLevel.STANDARD,
     val killSwitchActive: Boolean = false,
     val autoLearnEnabled: Boolean = true,
@@ -280,6 +301,8 @@ data class UserSettings(
     val tokensToday: Int = 0,
     val totalRequests: Int = 0,
     val totalTokens: Int = 0,
+    val timeToFirstTokenMs: Long = 0L,
+    val timeToFirstWordMs: Long = 0L,
     val usageDayEpoch: Long = 0L
 )
 

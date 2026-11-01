@@ -55,7 +55,9 @@ enum class JarvisDestination(
 
 @Composable
 fun JarvisRootApp(
-    factory: JarvisViewModelFactory
+    factory: JarvisViewModelFactory,
+    initialVoiceCall: Boolean = false,
+    onVoiceCallHandled: () -> Unit = {}
 ) {
     val setupViewModel: SetupViewModel = viewModel(factory = factory)
     val homeViewModel: HomeViewModel = viewModel(factory = factory)
@@ -69,12 +71,29 @@ fun JarvisRootApp(
 
     var currentTab by rememberSaveable { mutableStateOf(JarvisDestination.HOME) }
     var showPermissionsScreen by rememberSaveable { mutableStateOf(false) }
+    var showVoiceCallScreen by rememberSaveable { mutableStateOf(false) }
+
+    androidx.compose.runtime.LaunchedEffect(initialVoiceCall) {
+        if (initialVoiceCall) {
+            showVoiceCallScreen = true
+            onVoiceCallHandled()
+        }
+    }
 
     // Hard setup gate: if setupComplete is false or encrypted key is missing, block all tabs
     if (!isGateUnlocked) {
         SetupGateScreen(
             setupViewModel = setupViewModel,
             permissionsViewModel = permissionsViewModel
+        )
+        return
+    }
+
+    if (showVoiceCallScreen) {
+        BackHandler { showVoiceCallScreen = false }
+        com.example.ui.screens.VoiceCallScreen(
+            viewModel = homeViewModel,
+            onEndCall = { showVoiceCallScreen = false }
         )
         return
     }
@@ -110,6 +129,7 @@ fun JarvisRootApp(
                 when (currentTab) {
                     JarvisDestination.HOME -> HomeScreen(
                         viewModel = homeViewModel,
+                        onOpenVoiceCall = { showVoiceCallScreen = true },
                         onOpenPermissions = { showPermissionsScreen = true },
                         onOpenSettings = { currentTab = JarvisDestination.SETTINGS }
                     )

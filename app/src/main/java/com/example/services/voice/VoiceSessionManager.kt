@@ -26,7 +26,8 @@ class VoiceSessionManager @Inject constructor(
     private val speechRecognizer: SpeechRecognizerWrapper,
     private val ttsEngine: TtsEngineWrapper,
     private val audioRecorder: PcmAudioRecorder? = null,
-    private val wakeWordEngine: WakeWordEngine
+    private val wakeWordEngine: WakeWordEngine,
+    private val ttsManager: TtsManager? = null
 ) {
     companion object {
         const val SPEAKER_TAIL_DELAY_MS = 500L
@@ -136,6 +137,7 @@ class VoiceSessionManager @Inject constructor(
 
     private val _state = MutableStateFlow(VoiceSessionState.IDLE)
     val state: StateFlow<VoiceSessionState> = _state.asStateFlow()
+    val isUsingFallbackChip: StateFlow<Boolean> = ttsManager?.isUsingFallbackChip ?: MutableStateFlow(false)
 
     @Volatile
     private var lastSpokenAssistantText: String = ""
@@ -216,26 +218,85 @@ class VoiceSessionManager @Inject constructor(
         lastSpokenAssistantText = sanitized
         _state.value = VoiceSessionState.SPEAKING
 
-        ttsEngine.speak(
-            text = sanitized,
-            language = language,
-            selectedVoiceName = selectedVoiceName,
-            speed = speed,
-            pitch = 1.0f,
-            onComplete = {
-                tailTransitionJob = scope.launch {
-                    delay(SPEAKER_TAIL_DELAY_MS)
-                    if (_state.value == VoiceSessionState.SPEAKING) {
-                        if (followUpListening) {
-                            onFollowUpReady()
-                        } else {
-                            transitionToIdle()
+        if (ttsManager != null) {
+            ttsManager.speakFullReply(
+                text = sanitized,
+                language = language,
+                selectedVoiceName = selectedVoiceName,
+                speed = speed,
+                onAudioStarted = { _state.value = VoiceSessionState.SPEAKING },
+                onComplete = {
+                    tailTransitionJob = scope.launch {
+                        delay(SPEAKER_TAIL_DELAY_MS)
+                        if (_state.value == VoiceSessionState.SPEAKING) {
+                            if (followUpListening) {
+                                onFollowUpReady()
+                            } else {
+                                transitionToIdle()
+                            }
                         }
+                        onFinished()
                     }
-                    onFinished()
                 }
-            }
-        )
+            )
+        } else {
+            ttsEngine.speak(
+                text = sanitized,
+                language = language,
+                selectedVoiceName = selectedVoiceName,
+                speed = speed,
+                pitch = 1.0f,
+                onComplete = {
+                    tailTransitionJob = scope.launch {
+                        delay(SPEAKER_TAIL_DELAY_MS)
+                        if (_state.value == VoiceSessionState.SPEAKING) {
+                            if (followUpListening) {
+                                onFollowUpReady()
+                            } else {
+                                transitionToIdle()
+                            }
+                        }
+                        onFinished()
+                    }
+                }
+            )
+        }
+    }
+
+    fun queueStreamingSentence(
+        sentence: String,
+        language: AppLanguage,
+        selectedVoiceName: String = "",
+        speed: Float = 1.0f,
+        onAudioStarted: () -> Unit = {}
+    ) {
+        closeMicrophoneImmediately()
+        val sanitized = sanitizeTextForTts(sentence)
+        if (sanitized.isBlank()) return
+        lastSpokenAssistantText = sanitized
+
+        if (ttsManager != null) {
+            ttsManager.queueStreamingSentence(
+                sentence = sanitized,
+                language = language,
+                selectedVoiceName = selectedVoiceName,
+                speed = speed,
+                onAudioStarted = {
+                    _state.value = VoiceSessionState.SPEAKING
+                    onAudioStarted()
+                }
+            )
+        } else {
+            _state.value = VoiceSessionState.SPEAKING
+            onAudioStarted()
+            ttsEngine.speak(
+                text = sanitized,
+                language = language,
+                selectedVoiceName = selectedVoiceName,
+                speed = speed,
+                pitch = 1.0f
+            )
+        }
     }
 
     fun bargeInAndListen(
@@ -244,6 +305,7 @@ class VoiceSessionManager @Inject constructor(
         onError: (String) -> Unit
     ) {
         tailTransitionJob?.cancel()
+        ttsManager?.stop()
         ttsEngine.stop()
         startListening(language, onFinalTranscript, onError)
     }
@@ -251,6 +313,7 @@ class VoiceSessionManager @Inject constructor(
     fun stopAll() {
         tailTransitionJob?.cancel()
         closeMicrophoneImmediately()
+        ttsManager?.stop()
         ttsEngine.stop()
         _state.value = VoiceSessionState.IDLE
         syncWakeWordWithSessionState()

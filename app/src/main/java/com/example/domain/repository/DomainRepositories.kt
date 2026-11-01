@@ -22,7 +22,8 @@ interface AgentBackendRepository {
         memories: List<MemoryFact>,
         screenContext: ScreenContextSnapshot?,
         language: AppLanguage,
-        summaries: List<ConversationSummaryItem> = emptyList()
+        summaries: List<ConversationSummaryItem> = emptyList(),
+        onTextChunk: ((String) -> Unit)? = null
     ): AgentStepDecision
 }
 
@@ -103,5 +104,10 @@ interface SettingsRepository {
     suspend fun setKillSwitchActive(active: Boolean)
     suspend fun setAutoLearnEnabled(enabled: Boolean)
     suspend fun setAskBeforeSavingFact(ask: Boolean)
+    suspend fun setVoiceEngine(voiceEngine: com.example.domain.model.VoiceEngineOption)
+    suspend fun setWakePhraseEnabled(enabled: Boolean)
+    suspend fun setWakePhraseScreenOnOnly(enabled: Boolean)
+    suspend fun setWakePhraseStopAfter30m(enabled: Boolean)
+    suspend fun setVoiceTimings(firstTokenMs: Long, firstWordMs: Long)
     suspend fun recordGeminiUsage(tokensUsed: Int, nowMs: Long = System.currentTimeMillis())
 }

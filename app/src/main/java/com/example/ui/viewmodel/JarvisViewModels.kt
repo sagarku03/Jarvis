@@ -395,6 +395,8 @@ class HomeViewModel(
     val orbCaption: StateFlow<String?> = agentOrchestrator.orbCaption
     val userFacingError: StateFlow<UserFacingError?> = agentOrchestrator.userFacingError
     val lastResponseText: StateFlow<String> = agentOrchestrator.lastResponseText
+    val streamingText: StateFlow<String?> = agentOrchestrator.streamingText
+    val isUsingFallbackChip: StateFlow<Boolean> = voiceSessionManager.isUsingFallbackChip
     val pendingConfirmation: StateFlow<ConfirmationRequest?> = safetyGate.pendingConfirmation
     val isKilled: StateFlow<Boolean> = killSwitch.isKilled
     val keyRejectedBanner: StateFlow<Boolean> = agentOrchestrator.keyRejectedBanner
@@ -1177,6 +1179,39 @@ class SettingsViewModel(
         viewModelScope.launch {
             settingsRepository.setKillSwitchActive(active)
         }
+    }
+
+    fun setVoiceEngine(engine: com.example.domain.model.VoiceEngineOption) {
+        viewModelScope.launch {
+            settingsRepository.setVoiceEngine(engine)
+        }
+    }
+
+    fun setWakePhraseEnabled(enabled: Boolean) {
+        viewModelScope.launch {
+            settingsRepository.setWakePhraseEnabled(enabled)
+            if (enabled) {
+                com.example.services.WakePhraseService.startService(appContext)
+            } else {
+                com.example.services.WakePhraseService.stopService(appContext)
+            }
+        }
+    }
+
+    fun setWakePhraseScreenOnOnly(screenOnOnly: Boolean) {
+        viewModelScope.launch {
+            settingsRepository.setWakePhraseScreenOnOnly(screenOnOnly)
+        }
+    }
+
+    fun setWakePhraseStopAfter30m(stopAfter30m: Boolean) {
+        viewModelScope.launch {
+            settingsRepository.setWakePhraseStopAfter30m(stopAfter30m)
+        }
+    }
+
+    fun clearVoiceLogs() {
+        DiagnosticsLogger.clearVoiceLogs()
     }
 }
 

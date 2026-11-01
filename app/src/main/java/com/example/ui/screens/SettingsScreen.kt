@@ -66,6 +66,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.R
 import com.example.data.local.DiagnosticsLogger
@@ -103,6 +104,7 @@ fun SettingsScreen(
     var newKeyInput by remember { mutableStateOf("") }
     var showRemoveKeyDialog by remember { mutableStateOf(false) }
     var showPrivacyPolicyDialog by remember { mutableStateOf(false) }
+    var showWakeConsentDialog by remember { mutableStateOf(false) }
     var advancedExpanded by remember { mutableStateOf(false) }
     var modelDropdownExpanded by remember { mutableStateOf(false) }
     var voiceDropdownExpanded by remember { mutableStateOf(false) }
@@ -273,54 +275,146 @@ fun SettingsScreen(
                     Spacer(modifier = Modifier.height(10.dp))
 
                     Text(
+                        text = stringResource(R.string.voice_provider_title),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = AuroraColors.TextSecondary
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    // Voice Engine FilterChips: Natural (Google) vs Phone voice
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        FilterChip(
+                            selected = settings.voiceEngine == com.example.domain.model.VoiceEngineOption.NATURAL_GOOGLE,
+                            onClick = { viewModel.setVoiceEngine(com.example.domain.model.VoiceEngineOption.NATURAL_GOOGLE) },
+                            label = { Text(stringResource(R.string.voice_provider_natural)) },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = AuroraColors.Violet,
+                                selectedLabelColor = AuroraColors.TextPrimary
+                            )
+                        )
+                        FilterChip(
+                            selected = settings.voiceEngine == com.example.domain.model.VoiceEngineOption.PHONE_VOICE,
+                            onClick = { viewModel.setVoiceEngine(com.example.domain.model.VoiceEngineOption.PHONE_VOICE) },
+                            label = { Text(stringResource(R.string.voice_provider_phone)) },
+                            colors = FilterChipDefaults.filterChipColors(
+                                selectedContainerColor = AuroraColors.Violet,
+                                selectedLabelColor = AuroraColors.TextPrimary
+                            )
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    Text(
                         text = stringResource(R.string.settings_voice_title),
                         style = MaterialTheme.typography.bodySmall,
                         color = AuroraColors.TextSecondary
                     )
                     Spacer(modifier = Modifier.height(6.dp))
 
-                    // Friendly Voice Selector
-                    Box(modifier = Modifier.fillMaxWidth()) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(AuroraColors.GlassFillLight)
-                                .border(1.dp, AuroraColors.GlassBorder, RoundedCornerShape(10.dp))
-                                .clickable { voiceDropdownExpanded = true }
-                                .padding(horizontal = 12.dp, vertical = 10.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            val activeVoiceName = settings.selectedVoiceName.ifBlank { "System Default English" }
-                            Text(
-                                text = activeVoiceName,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = AuroraColors.TextPrimary
-                            )
-                            Icon(Icons.Default.ArrowDropDown, null, tint = AuroraColors.Lavender)
-                        }
-                        DropdownMenu(
-                            expanded = voiceDropdownExpanded,
-                            onDismissRequest = { voiceDropdownExpanded = false }
-                        ) {
-                            DropdownMenuItem(
-                                text = { Text("System Default English") },
-                                onClick = {
-                                    viewModel.setSelectedVoiceName("")
-                                    voiceDropdownExpanded = false
+                    if (settings.voiceEngine == com.example.domain.model.VoiceEngineOption.NATURAL_GOOGLE) {
+                        val naturalVoiceLabels = listOf(
+                            stringResource(R.string.voice_name_female_1),
+                            stringResource(R.string.voice_name_male_1),
+                            stringResource(R.string.voice_name_female_2),
+                            stringResource(R.string.voice_name_male_2)
+                        )
+                        Box(modifier = Modifier.fillMaxWidth()) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(AuroraColors.GlassFillLight)
+                                    .border(1.dp, AuroraColors.GlassBorder, RoundedCornerShape(10.dp))
+                                    .clickable { voiceDropdownExpanded = true }
+                                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                val currentVoice = settings.selectedVoiceName.ifBlank { naturalVoiceLabels.first() }
+                                Text(
+                                    text = currentVoice,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = AuroraColors.TextPrimary
+                                )
+                                Icon(Icons.Default.ArrowDropDown, null, tint = AuroraColors.Lavender)
+                            }
+                            DropdownMenu(
+                                expanded = voiceDropdownExpanded,
+                                onDismissRequest = { voiceDropdownExpanded = false }
+                            ) {
+                                naturalVoiceLabels.forEach { vLabel ->
+                                    DropdownMenuItem(
+                                        text = { Text(vLabel) },
+                                        onClick = {
+                                            viewModel.setSelectedVoiceName(vLabel)
+                                            voiceDropdownExpanded = false
+                                        }
+                                    )
                                 }
-                            )
-                            availableVoices.forEachIndexed { idx, v ->
+                            }
+                        }
+                    } else {
+                        Box(modifier = Modifier.fillMaxWidth()) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .background(AuroraColors.GlassFillLight)
+                                    .border(1.dp, AuroraColors.GlassBorder, RoundedCornerShape(10.dp))
+                                    .clickable { voiceDropdownExpanded = true }
+                                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                val activeVoiceName = settings.selectedVoiceName.ifBlank { stringResource(R.string.voice_name_device_default) }
+                                Text(
+                                    text = activeVoiceName,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = AuroraColors.TextPrimary
+                                )
+                                Icon(Icons.Default.ArrowDropDown, null, tint = AuroraColors.Lavender)
+                            }
+                            DropdownMenu(
+                                expanded = voiceDropdownExpanded,
+                                onDismissRequest = { voiceDropdownExpanded = false }
+                            ) {
                                 DropdownMenuItem(
-                                    text = { Text(v.displayName.ifBlank { "Voice ${idx + 1}" }) },
+                                    text = { Text(stringResource(R.string.voice_name_device_default)) },
                                     onClick = {
-                                        viewModel.setSelectedVoiceName(v.id)
+                                        viewModel.setSelectedVoiceName("")
                                         voiceDropdownExpanded = false
                                     }
                                 )
+                                availableVoices.forEachIndexed { idx, v ->
+                                    DropdownMenuItem(
+                                        text = { Text(v.displayName.ifBlank { "Voice ${idx + 1}" }) },
+                                        onClick = {
+                                            viewModel.setSelectedVoiceName(v.id)
+                                            voiceDropdownExpanded = false
+                                        }
+                                    )
+                                }
                             }
                         }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        AuroraTextButton(
+                            text = stringResource(R.string.voice_get_better_voices),
+                            onClick = {
+                                runCatching {
+                                    context.startActivity(
+                                        Intent("com.android.settings.TTS_SETTINGS").apply {
+                                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                        }
+                                    )
+                                }
+                            }
+                        )
                     }
 
                     Spacer(modifier = Modifier.height(14.dp))
@@ -368,6 +462,63 @@ fun SettingsScreen(
                         onClick = { viewModel.previewVoice("Hi, I'm Jarvis. How can I help you today?") },
                         modifier = Modifier.widthIn(min = 88.dp)
                     )
+                }
+            }
+
+            // SECTION 2B: Wake Phrase ("Hey Jarvis")
+            item {
+                AuroraGlassCard(modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        text = stringResource(R.string.wake_phrase_title),
+                        style = MaterialTheme.typography.titleMedium,
+                        color = AuroraColors.TextPrimary,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    SettingToggleRow(
+                        title = stringResource(R.string.wake_phrase_title),
+                        subtitle = stringResource(R.string.wake_phrase_desc),
+                        checked = settings.wakePhraseEnabled,
+                        onCheckedChange = { willEnable ->
+                            if (willEnable) {
+                                showWakeConsentDialog = true
+                            } else {
+                                viewModel.setWakePhraseEnabled(false)
+                            }
+                        }
+                    )
+
+                    if (settings.wakePhraseEnabled) {
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        SettingToggleRow(
+                            title = stringResource(R.string.wake_phrase_screen_on_only),
+                            subtitle = "Conserves battery by pausing when screen is off",
+                            checked = settings.wakePhraseScreenOnOnly,
+                            onCheckedChange = { viewModel.setWakePhraseScreenOnOnly(it) }
+                        )
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        SettingToggleRow(
+                            title = stringResource(R.string.wake_phrase_stop_after_30m),
+                            subtitle = "Automatically stops listening after 30 minutes",
+                            checked = settings.wakePhraseStopAfter30m,
+                            onCheckedChange = { viewModel.setWakePhraseStopAfter30m(it) }
+                        )
+
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        AuroraSecondaryButton(
+                            text = stringResource(R.string.wake_phrase_test_button),
+                            icon = Icons.Default.PlayArrow,
+                            onClick = {
+                                viewModel.previewVoice("Say 'Hey Jarvis' to test wake detection.")
+                            },
+                            modifier = Modifier.widthIn(min = 88.dp)
+                        )
+                    }
                 }
             }
 
@@ -622,16 +773,64 @@ fun SettingsScreen(
                                 style = JarvisMonoStyle.copy(color = AuroraColors.TextSecondary)
                             )
 
+                            Text(
+                                text = stringResource(
+                                    R.string.diagnostics_timings,
+                                    settings.timeToFirstTokenMs,
+                                    settings.timeToFirstWordMs
+                                ),
+                                style = JarvisMonoStyle.copy(color = AuroraColors.Lavender)
+                            )
+
+                            Spacer(modifier = Modifier.height(6.dp))
+
+                            val recentEvents = DiagnosticsLogger.getRecentVoiceEvents()
+                            Text(
+                                text = stringResource(R.string.diagnostics_events_count, recentEvents.size),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = AuroraColors.TextPrimary,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            if (recentEvents.isEmpty()) {
+                                Text(
+                                    text = stringResource(R.string.diagnostics_voice_empty),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = AuroraColors.TextMuted
+                                )
+                            } else {
+                                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                    recentEvents.takeLast(5).reversed().forEach { event ->
+                                        Text(
+                                            text = "[${event.type}] ${event.message}",
+                                            style = JarvisMonoStyle.copy(fontSize = 11.sp, color = AuroraColors.TextSecondary)
+                                        )
+                                    }
+                                }
+                            }
+
                             Spacer(modifier = Modifier.height(10.dp))
 
-                            AuroraSecondaryButton(
-                                text = stringResource(R.string.settings_share_log),
-                                icon = Icons.Default.Share,
-                                onClick = {
-                                    DiagnosticsLogger.shareLog(context)
-                                },
-                                modifier = Modifier.widthIn(min = 88.dp).testTag("settings_share_log_button")
-                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                AuroraSecondaryButton(
+                                    text = stringResource(R.string.diagnostics_voice_clear),
+                                    onClick = { viewModel.clearVoiceLogs() },
+                                    modifier = Modifier.weight(1f)
+                                )
+                                AuroraSecondaryButton(
+                                    text = stringResource(R.string.voice_test_button),
+                                    onClick = { viewModel.previewVoice("Voice diagnostics test.") },
+                                    modifier = Modifier.weight(1f)
+                                )
+                                AuroraSecondaryButton(
+                                    text = stringResource(R.string.settings_share_log),
+                                    icon = Icons.Default.Share,
+                                    onClick = { DiagnosticsLogger.shareLog(context) },
+                                    modifier = Modifier.weight(1f).testTag("settings_share_log_button")
+                                )
+                            }
                         }
                     }
                 }
@@ -760,6 +959,43 @@ fun SettingsScreen(
                     AuroraPrimaryButton(
                         text = "OK",
                         onClick = { showPrivacyPolicyDialog = false }
+                    )
+                },
+                containerColor = AuroraColors.BackgroundStart
+            )
+        }
+
+        // Wake Consent Dialog
+        if (showWakeConsentDialog) {
+            AlertDialog(
+                onDismissRequest = { showWakeConsentDialog = false },
+                title = {
+                    Text(
+                        stringResource(R.string.wake_phrase_dialog_title),
+                        color = AuroraColors.TextPrimary,
+                        fontWeight = FontWeight.Bold
+                    )
+                },
+                text = {
+                    Text(
+                        stringResource(R.string.wake_phrase_dialog_body),
+                        color = AuroraColors.TextPrimary,
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                },
+                confirmButton = {
+                    AuroraPrimaryButton(
+                        text = "Agree",
+                        onClick = {
+                            showWakeConsentDialog = false
+                            viewModel.setWakePhraseEnabled(true)
+                        }
+                    )
+                },
+                dismissButton = {
+                    AuroraSecondaryButton(
+                        text = "Cancel",
+                        onClick = { showWakeConsentDialog = false }
                     )
                 },
                 containerColor = AuroraColors.BackgroundStart

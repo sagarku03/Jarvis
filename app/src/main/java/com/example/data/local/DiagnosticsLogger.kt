@@ -21,6 +21,7 @@ object DiagnosticsLogger {
     private const val CRASH_LOG_FILE = "crash_log.txt"
 
     private val logQueue = ConcurrentLinkedQueue<String>()
+    private val voiceEventQueue = ConcurrentLinkedQueue<com.example.domain.model.VoiceEvent>()
     private val timeFormat = SimpleDateFormat("HH:mm:ss.SSS", Locale.US)
     private val keyPattern = Regex("AIza[0-9A-Za-z\\-_]{30,}")
 
@@ -43,6 +44,26 @@ object DiagnosticsLogger {
         while (logQueue.size > MAX_LOG_ENTRIES) {
             logQueue.poll()
         }
+    }
+
+    fun logVoiceEvent(type: String, message: String, latencyMs: Long = 0L) {
+        val event = com.example.domain.model.VoiceEvent(
+            timestampMs = System.currentTimeMillis(),
+            type = type,
+            message = sanitize(message),
+            latencyMs = latencyMs
+        )
+        voiceEventQueue.add(event)
+        while (voiceEventQueue.size > 50) {
+            voiceEventQueue.poll()
+        }
+        log("Voice", "[$type] $message (${latencyMs}ms)")
+    }
+
+    fun getRecentVoiceEvents(): List<com.example.domain.model.VoiceEvent> = voiceEventQueue.toList()
+
+    fun clearVoiceLogs() {
+        voiceEventQueue.clear()
     }
 
     fun getRecentLogs(): List<String> = logQueue.toList()

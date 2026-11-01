@@ -73,7 +73,8 @@ class AgentBackendRepositoryImpl @Inject constructor(
         memories: List<MemoryFact>,
         screenContext: ScreenContextSnapshot?,
         language: AppLanguage,
-        summaries: List<ConversationSummaryItem>
+        summaries: List<ConversationSummaryItem>,
+        onTextChunk: ((String) -> Unit)?
     ): AgentStepDecision {
         val lastUserMsg = messages.lastOrNull { it.role == MessageRole.USER }?.content.orEmpty()
         val lastNonUserIsTool = messages.lastOrNull()?.role == MessageRole.TOOL
@@ -113,14 +114,23 @@ class AgentBackendRepositoryImpl @Inject constructor(
         )
 
         return try {
-            when (
-                val result = geminiClient.generateContent(
+            val result = if (onTextChunk != null) {
+                geminiClient.streamGenerateContent(
+                    modelId = settings.selectedModelId,
+                    systemInstruction = systemInstruction,
+                    messages = messages,
+                    tools = tools,
+                    onTextChunk = onTextChunk
+                )
+            } else {
+                geminiClient.generateContent(
                     modelId = settings.selectedModelId,
                     systemInstruction = systemInstruction,
                     messages = messages,
                     tools = tools
                 )
-            ) {
+            }
+            when (result) {
                 is GeminiTurnResult.Success -> {
                     val totalTokens = (result.promptTokens + result.candidateTokens).coerceAtLeast(1)
                     settingsRepository.recordGeminiUsage(totalTokens)
@@ -885,6 +895,12 @@ class SettingsRepositoryImpl @Inject constructor(
         val KILL_SWITCH = booleanPreferencesKey("kill_switch_active")
         val AUTO_LEARN = booleanPreferencesKey("auto_learn_enabled")
         val ASK_BEFORE_SAVING_FACT = booleanPreferencesKey("ask_before_saving_fact")
+        val VOICE_ENGINE = stringPreferencesKey("voice_engine")
+        val WAKE_PHRASE_ENABLED = booleanPreferencesKey("wake_phrase_enabled")
+        val WAKE_PHRASE_SCREEN_ON = booleanPreferencesKey("wake_phrase_screen_on")
+        val WAKE_PHRASE_30M = booleanPreferencesKey("wake_phrase_30m")
+        val TIME_FIRST_TOKEN = longPreferencesKey("time_first_token")
+        val TIME_FIRST_WORD = longPreferencesKey("time_first_word")
         val REQUESTS_TODAY = intPreferencesKey("requests_today")
         val TOKENS_TODAY = intPreferencesKey("tokens_today")
         val TOTAL_REQUESTS = intPreferencesKey("total_requests")
@@ -909,10 +925,16 @@ class SettingsRepositoryImpl @Inject constructor(
             selectedModelId = prefs[Keys.SELECTED_MODEL_ID] ?: rawModels.first(),
             availableModels = rawModels,
             language = AppLanguage.fromCode(prefs[Keys.LANGUAGE] ?: AppLanguage.EN_IN.code),
+            voiceEngine = com.example.domain.model.VoiceEngineOption.fromCode(
+                prefs[Keys.VOICE_ENGINE] ?: com.example.domain.model.VoiceEngineOption.NATURAL_GOOGLE.code
+            ),
             selectedVoiceName = prefs[Keys.SELECTED_VOICE_NAME].orEmpty(),
             speechSpeed = (prefs[Keys.SPEECH_SPEED] ?: 1.0f).coerceIn(0.8f, 1.3f),
             speechPitch = 1.0f,
             floatingOrbEnabled = prefs[Keys.FLOATING_ORB] ?: false,
+            wakePhraseEnabled = prefs[Keys.WAKE_PHRASE_ENABLED] ?: false,
+            wakePhraseScreenOnOnly = prefs[Keys.WAKE_PHRASE_SCREEN_ON] ?: true,
+            wakePhraseStopAfter30m = prefs[Keys.WAKE_PHRASE_30M] ?: true,
             confirmationLevel = ConfirmationLevel.fromCode(
                 prefs[Keys.CONFIRMATION_LEVEL] ?: ConfirmationLevel.STANDARD.code
             ),
@@ -923,6 +945,8 @@ class SettingsRepositoryImpl @Inject constructor(
             tokensToday = tokToday,
             totalRequests = prefs[Keys.TOTAL_REQUESTS] ?: 0,
             totalTokens = prefs[Keys.TOTAL_TOKENS] ?: 0,
+            timeToFirstTokenMs = prefs[Keys.TIME_FIRST_TOKEN] ?: 0L,
+            timeToFirstWordMs = prefs[Keys.TIME_FIRST_WORD] ?: 0L,
             usageDayEpoch = currentDay
         )
     }
@@ -976,6 +1000,29 @@ class SettingsRepositoryImpl @Inject constructor(
 
     override suspend fun setAskBeforeSavingFact(ask: Boolean) {
         dataStore.edit { it[Keys.ASK_BEFORE_SAVING_FACT] = ask }
+    }
+
+    override suspend fun setVoiceEngine(voiceEngine: com.example.domain.model.VoiceEngineOption) {
+        dataStore.edit { it[Keys.VOICE_ENGINE] = voiceEngine.code }
+    }
+
+    override suspend fun setWakePhraseEnabled(enabled: Boolean) {
+        dataStore.edit { it[Keys.WAKE_PHRASE_ENABLED] = enabled }
+    }
+
+    override suspend fun setWakePhraseScreenOnOnly(enabled: Boolean) {
+        dataStore.edit { it[Keys.WAKE_PHRASE_SCREEN_ON] = enabled }
+    }
+
+    override suspend fun setWakePhraseStopAfter30m(enabled: Boolean) {
+        dataStore.edit { it[Keys.WAKE_PHRASE_30M] = enabled }
+    }
+
+    override suspend fun setVoiceTimings(firstTokenMs: Long, firstWordMs: Long) {
+        dataStore.edit {
+            it[Keys.TIME_FIRST_TOKEN] = firstTokenMs
+            it[Keys.TIME_FIRST_WORD] = firstWordMs
+        }
     }
 
     override suspend fun recordGeminiUsage(tokensUsed: Int, nowMs: Long) {

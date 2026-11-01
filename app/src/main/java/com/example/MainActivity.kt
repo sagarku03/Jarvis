@@ -19,6 +19,8 @@ class MainActivity : ComponentActivity() {
 
     private lateinit var appContainer: AppContainer
 
+    private val startVoiceCallState = androidx.compose.runtime.mutableStateOf(false)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -31,7 +33,11 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             JarvisTheme(darkTheme = true) {
-                JarvisRootApp(factory = viewModelFactory)
+                JarvisRootApp(
+                    factory = viewModelFactory,
+                    initialVoiceCall = startVoiceCallState.value,
+                    onVoiceCallHandled = { startVoiceCallState.value = false }
+                )
             }
         }
     }
@@ -44,6 +50,10 @@ class MainActivity : ComponentActivity() {
 
     private fun handleIncomingVoiceIntents(intent: Intent?) {
         intent ?: return
+        if (intent.getBooleanExtra(com.example.services.AssistantController.EXTRA_START_VOICE_CALL, false)) {
+            intent.removeExtra(com.example.services.AssistantController.EXTRA_START_VOICE_CALL)
+            startVoiceCallState.value = true
+        }
         if (intent.getBooleanExtra(BootCompletedReceiver.EXTRA_RESUME_WAKE_WORD_FROM_BOOT, false)) {
             intent.removeExtra(BootCompletedReceiver.EXTRA_RESUME_WAKE_WORD_FROM_BOOT)
             VoiceForegroundService.startService(this)

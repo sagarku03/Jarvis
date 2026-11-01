@@ -533,7 +533,8 @@ class ExampleUnitTest {
                 memories: List<MemoryFact>,
                 screenContext: ScreenContextSnapshot?,
                 language: AppLanguage,
-                summaries: List<ConversationSummaryItem>
+                summaries: List<ConversationSummaryItem>,
+                onTextChunk: ((String) -> Unit)?
             ): AgentStepDecision {
                 return AgentStepDecision(
                     assistantText = null,
@@ -819,6 +820,11 @@ class ExampleUnitTest {
             override suspend fun setFloatingOrbEnabled(enabled: Boolean) {}
             override suspend fun setConfirmationLevel(level: ConfirmationLevel) {}
             override suspend fun setKillSwitchActive(active: Boolean) {}
+            override suspend fun setVoiceEngine(voiceEngine: com.example.domain.model.VoiceEngineOption) {}
+            override suspend fun setWakePhraseEnabled(enabled: Boolean) {}
+            override suspend fun setWakePhraseScreenOnOnly(enabled: Boolean) {}
+            override suspend fun setWakePhraseStopAfter30m(enabled: Boolean) {}
+            override suspend fun setVoiceTimings(firstTokenMs: Long, firstWordMs: Long) {}
         }
 
         return AgentOrchestrator(
@@ -832,5 +838,131 @@ class ExampleUnitTest {
             safetyGate = SafetyGateImpl(null),
             killSwitch = killSwitch
         )
+    }
+
+    @Test
+    fun localIntentRouter_verifies40PlusPhrases() {
+        val testPhrases = listOf(
+            // Time
+            "what time is it" to "DirectReply",
+            "what's the time" to "DirectReply",
+            "time kya hua" to "DirectReply",
+            "kitne baje" to "DirectReply",
+            // Battery
+            "battery percentage" to "DirectReply",
+            "battery kitni hai" to "DirectReply",
+            // Flashlight
+            "turn on flashlight" to "toggle_flashlight",
+            "torch on" to "toggle_flashlight",
+            "chalu karo torch" to "toggle_flashlight",
+            "turn off flashlight" to "toggle_flashlight",
+            "torch band karo" to "toggle_flashlight",
+            // Volume
+            "volume up" to "adjust_volume",
+            "sound increase" to "adjust_volume",
+            "awaz tez karo" to "adjust_volume",
+            "volume down" to "adjust_volume",
+            "volume kam karo" to "adjust_volume",
+            "mute" to "adjust_volume",
+            "awaz band" to "adjust_volume",
+            "set volume to 80%" to "adjust_volume",
+            // Navigation system
+            "go back" to "system_navigation",
+            "back" to "system_navigation",
+            "piche jao" to "system_navigation",
+            "go home" to "system_navigation",
+            "home screen" to "system_navigation",
+            "recents" to "system_navigation",
+            "recent apps" to "system_navigation",
+            // Quick Settings
+            "wifi settings" to "open_app",
+            "open wifi" to "open_app",
+            "bluetooth settings" to "open_app",
+            "open bluetooth" to "open_app",
+            "brightness" to "open_app",
+            "display settings" to "open_app",
+            "do not disturb" to "open_app",
+            "dnd" to "open_app",
+            // Timers & Alarms
+            "set a timer for 10 minutes" to "set_timer",
+            "set timer for 30 seconds" to "set_timer",
+            "set alarm for 7 am" to "set_alarm",
+            "wake me up at 6:30 am" to "set_alarm",
+            // Play Store
+            "install WhatsApp" to "open_url",
+            "download Spotify" to "open_url",
+            // YouTube
+            "play jazz on youtube" to "play_media",
+            "youtube pe lo-fi chalao" to "play_media",
+            // Web Search
+            "google weather in delhi" to "web_search",
+            "search for latest news" to "web_search",
+            // Calls & Messages
+            "call Rahul" to "call_contact",
+            "phone karo Mummy" to "call_contact",
+            "message Priya I will be late" to "send_whatsapp_or_telegram",
+            // Open App with Aliases
+            "open yt" to "open_app",
+            "open wa" to "open_app",
+            "open insta" to "open_app",
+            "open gpay" to "open_app"
+        )
+
+        for ((phrase, expectedTarget) in testPhrases) {
+            val result = com.example.domain.agent.LocalIntentRouter.route(phrase, null)
+            assertNotNull("Phrase failed to route: '$phrase'", result)
+            when (result) {
+                is com.example.domain.agent.LocalRouteResult.ToolAction -> {
+                    assertEquals(
+                        "Phrase '$phrase' routed to unexpected tool",
+                        expectedTarget,
+                        result.toolName
+                    )
+                }
+                is com.example.domain.agent.LocalRouteResult.DirectReply -> {
+                    assertEquals("Phrase '$phrase' expected DirectReply", expectedTarget, "DirectReply")
+                }
+                is com.example.domain.agent.LocalRouteResult.Stop -> {
+                    assertEquals(expectedTarget, "Stop")
+                }
+                null -> fail("Result should not be null for phrase: $phrase")
+            }
+        }
+    }
+
+    @Test
+    fun wakePhraseService_matchesWakePhrasesWithFuzzyTolerance() {
+        val validPhrases = listOf(
+            "hey jarvis",
+            "ok jarvis",
+            "okay jarvis",
+            "hi jarvis",
+            "jarvis",
+            "arre jarvis",
+            "sun jarvis",
+            "jarvis suno",
+            "hey jarvis what's the weather",
+            "jarvis please help"
+        )
+        for (phrase in validPhrases) {
+            assertTrue(
+                "Expected phrase '$phrase' to match wake phrase",
+                com.example.services.WakePhraseService.matchesWakePhrase(phrase)
+            )
+        }
+
+        assertFalse(
+            "Random phrase should not match wake phrase",
+            com.example.services.WakePhraseService.matchesWakePhrase("hello world today")
+        )
+    }
+
+    @Test
+    fun localIntentRouter_appAliasesResolvedCorrectly() {
+        assertEquals("YouTube", com.example.domain.agent.LocalIntentRouter.resolveAppName("yt", null))
+        assertEquals("WhatsApp", com.example.domain.agent.LocalIntentRouter.resolveAppName("wa", null))
+        assertEquals("Instagram", com.example.domain.agent.LocalIntentRouter.resolveAppName("insta", null))
+        assertEquals("Google Pay", com.example.domain.agent.LocalIntentRouter.resolveAppName("gpay", null))
+        assertEquals("Telegram", com.example.domain.agent.LocalIntentRouter.resolveAppName("tg", null))
     }
 }

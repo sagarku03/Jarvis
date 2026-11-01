@@ -84,6 +84,7 @@ import com.example.ui.viewmodel.HomeViewModel
 @Composable
 fun HomeScreen(
     viewModel: HomeViewModel,
+    onOpenVoiceCall: () -> Unit = {},
     onOpenPermissions: () -> Unit = {},
     onOpenSettings: () -> Unit = {}
 ) {
@@ -93,6 +94,8 @@ fun HomeScreen(
     val orbCaption by viewModel.orbCaption.collectAsStateWithLifecycle()
     val userFacingError by viewModel.userFacingError.collectAsStateWithLifecycle()
     val lastResponse by viewModel.lastResponseText.collectAsStateWithLifecycle()
+    val streamingText by viewModel.streamingText.collectAsStateWithLifecycle()
+    val isUsingFallbackChip by viewModel.isUsingFallbackChip.collectAsStateWithLifecycle()
     val pendingConfirmation by viewModel.pendingConfirmation.collectAsStateWithLifecycle()
     val isKilled by viewModel.isKilled.collectAsStateWithLifecycle()
     val inputDraft by viewModel.inputDraft.collectAsStateWithLifecycle()
@@ -130,7 +133,7 @@ fun HomeScreen(
                 .align(Alignment.TopCenter)
                 .padding(horizontal = 16.dp, vertical = 12.dp)
         ) {
-            // Clean Header: Jarvis (left) + Small status dot (right)
+            // Clean Header: Jarvis (left) + Talk button + Small status dot (right)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -145,42 +148,76 @@ fun HomeScreen(
                     fontWeight = FontWeight.Bold
                 )
 
-                // Small Status Dot
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(AuroraColors.GlassFillLight)
-                        .padding(horizontal = 10.dp, vertical = 5.dp)
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    val dotColor = when (orbState) {
-                        AssistantOrbState.IDLE -> AuroraColors.Success
-                        AssistantOrbState.LISTENING -> AuroraColors.Warning
-                        AssistantOrbState.THINKING -> AuroraColors.ElectricBlue
-                        AssistantOrbState.SPEAKING -> AuroraColors.EmeraldSuccess
-                        AssistantOrbState.PAUSED_KILLSWITCH -> AuroraColors.Danger
-                    }
-                    val statusLabel = when (orbState) {
-                        AssistantOrbState.IDLE -> stringResource(R.string.home_status_ready)
-                        AssistantOrbState.LISTENING -> stringResource(R.string.home_status_listening)
-                        AssistantOrbState.THINKING -> stringResource(R.string.home_status_thinking)
-                        AssistantOrbState.SPEAKING -> stringResource(R.string.home_status_speaking)
-                        AssistantOrbState.PAUSED_KILLSWITCH -> "Stopped"
-                    }
-
+                    // Talk button (hands-free full-screen call)
                     Box(
                         modifier = Modifier
-                            .size(8.dp)
-                            .clip(CircleShape)
-                            .background(dotColor)
-                    )
-                    Text(
-                        text = statusLabel,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = AuroraColors.TextPrimary,
-                        fontWeight = FontWeight.Medium
-                    )
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(AuroraColors.GlassFillLight)
+                            .clickable { onOpenVoiceCall() }
+                            .padding(horizontal = 10.dp, vertical = 5.dp)
+                            .testTag("home_talk_button"),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Mic,
+                                contentDescription = null,
+                                tint = AuroraColors.Aqua,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Text(
+                                text = stringResource(R.string.voice_call_talk),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = AuroraColors.TextPrimary,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    }
+
+                    // Small Status Dot
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(AuroraColors.GlassFillLight)
+                            .padding(horizontal = 10.dp, vertical = 5.dp)
+                    ) {
+                        val dotColor = when (orbState) {
+                            AssistantOrbState.IDLE -> AuroraColors.Success
+                            AssistantOrbState.LISTENING -> AuroraColors.Warning
+                            AssistantOrbState.THINKING -> AuroraColors.ElectricBlue
+                            AssistantOrbState.SPEAKING -> AuroraColors.EmeraldSuccess
+                            AssistantOrbState.PAUSED_KILLSWITCH -> AuroraColors.Danger
+                        }
+                        val statusLabel = when (orbState) {
+                            AssistantOrbState.IDLE -> stringResource(R.string.home_status_ready)
+                            AssistantOrbState.LISTENING -> stringResource(R.string.home_status_listening)
+                            AssistantOrbState.THINKING -> stringResource(R.string.home_status_thinking)
+                            AssistantOrbState.SPEAKING -> stringResource(R.string.home_status_speaking)
+                            AssistantOrbState.PAUSED_KILLSWITCH -> "Stopped"
+                        }
+
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .clip(CircleShape)
+                                .background(dotColor)
+                        )
+                        Text(
+                            text = statusLabel,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = AuroraColors.TextPrimary,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
                 }
             }
 
@@ -284,6 +321,23 @@ fun HomeScreen(
                         .testTag("home_state_caption")
                 )
 
+                AnimatedVisibility(visible = isUsingFallbackChip) {
+                    Box(
+                        modifier = Modifier
+                            .padding(top = 6.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(AuroraColors.Warning.copy(alpha = 0.2f))
+                            .padding(horizontal = 10.dp, vertical = 4.dp)
+                            .testTag("home_using_phone_voice_chip")
+                    ) {
+                        Text(
+                            text = stringResource(R.string.voice_using_phone_chip),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = AuroraColors.Warning
+                        )
+                    }
+                }
+
                 // ONE circular red STOP button appearing ONLY while working or speaking
                 AnimatedVisibility(
                     visible = orbState == AssistantOrbState.THINKING ||
@@ -376,6 +430,16 @@ fun HomeScreen(
                 } else {
                     items(messages, key = { it.id }) { msg ->
                         ChatBubbleItem(msg)
+                    }
+                }
+                if (!streamingText.isNullOrBlank()) {
+                    item {
+                        ChatBubbleItem(
+                            ChatMessage(
+                                role = MessageRole.ASSISTANT,
+                                content = streamingText.orEmpty()
+                            )
+                        )
                     }
                 }
             }

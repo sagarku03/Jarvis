@@ -105,12 +105,16 @@ class OverlayService : Service() {
         }
         orbStatusDot = dot
 
+        var pillStatusTextView: TextView? = null
+
         val titleView = TextView(this).apply {
             text = getString(R.string.overlay_chip_label)
             setTextColor(Color.parseColor("#F5F3FF"))
             textSize = 13f
-            setPadding(0, 0, 20, 0)
+            setPadding(0, 0, 16, 0)
+            maxLines = 1
         }
+        pillStatusTextView = titleView
 
         val stopBtn = TextView(this).apply {
             text = getString(R.string.overlay_stop_button)
@@ -123,10 +127,7 @@ class OverlayService : Service() {
                 setColor(Color.parseColor("#FF6B87"))
             }
             setOnClickListener {
-                val app = application as? JarvisApplication
-                app?.appContainer?.killSwitch?.trigger("Floating overlay STOP pressed")
-                app?.appContainer?.voiceSessionManager?.stopAll()
-                app?.appContainer?.agentOrchestrator?.cancelActiveTurn()
+                AssistantController.stopAll(this@OverlayService)
             }
         }
 
@@ -138,6 +139,7 @@ class OverlayService : Service() {
         var initialY = 0
         var initialTouchX = 0f
         var initialTouchY = 0f
+        var touchDownTime = 0L
 
         root.setOnTouchListener { _, event ->
             when (event.action) {
@@ -146,6 +148,7 @@ class OverlayService : Service() {
                     initialY = params.y
                     initialTouchX = event.rawX
                     initialTouchY = event.rawY
+                    touchDownTime = System.currentTimeMillis()
                     true
                 }
                 MotionEvent.ACTION_MOVE -> {
@@ -157,38 +160,14 @@ class OverlayService : Service() {
                 MotionEvent.ACTION_UP -> {
                     val dx = abs(event.rawX - initialTouchX)
                     val dy = abs(event.rawY - initialTouchY)
+                    val duration = System.currentTimeMillis() - touchDownTime
                     if (dx < 12 && dy < 12) {
-                        val app = application as? JarvisApplication
-                        val container = app?.appContainer
-                        if (container != null &&
-                            !container.killSwitch.isKilled.value &&
-                            container.apiKeyStore.exists()
-                        ) {
-                            serviceScope.launch {
-                                val currentSettings = container.settingsRepository.settingsFlow.first()
-                                if (!currentSettings.setupComplete) return@launch
-                                container.voiceSessionManager.startListening(
-                                    language = currentSettings.language,
-                                    onFinalTranscript = { transcript ->
-                                        if (transcript.isNotBlank()) {
-                                            serviceScope.launch {
-                                                val reply = container.agentOrchestrator.handleUserCommand(transcript)
-                                                if (!container.killSwitch.isKilled.value) {
-                                                    container.voiceSessionManager.speakReply(
-                                                        rawText = reply,
-                                                        language = currentSettings.language,
-                                                        selectedVoiceName = currentSettings.selectedVoiceName,
-                                                        speed = currentSettings.speechSpeed
-                                                    )
-                                                }
-                                            }
-                                        }
-                                    },
-                                    onError = {
-                                        container.voiceSessionManager.transitionToIdle()
-                                    }
-                                )
-                            }
+                        if (duration > 600) {
+                            // Long-press stops the assistant
+                            AssistantController.stopAll(this@OverlayService)
+                        } else {
+                            // Tap opens Voice Call in app
+                            AssistantController.startVoiceCall(this@OverlayService)
                         }
                     }
                     true
@@ -203,9 +182,9 @@ class OverlayService : Service() {
         }
 
         val app = application as? JarvisApplication
-        app?.appContainer?.agentOrchestrator?.orbState?.let { stateFlow ->
+        app?.appContainer?.let { container ->
             serviceScope.launch {
-                stateFlow.collectLatest { state ->
+                container.agentOrchestrator.orbState.collectLatest { state ->
                     val colorHex = when (state) {
                         AssistantOrbState.IDLE -> "#8B5CF6"
                         AssistantOrbState.LISTENING -> "#2DE2E6"
@@ -214,6 +193,21 @@ class OverlayService : Service() {
                         AssistantOrbState.PAUSED_KILLSWITCH -> "#FF6B87"
                     }
                     (orbStatusDot?.background as? GradientDrawable)?.setColor(Color.parseColor(colorHex))
+                    if (state == AssistantOrbState.IDLE) {
+                        pillStatusTextView?.text = getString(R.string.overlay_chip_label)
+                    } else if (state == AssistantOrbState.LISTENING) {
+                        pillStatusTextView?.text = getString(R.string.voice_call_listening)
+                    } else if (state == AssistantOrbState.SPEAKING) {
+                        pillStatusTextView?.text = getString(R.string.voice_call_speaking)
+                    }
+                }
+            }
+
+            serviceScope.launch {
+                container.agentOrchestrator.orbCaption.collectLatest { caption ->
+                    if (!caption.isNullOrBlank()) {
+                        pillStatusTextView?.text = caption
+                    }
                 }
             }
         }

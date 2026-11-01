@@ -39,6 +39,7 @@ class JarvisTileService : TileService() {
         super.onClick()
         val intent = Intent(this, MainActivity::class.java).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            putExtra(AssistantController.EXTRA_START_VOICE_CALL, true)
             putExtra(EXTRA_START_PUSH_TO_TALK, true)
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {

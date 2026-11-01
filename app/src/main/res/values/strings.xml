@@ -260,6 +260,56 @@
     <string name="cd_voice_orb">JARVIS Assistant Voice Orb. Tap to start or stop speaking.</string>
     <string name="cd_kill_switch">Emergency Kill Switch. Stops all voice and automation actions immediately.</string>
 
+    <!-- Voice Call Mode (V3) -->
+    <string name="voice_call_title">Voice Call</string>
+    <string name="voice_call_talk">Talk</string>
+    <string name="voice_call_end">End</string>
+    <string name="voice_call_mute">Mute</string>
+    <string name="voice_call_unmute">Unmute</string>
+    <string name="voice_call_listening">Listening…</string>
+    <string name="voice_call_thinking">Thinking…</string>
+    <string name="voice_call_speaking">Speaking…</string>
+    <string name="voice_call_silence_farewell">I\'m here if you need me</string>
+    <string name="voice_call_you_prefix">You: %1$s</string>
+    <string name="voice_call_jarvis_prefix">Jarvis: %1$s</string>
+
+    <!-- Wake Phrase Service (V4) -->
+    <string name="wake_phrase_title">Hey Jarvis</string>
+    <string name="wake_phrase_desc">Hands-free wake phrase detection</string>
+    <string name="wake_phrase_dialog_title">Turn on Hey Jarvis?</string>
+    <string name="wake_phrase_dialog_body">Jarvis listens for its name using your phone\'s speech recognition. This uses the microphone and can use more battery. Your phone\'s speech service may send audio to Google.</string>
+    <string name="wake_phrase_test_button">Test it</string>
+    <string name="wake_phrase_test_title">Wake Phrase Test</string>
+    <string name="wake_phrase_test_listening">Listening for 5 seconds… Say Hey Jarvis</string>
+    <string name="wake_phrase_screen_on_only">Only when screen is on</string>
+    <string name="wake_phrase_stop_after_30m">Stop after 30 minutes</string>
+    <string name="wake_phrase_service_active">Jarvis is listening for Hey Jarvis</string>
+    <string name="wake_phrase_permission_missing">Allow microphone access for wake phrase</string>
+
+    <!-- Natural Voice & Fallback Chain (V2) -->
+    <string name="voice_provider_title">Voice Engine</string>
+    <string name="voice_provider_natural">Natural (Google)</string>
+    <string name="voice_provider_phone">Phone voice</string>
+    <string name="voice_using_phone_chip">Using phone voice</string>
+    <string name="voice_test_button">Test voice</string>
+    <string name="voice_get_better_voices">Get better phone voices</string>
+    <string name="voice_name_female_1">Voice 1 — Female</string>
+    <string name="voice_name_male_1">Voice 2 — Male</string>
+    <string name="voice_name_female_2">Voice 3 — Warm Female</string>
+    <string name="voice_name_male_2">Voice 4 — Warm Male</string>
+    <string name="voice_name_device_default">System Default Voice</string>
+
+    <!-- Voice Diagnostics (V7) -->
+    <string name="diagnostics_voice_title">Voice diagnostics</string>
+    <string name="diagnostics_voice_empty">No voice problems recorded</string>
+    <string name="diagnostics_voice_clear">Clear log</string>
+    <string name="diagnostics_test_mic">Test microphone</string>
+    <string name="diagnostics_test_mic_listening">Listening… Say something</string>
+    <string name="diagnostics_test_mic_result">Microphone OK (%1$.1f dB)</string>
+    <string name="diagnostics_timings">Latency: End-of-speech → token: %1$dms · word: %2$dms</string>
+    <string name="diagnostics_events_count">Last %1$d voice events</string>
+    <string name="memory_learned_banner">Learned from chat: %1$s</string>
+
     <!-- Risk Level Badges -->
     <string name="risk_badge_low">LOW RISK</string>
     <string name="risk_badge_medium">MEDIUM RISK</string>

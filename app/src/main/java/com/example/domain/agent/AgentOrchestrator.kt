@@ -1,6 +1,7 @@
 package com.example.domain.agent
 
 import com.example.BuildConfig
+import com.example.data.local.DiagnosticsLogger
 import com.example.di.Inject
 import com.example.di.Singleton
 import com.example.domain.model.ActivityLogEntry
@@ -59,7 +60,8 @@ class AgentOrchestrator @Inject constructor(
     private val toolRegistry: ToolRegistry,
     private val safetyGate: SafetyGate,
     private val killSwitch: KillSwitch,
-    private val memoryLearner: MemoryLearner? = null
+    private val memoryLearner: MemoryLearner? = null,
+    private val voiceSessionManager: com.example.services.voice.VoiceSessionManager? = null
 ) {
     companion object {
         const val MAX_STEPS_PER_TURN = 6
@@ -102,6 +104,9 @@ class AgentOrchestrator @Inject constructor(
 
     private val _lastResponseText = MutableStateFlow(DEFAULT_GREETING)
     val lastResponseText: StateFlow<String> = _lastResponseText.asStateFlow()
+
+    private val _streamingText = MutableStateFlow<String?>(null)
+    val streamingText: StateFlow<String?> = _streamingText.asStateFlow()
 
     private val _lastAgentStepLatencyMs = MutableStateFlow(0L)
     val lastAgentStepLatencyMs: StateFlow<Long> = _lastAgentStepLatencyMs.asStateFlow()
@@ -381,14 +386,66 @@ class AgentOrchestrator @Inject constructor(
                 )
 
                 val stepStartMs = System.currentTimeMillis()
+                var firstTokenRecorded = false
+                var sentenceBuffer = StringBuilder()
+
                 val stepDecision = agentBackendRepository.runAgentStep(
                     messages = recentMessages,
                     tools = availableTools,
                     memories = memories,
                     screenContext = currentScreenSnapshot,
                     language = settings.language,
-                    summaries = summaries
+                    summaries = summaries,
+                    onTextChunk = { chunk ->
+                        if (!firstTokenRecorded) {
+                            firstTokenRecorded = true
+                            val firstTokenLatency = (System.currentTimeMillis() - stepStartMs).coerceAtLeast(1L)
+                            DiagnosticsLogger.logVoiceEvent("TIMING_FIRST_TOKEN", "First token received", firstTokenLatency)
+                            backgroundLearnScope.launch {
+                                settingsRepository.setVoiceTimings(firstTokenLatency, 0L)
+                            }
+                        }
+                        _streamingText.value = (_streamingText.value ?: "") + chunk
+                        sentenceBuffer.append(chunk)
+
+                        val currentText = sentenceBuffer.toString()
+                        val match = Regex("^(.*?)([.!?])(\\s+|\$)", RegexOption.DOT_MATCHES_ALL).find(currentText)
+                        if (match != null && match.range.last < currentText.length - 1) {
+                            val completed = (match.groups[1]?.value.orEmpty() + match.groups[2]?.value.orEmpty()).trim()
+                            sentenceBuffer = StringBuilder(currentText.substring(match.range.last + 1))
+                            if (completed.isNotEmpty()) {
+                                voiceSessionManager?.queueStreamingSentence(
+                                    sentence = completed,
+                                    language = settings.language,
+                                    selectedVoiceName = settings.selectedVoiceName,
+                                    speed = settings.speechSpeed,
+                                    onAudioStarted = {
+                                        _orbState.value = AssistantOrbState.SPEAKING
+                                        val firstWordLatency = (System.currentTimeMillis() - stepStartMs).coerceAtLeast(1L)
+                                        DiagnosticsLogger.logVoiceEvent("TIMING_FIRST_WORD", "First word spoken", firstWordLatency)
+                                    }
+                                )
+                            }
+                        }
+                    }
                 )
+
+                val remainingSentence = sentenceBuffer.toString().trim()
+                if (remainingSentence.isNotEmpty() && stepDecision.toolCalls.isEmpty()) {
+                    voiceSessionManager?.queueStreamingSentence(
+                        sentence = remainingSentence,
+                        language = settings.language,
+                        selectedVoiceName = settings.selectedVoiceName,
+                        speed = settings.speechSpeed,
+                        onAudioStarted = {
+                            _orbState.value = AssistantOrbState.SPEAKING
+                        }
+                    )
+                }
+
+                if (stepDecision.toolCalls.isNotEmpty()) {
+                    _streamingText.value = null
+                }
                 val stepDurationMs = (System.currentTimeMillis() - stepStartMs).coerceAtLeast(1L)
                 activeExecutionElapsedMs += stepDurationMs
                 _lastAgentStepLatencyMs.value = stepDurationMs
@@ -634,6 +691,7 @@ class AgentOrchestrator @Inject constructor(
         } finally {
             timerJob.cancel()
             _orbCaption.value = null
+            _streamingText.value = null
         }
     }
 

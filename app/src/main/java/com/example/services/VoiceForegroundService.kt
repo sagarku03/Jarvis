@@ -171,12 +171,19 @@ class VoiceForegroundService : Service() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
 
+        val talkPending = AssistantController.startVoiceCallPendingIntent(this, 101)
+
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .setContentTitle(getString(R.string.fgs_notification_title))
             .setContentText(statusText)
             .setOngoing(!paused)
             .setContentIntent(openAppPending)
+            .addAction(
+                android.R.drawable.ic_btn_speak_now,
+                getString(R.string.voice_call_talk),
+                talkPending
+            )
             .addAction(
                 android.R.drawable.ic_delete,
                 getString(R.string.fgs_action_stop),

@@ -252,6 +252,26 @@ class AppContainer(context: Context) {
         )
     }
 
+    val ttsManager: com.example.services.voice.TtsManager by lazy {
+        com.example.services.voice.TtsManager(
+            context = appContext,
+            deviceTts = ttsEngineWrapper as AndroidTtsEngineWrapper,
+            apiKeyStore = apiKeyStore,
+            okHttpClient = okHttpClient,
+            settingsRepository = settingsRepository
+        )
+    }
+
+    val voiceSessionManager: VoiceSessionManager by lazy {
+        VoiceSessionManager(
+            speechRecognizer = speechRecognizerWrapper,
+            ttsEngine = ttsEngineWrapper,
+            audioRecorder = null,
+            wakeWordEngine = wakeWordEngine,
+            ttsManager = ttsManager
+        )
+    }
+
     val agentOrchestrator: AgentOrchestrator by lazy {
         AgentOrchestrator(
             agentBackendRepository = agentBackendRepository,
@@ -263,7 +283,8 @@ class AppContainer(context: Context) {
             toolRegistry = toolRegistry,
             safetyGate = safetyGate,
             killSwitch = killSwitch,
-            memoryLearner = memoryLearner
+            memoryLearner = memoryLearner,
+            voiceSessionManager = voiceSessionManager
         )
     }
 
@@ -277,14 +298,5 @@ class AppContainer(context: Context) {
 
     val wakeWordEngine: WakeWordEngine by lazy {
         FreeWakeWordEngineImpl()
-    }
-
-    val voiceSessionManager: VoiceSessionManager by lazy {
-        VoiceSessionManager(
-            speechRecognizer = speechRecognizerWrapper,
-            ttsEngine = ttsEngineWrapper,
-            audioRecorder = null,
-            wakeWordEngine = wakeWordEngine
-        )
     }
 }
