@@ -165,16 +165,22 @@ def main():
     log("1/5: Testing ListModels...")
     url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
     status, body, latency, err = perform_request(url, timeout=20)
+    models_raw = []
     models_list = []
     if status == 200:
         try:
             parsed = json.loads(body)
-            models_list = [m.get("name", "").replace("models/", "") for m in parsed.get("models", [])]
+            models_raw = parsed.get("models", [])
+            models_list = [m.get("name", "").replace("models/", "") for m in models_raw]
         except Exception:
             pass
-    
-    flash_models = [m for m in models_list if "flash" in m.lower() and not m.lower().endswith("-tts") and "live" not in m.lower()]
-    log(f"ListModels: status={status}, count={len(models_list)}, flash_candidates={flash_models[:4]}, latency={latency}ms")
+
+    generate_content_models = [
+        m.get("name", "").replace("models/", "")
+        for m in models_raw
+        if "generateContent" in m.get("supportedGenerationMethods", [])
+    ]
+    log(f"ListModels: status={status}, total={len(models_list)}, generateContent_models={generate_content_models[:6]}")
 
     results["list_models"] = {
         "status": status,
@@ -187,55 +193,55 @@ def main():
     }
 
     # CHECK 2: Text generateContent
-    # Target gemini-3.8-flash, or top available flash model from ListModels
-    text_model = "gemini-3.8-flash" if "gemini-3.8-flash" in models_list else (flash_models[0] if flash_models else "gemini-3.8-flash")
-    log(f"2/5: Testing Text generateContent ({text_model})...")
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{text_model}:generateContent?key={api_key}"
-    payload = {
-        "contents": [{"parts": [{"text": "Say OK"}]}],
-        "generationConfig": {"maxOutputTokens": 20}
-    }
-    status, body, latency, err = perform_request(url, data_dict=payload, timeout=25)
+    candidates = ["gemini-3.8-flash"] + [m for m in generate_content_models if not m.endswith("-tts") and "live" not in m]
+    chosen_text_model = "gemini-3.8-flash"
     reply_text = ""
-    if status == 200:
-        try:
-            parsed = json.loads(body)
-            reply_text = parsed["candidates"][0]["content"]["parts"][0]["text"].strip()
-        except Exception as e:
-            reply_text = f"Parse err: {e}"
-    elif status != 200 and flash_models and flash_models[0] != text_model:
-        # Fallback to next available flash model
-        fallback_model = flash_models[0]
-        log(f"Trying fallback text model: {fallback_model}...")
-        url_fb = f"https://generativelanguage.googleapis.com/v1beta/models/{fallback_model}:generateContent?key={api_key}"
-        status, body, latency, err = perform_request(url_fb, data_dict=payload, timeout=25)
-        if status == 200:
-            text_model = fallback_model
+    status = 0
+    latency = 0
+    for cand in candidates:
+        log(f"2/5: Testing text reasoning with: {cand}...")
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{cand}:generateContent?key={api_key}"
+        payload = {
+            "contents": [{"parts": [{"text": "Say OK"}]}],
+            "generationConfig": {"maxOutputTokens": 20}
+        }
+        cand_status, cand_body, cand_latency, cand_err = perform_request(url, data_dict=payload, timeout=25)
+        if cand_status == 200:
             try:
-                parsed = json.loads(body)
-                reply_text = parsed["candidates"][0]["content"]["parts"][0]["text"].strip()
+                parsed = json.loads(cand_body)
+                reply = parsed["candidates"][0]["content"]["parts"][0]["text"].strip()
+                if reply:
+                    chosen_text_model = cand
+                    reply_text = reply
+                    status = cand_status
+                    latency = cand_latency
+                    log(f"Text candidate [{cand}] succeeded: '{reply[:30]}'")
+                    break
             except Exception:
                 pass
+        else:
+            log(f"Text candidate [{cand}] returned status={cand_status}")
+        time.sleep(1.0)
 
     results["text_generate"] = {
-        "model": text_model,
+        "model": chosen_text_model,
         "status": status,
         "latency_ms": latency,
         "reply": reply_text,
         "passed": status == 200 and len(reply_text) > 0
     }
-    log(f"Text generateContent: model={text_model}, status={status}, reply='{reply_text[:30]}', latency={latency}ms")
+    log(f"Text generateContent: model={chosen_text_model}, status={status}, reply='{reply_text[:30]}', latency={latency}ms")
 
     # CHECK 3: Streaming streamGenerateContent
-    log(f"3/5: Testing Streaming ({text_model})...")
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{text_model}:streamGenerateContent?alt=sse&key={api_key}"
+    log(f"3/5: Testing Streaming ({chosen_text_model})...")
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{chosen_text_model}:streamGenerateContent?alt=sse&key={api_key}"
     payload = {
         "contents": [{"parts": [{"text": "Count 1 to 3"}]}],
         "generationConfig": {"maxOutputTokens": 30}
     }
     status, chunks, latency, err = perform_streaming_request(url, data_dict=payload, timeout=20)
     results["streaming"] = {
-        "model": text_model,
+        "model": chosen_text_model,
         "status": status,
         "latency_ms": latency,
         "chunks_count": len(chunks),
@@ -248,7 +254,7 @@ def main():
     tts_results = {}
     tts_model = "gemini-3.8-flash-tts"
     for voice in VOICES:
-        time.sleep(2.0)  # Rate limit pacing
+        time.sleep(3.5)  # Rate limit pacing
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{tts_model}:generateContent?key={api_key}"
         payload = {
             "contents": [{"parts": [{"text": "Hello Jarvis"}]}],
@@ -263,17 +269,22 @@ def main():
                 }
             }
         }
-        status, body, latency, err = perform_request(url, data_dict=payload, timeout=20)
-        if status == 429:
-            log(f"Voice [{voice}] rate limited (429), pausing 4s...")
-            time.sleep(4.0)
-            status, body, latency, err = perform_request(url, data_dict=payload, timeout=20)
+        v_status, v_body, v_latency, v_err = perform_request(url, data_dict=payload, timeout=20)
+
+        # Retry on 429
+        attempt = 0
+        while v_status == 429 and attempt < 2:
+            attempt += 1
+            wait_time = 5.0 * attempt
+            log(f"Voice [{voice}] rate limited (429), retry {attempt} waiting {wait_time}s...")
+            time.sleep(wait_time)
+            v_status, v_body, v_latency, v_err = perform_request(url, data_dict=payload, timeout=20)
 
         audio_bytes_len = 0
         mime_type = ""
-        if status == 200:
+        if v_status == 200:
             try:
-                parsed = json.loads(body)
+                parsed = json.loads(v_body)
                 inline = parsed["candidates"][0]["content"]["parts"][0]["inlineData"]
                 mime_type = inline.get("mimeType", "")
                 data_b64 = inline.get("data", "")
@@ -281,15 +292,15 @@ def main():
             except Exception as e:
                 mime_type = f"Error: {e}"
 
-        passed = status == 200 and audio_bytes_len > 0
+        passed = v_status == 200 and audio_bytes_len > 0
         tts_results[voice] = {
-            "status": status,
-            "latency_ms": latency,
+            "status": v_status,
+            "latency_ms": v_latency,
             "mime_type": mime_type,
             "audio_bytes": audio_bytes_len,
             "passed": passed
         }
-        log(f"Voice [{voice}]: status={status}, mime={mime_type}, bytes={audio_bytes_len}, latency={latency}ms")
+        log(f"Voice [{voice}]: status={v_status}, mime={mime_type}, bytes={audio_bytes_len}, latency={v_latency}ms")
 
     results["tts"] = tts_results
 
@@ -319,7 +330,7 @@ def main():
         f.write("# Live Gemini 3.8 Device & API Verification Report\n\n")
         f.write(f"**Generated**: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())}\n")
         f.write(f"**Overall Status**: {'🟢 ALL TESTS PASSED' if all_passed else '⚠️ PARTIAL / FAILURES DETECTED'}\n\n")
-        
+
         f.write("## 1. ListModels Check\n")
         f.write(f"- **HTTP Status**: `{results['list_models']['status']}`\n")
         f.write(f"- **Latency**: `{results['list_models']['latency_ms']} ms`\n")

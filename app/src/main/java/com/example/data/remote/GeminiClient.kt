@@ -287,10 +287,10 @@ class GeminiClient @Inject constructor(
             .post(mapAdapter.toJson(textPayload).toRequestBody(JSON_MEDIA_TYPE))
             .build()
 
-        val textStart = SystemClock.elapsedRealtime()
+        val textStart = System.currentTimeMillis()
         val textPing = try {
             testClient.newCall(textRequest).execute().use { response ->
-                val latency = SystemClock.elapsedRealtime() - textStart
+                val latency = System.currentTimeMillis() - textStart
                 val bodyStr = response.body?.string().orEmpty()
                 if (response.isSuccessful) {
                     val parsed = runCatching { mapAdapter.fromJson(bodyStr) }.getOrNull()
@@ -320,7 +320,7 @@ class GeminiClient @Inject constructor(
                 }
             }
         } catch (e: Exception) {
-            val latency = SystemClock.elapsedRealtime() - textStart
+            val latency = System.currentTimeMillis() - textStart
             ConnectionPingDetail(
                 modelId = cleanTextModel,
                 success = false,
@@ -359,10 +359,10 @@ class GeminiClient @Inject constructor(
             .post(mapAdapter.toJson(ttsPayload).toRequestBody(JSON_MEDIA_TYPE))
             .build()
 
-        val ttsStart = SystemClock.elapsedRealtime()
+        val ttsStart = System.currentTimeMillis()
         val ttsPing = try {
             testClient.newCall(ttsRequest).execute().use { response ->
-                val latency = SystemClock.elapsedRealtime() - ttsStart
+                val latency = System.currentTimeMillis() - ttsStart
                 val bodyStr = response.body?.string().orEmpty()
                 if (response.isSuccessful) {
                     val parsed = runCatching { mapAdapter.fromJson(bodyStr) }.getOrNull()
@@ -401,7 +401,7 @@ class GeminiClient @Inject constructor(
                 }
             }
         } catch (e: Exception) {
-            val latency = SystemClock.elapsedRealtime() - ttsStart
+            val latency = System.currentTimeMillis() - ttsStart
             ConnectionPingDetail(
                 modelId = cleanTtsModel,
                 success = false,
@@ -458,10 +458,10 @@ class GeminiClient @Inject constructor(
         }
 
         // 1. ListModels
-        val step1Start = SystemClock.elapsedRealtime()
+        val step1Start = System.currentTimeMillis()
         val step1 = try {
             val res = verifyKeyAndListModels(apiKey)
-            val latency = SystemClock.elapsedRealtime() - step1Start
+            val latency = System.currentTimeMillis() - step1Start
             when (res) {
                 is KeyVerificationResult.Valid -> SelfTestStepResult(
                     stepIndex = 1,
@@ -498,14 +498,14 @@ class GeminiClient @Inject constructor(
                 title = "ListModels API",
                 passed = false,
                 detail = "Exception: ${e.localizedMessage ?: "error"}",
-                latencyMs = SystemClock.elapsedRealtime() - step1Start
+                latencyMs = System.currentTimeMillis() - step1Start
             )
         }
         steps.add(step1)
         onStepProgress?.invoke(step1)
 
         // 2. Text generateContent
-        val step2Start = SystemClock.elapsedRealtime()
+        val step2Start = System.currentTimeMillis()
         val step2 = try {
             val res = generateContent(
                 modelId = DEFAULT_TEXT_MODEL,
@@ -513,7 +513,7 @@ class GeminiClient @Inject constructor(
                 messages = listOf(ChatMessage(role = MessageRole.USER, content = "Say OK")),
                 tools = emptyList()
             )
-            val latency = SystemClock.elapsedRealtime() - step2Start
+            val latency = System.currentTimeMillis() - step2Start
             when (res) {
                 is GeminiTurnResult.Success -> SelfTestStepResult(
                     stepIndex = 2,
@@ -536,14 +536,14 @@ class GeminiClient @Inject constructor(
                 title = "Text Reasoning ($DEFAULT_TEXT_MODEL)",
                 passed = false,
                 detail = "Exception: ${e.localizedMessage}",
-                latencyMs = SystemClock.elapsedRealtime() - step2Start
+                latencyMs = System.currentTimeMillis() - step2Start
             )
         }
         steps.add(step2)
         onStepProgress?.invoke(step2)
 
         // 3. Streaming SSE
-        val step3Start = SystemClock.elapsedRealtime()
+        val step3Start = System.currentTimeMillis()
         val step3 = try {
             var chunkCount = 0
             val res = streamGenerateContent(
@@ -553,7 +553,7 @@ class GeminiClient @Inject constructor(
                 tools = emptyList(),
                 onTextChunk = { chunkCount++ }
             )
-            val latency = SystemClock.elapsedRealtime() - step3Start
+            val latency = System.currentTimeMillis() - step3Start
             if (res is GeminiTurnResult.Success && chunkCount > 0) {
                 SelfTestStepResult(
                     stepIndex = 3,
@@ -577,14 +577,14 @@ class GeminiClient @Inject constructor(
                 title = "SSE Streaming ($DEFAULT_TEXT_MODEL)",
                 passed = false,
                 detail = "Exception: ${e.localizedMessage}",
-                latencyMs = SystemClock.elapsedRealtime() - step3Start
+                latencyMs = System.currentTimeMillis() - step3Start
             )
         }
         steps.add(step3)
         onStepProgress?.invoke(step3)
 
         // 4. TTS 6 Voices Test
-        val step4Start = SystemClock.elapsedRealtime()
+        val step4Start = System.currentTimeMillis()
         val voices = listOf("Puck", "Charon", "Fenrir", "Aoede", "Kore", "Leda")
         val voiceResults = mutableMapOf<String, Int>()
         var allVoicesOk = true
@@ -647,7 +647,7 @@ class GeminiClient @Inject constructor(
                 ttsErrorReason = "$vName error: ${e.localizedMessage}"
             }
         }
-        val latency4 = SystemClock.elapsedRealtime() - step4Start
+        val latency4 = System.currentTimeMillis() - step4Start
         val step4 = if (allVoicesOk) {
             val summary = voiceResults.entries.joinToString(", ") { "${it.key}:${it.value}B" }
             SelfTestStepResult(
@@ -670,7 +670,7 @@ class GeminiClient @Inject constructor(
         onStepProgress?.invoke(step4)
 
         // 5. Gemini Live WebSocket Handshake
-        val step5Start = SystemClock.elapsedRealtime()
+        val step5Start = System.currentTimeMillis()
         val wsLatch = java.util.concurrent.CountDownLatch(1)
         var wsConnected = false
         var wsDetail = ""
@@ -712,7 +712,7 @@ class GeminiClient @Inject constructor(
         })
 
         wsLatch.await(5, TimeUnit.SECONDS)
-        val latency5 = SystemClock.elapsedRealtime() - step5Start
+        val latency5 = System.currentTimeMillis() - step5Start
         val step5 = SelfTestStepResult(
             stepIndex = 5,
             title = "Gemini Live WebSocket Handshake",
