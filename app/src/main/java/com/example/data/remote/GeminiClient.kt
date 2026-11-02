@@ -115,11 +115,7 @@ class GeminiClient @Inject constructor(
         }
 
         fun getNextFallbackModel(failedModel: String): String {
-            val clean = failedModel.removePrefix("models/").lowercase(Locale.US)
-            return when {
-                clean.contains("live") || clean.contains("voice") -> DEFAULT_VOICE_MODEL
-                else -> DEFAULT_TEXT_MODEL
-            }
+            return DEFAULT_TEXT_MODEL
         }
 
         fun selectDefaultModel(models: List<String>): String {

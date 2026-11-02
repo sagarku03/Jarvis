@@ -214,7 +214,7 @@ class ExampleUnitTest {
             val verifyRes = client.verifyKeyAndListModels(testApiKey)
             assertTrue(verifyRes is KeyVerificationResult.Valid)
             val models = (verifyRes as KeyVerificationResult.Valid).availableModels
-            assertEquals(listOf("gemini-3.8-flash"), models)
+            assertEquals(listOf("gemini-3.8-flash", "gemini-3.1-flash-live-preview"), models)
 
             val recordedModelsReq = server.takeRequest()
             assertEquals("GET", recordedModelsReq.method)
@@ -1568,7 +1568,7 @@ class ExampleUnitTest {
         assertNotNull(genConfig38["thinkingConfig"])
         @Suppress("UNCHECKED_CAST")
         val thinkingConfig38 = genConfig38["thinkingConfig"] as Map<String, Any?>
-        assertEquals("low", thinkingConfig38["thinkingLevel"])
+        assertEquals(0, thinkingConfig38["thinkingBudget"])
 
         // System instruction verified
         @Suppress("UNCHECKED_CAST")
