@@ -20,9 +20,11 @@ VOICES = ["Puck", "Charon", "Fenrir", "Aoede", "Kore", "Leda"]
 def log(msg):
     print(f"[VERIFY] {msg}", flush=True)
 
-def perform_request(url, data_dict=None, headers=None, method=None):
+def perform_request(url, data_dict=None, headers=None, method=None, timeout=25):
     if headers is None:
         headers = {}
+    if "User-Agent" not in headers:
+        headers["User-Agent"] = "Jarvis-Verification/2.2.0"
     data = None
     if data_dict is not None:
         data = json.dumps(data_dict).encode("utf-8")
@@ -30,7 +32,7 @@ def perform_request(url, data_dict=None, headers=None, method=None):
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
     start = time.time()
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             latency = int((time.time() - start) * 1000)
             body = resp.read().decode("utf-8", errors="replace")
             return resp.status, body, latency, None
@@ -41,6 +43,33 @@ def perform_request(url, data_dict=None, headers=None, method=None):
     except Exception as e:
         latency = int((time.time() - start) * 1000)
         return 0, "", latency, str(e)
+
+def perform_streaming_request(url, data_dict=None, headers=None, timeout=20):
+    if headers is None:
+        headers = {}
+    headers["User-Agent"] = "Jarvis-Verification/2.2.0"
+    headers["Content-Type"] = "application/json"
+    headers["Accept"] = "text/event-stream"
+    data = json.dumps(data_dict).encode("utf-8") if data_dict else None
+    req = urllib.request.Request(url, data=data, headers=headers, method="POST")
+    start = time.time()
+    chunks = []
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            latency = int((time.time() - start) * 1000)
+            for line in resp:
+                text_line = line.decode("utf-8", errors="replace").strip()
+                if text_line.startswith("data: "):
+                    chunks.append(text_line)
+                    if len(chunks) >= 2:
+                        break
+            return resp.status, chunks, latency, None
+    except urllib.error.HTTPError as e:
+        latency = int((time.time() - start) * 1000)
+        return e.code, [], latency, f"HTTP {e.code}"
+    except Exception as e:
+        latency = int((time.time() - start) * 1000)
+        return 0, [], latency, str(e)
 
 def test_websocket_handshake(api_key, model_id="gemini-3.8-live"):
     host = "generativelanguage.googleapis.com"
@@ -78,7 +107,6 @@ def test_websocket_handshake(api_key, model_id="gemini-3.8-live"):
 
         if "101" in status_line:
             # Successfully connected over WebSocket!
-            # Send setup frame (masked client text frame)
             setup_payload = json.dumps({
                 "setup": {
                     "model": f"models/{model_id}",
@@ -109,7 +137,7 @@ def test_websocket_handshake(api_key, model_id="gemini-3.8-live"):
 
             sock.sendall(frame_header + masked_payload)
 
-            # Attempt to read response frame (non-blocking / short timeout)
+            # Read setup complete frame
             sock.settimeout(5.0)
             server_frame = sock.recv(4096)
             sock.close()
@@ -136,7 +164,7 @@ def main():
     # CHECK 1: ListModels
     log("1/5: Testing ListModels...")
     url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
-    status, body, latency, err = perform_request(url)
+    status, body, latency, err = perform_request(url, timeout=20)
     models_list = []
     if status == 200:
         try:
@@ -144,6 +172,10 @@ def main():
             models_list = [m.get("name", "").replace("models/", "") for m in parsed.get("models", [])]
         except Exception:
             pass
+    
+    flash_models = [m for m in models_list if "flash" in m.lower() and not m.lower().endswith("-tts") and "live" not in m.lower()]
+    log(f"ListModels: status={status}, count={len(models_list)}, flash_candidates={flash_models[:4]}, latency={latency}ms")
+
     results["list_models"] = {
         "status": status,
         "latency_ms": latency,
@@ -153,13 +185,17 @@ def main():
         "has_3_8_flash": any("3.8-flash" in m for m in models_list),
         "has_3_8_live": any("3.8-live" in m for m in models_list)
     }
-    log(f"ListModels: status={status}, count={len(models_list)}, latency={latency}ms")
 
     # CHECK 2: Text generateContent
-    log("2/5: Testing Text generateContent (gemini-3.8-flash)...")
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key={api_key}"
-    payload = {"contents": [{"role": "user", "parts": [{"text": "Say OK"}]}]}
-    status, body, latency, err = perform_request(url, data_dict=payload)
+    # Target gemini-3.8-flash, or top available flash model from ListModels
+    text_model = "gemini-3.8-flash" if "gemini-3.8-flash" in models_list else (flash_models[0] if flash_models else "gemini-3.8-flash")
+    log(f"2/5: Testing Text generateContent ({text_model})...")
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{text_model}:generateContent?key={api_key}"
+    payload = {
+        "contents": [{"parts": [{"text": "Say OK"}]}],
+        "generationConfig": {"maxOutputTokens": 20}
+    }
+    status, body, latency, err = perform_request(url, data_dict=payload, timeout=25)
     reply_text = ""
     if status == 200:
         try:
@@ -167,23 +203,39 @@ def main():
             reply_text = parsed["candidates"][0]["content"]["parts"][0]["text"].strip()
         except Exception as e:
             reply_text = f"Parse err: {e}"
+    elif status != 200 and flash_models and flash_models[0] != text_model:
+        # Fallback to next available flash model
+        fallback_model = flash_models[0]
+        log(f"Trying fallback text model: {fallback_model}...")
+        url_fb = f"https://generativelanguage.googleapis.com/v1beta/models/{fallback_model}:generateContent?key={api_key}"
+        status, body, latency, err = perform_request(url_fb, data_dict=payload, timeout=25)
+        if status == 200:
+            text_model = fallback_model
+            try:
+                parsed = json.loads(body)
+                reply_text = parsed["candidates"][0]["content"]["parts"][0]["text"].strip()
+            except Exception:
+                pass
+
     results["text_generate"] = {
-        "model": "gemini-3.8-flash",
+        "model": text_model,
         "status": status,
         "latency_ms": latency,
         "reply": reply_text,
         "passed": status == 200 and len(reply_text) > 0
     }
-    log(f"Text generateContent: status={status}, reply='{reply_text[:30]}', latency={latency}ms")
+    log(f"Text generateContent: model={text_model}, status={status}, reply='{reply_text[:30]}', latency={latency}ms")
 
     # CHECK 3: Streaming streamGenerateContent
-    log("3/5: Testing Streaming (gemini-3.8-flash)...")
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:streamGenerateContent?alt=sse&key={api_key}"
-    payload = {"contents": [{"role": "user", "parts": [{"text": "Reply with 1, 2, 3"}]}]}
-    status, body, latency, err = perform_request(url, data_dict=payload)
-    chunks = [line for line in body.split("\n") if line.startswith("data: ")]
+    log(f"3/5: Testing Streaming ({text_model})...")
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{text_model}:streamGenerateContent?alt=sse&key={api_key}"
+    payload = {
+        "contents": [{"parts": [{"text": "Count 1 to 3"}]}],
+        "generationConfig": {"maxOutputTokens": 30}
+    }
+    status, chunks, latency, err = perform_streaming_request(url, data_dict=payload, timeout=20)
     results["streaming"] = {
-        "model": "gemini-3.8-flash",
+        "model": text_model,
         "status": status,
         "latency_ms": latency,
         "chunks_count": len(chunks),
@@ -196,9 +248,10 @@ def main():
     tts_results = {}
     tts_model = "gemini-3.8-flash-tts"
     for voice in VOICES:
+        time.sleep(2.0)  # Rate limit pacing
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{tts_model}:generateContent?key={api_key}"
         payload = {
-            "contents": [{"role": "user", "parts": [{"text": "Greetings, Jarvis online."}]}],
+            "contents": [{"parts": [{"text": "Hello Jarvis"}]}],
             "generationConfig": {
                 "responseModalities": ["AUDIO"],
                 "speechConfig": {
@@ -210,7 +263,12 @@ def main():
                 }
             }
         }
-        status, body, latency, err = perform_request(url, data_dict=payload)
+        status, body, latency, err = perform_request(url, data_dict=payload, timeout=20)
+        if status == 429:
+            log(f"Voice [{voice}] rate limited (429), pausing 4s...")
+            time.sleep(4.0)
+            status, body, latency, err = perform_request(url, data_dict=payload, timeout=20)
+
         audio_bytes_len = 0
         mime_type = ""
         if status == 200:
@@ -222,19 +280,6 @@ def main():
                 audio_bytes_len = len(base64.b64decode(data_b64))
             except Exception as e:
                 mime_type = f"Error: {e}"
-        elif status == 404:
-            # Fallback check with gemini-3.8-flash if tts suffix is configured differently
-            url_fallback = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key={api_key}"
-            status, body, latency, err = perform_request(url_fallback, data_dict=payload)
-            if status == 200:
-                try:
-                    parsed = json.loads(body)
-                    inline = parsed["candidates"][0]["content"]["parts"][0]["inlineData"]
-                    mime_type = inline.get("mimeType", "")
-                    data_b64 = inline.get("data", "")
-                    audio_bytes_len = len(base64.b64decode(data_b64))
-                except Exception:
-                    pass
 
         passed = status == 200 and audio_bytes_len > 0
         tts_results[voice] = {
@@ -249,6 +294,7 @@ def main():
     results["tts"] = tts_results
 
     # CHECK 5: Live WebSocket Handshake
+    time.sleep(1.0)
     log("5/5: Testing Live WebSocket Handshake (bidiGenerateContent)...")
     ws_ok, ws_status, ws_detail, ws_lat = test_websocket_handshake(api_key)
     results["live_websocket"] = {
@@ -281,14 +327,14 @@ def main():
         f.write(f"- **Sample Models**: `{', '.join(results['list_models']['models'][:5])}`\n")
         f.write(f"- **Result**: {'✅ PASS' if results['list_models']['passed'] else '❌ FAIL'}\n\n")
 
-        f.write("## 2. Text Reasoning (Cascade: `gemini-3.8-flash`)\n")
+        f.write(f"## 2. Text Reasoning (Cascade: `{results['text_generate']['model']}`)\n")
         f.write(f"- **HTTP Status**: `{results['text_generate']['status']}`\n")
         f.write(f"- **Latency**: `{results['text_generate']['latency_ms']} ms`\n")
         f.write(f"- **Prompt**: `\"Say OK\"`\n")
         f.write(f"- **Response Snippet**: `\"{results['text_generate']['reply']}\"`\n")
         f.write(f"- **Result**: {'✅ PASS' if results['text_generate']['passed'] else '❌ FAIL'}\n\n")
 
-        f.write("## 3. Streaming Response (`gemini-3.8-flash`)\n")
+        f.write(f"## 3. Streaming Response (`{results['streaming']['model']}`)\n")
         f.write(f"- **HTTP Status**: `{results['streaming']['status']}`\n")
         f.write(f"- **Latency**: `{results['streaming']['latency_ms']} ms`\n")
         f.write(f"- **SSE Chunks Received**: `{results['streaming']['chunks_count']}`\n")

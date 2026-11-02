@@ -115,6 +115,7 @@ jobs:
           python3 scripts/verify_gemini_live.py
 
       - name: Upload Verification Report
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: VERIFICATION.md

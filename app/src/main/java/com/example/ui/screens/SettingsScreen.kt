@@ -1,7 +1,9 @@
 package com.example.ui.screens
 
+import android.content.Context
 import android.content.Intent
 import android.provider.Settings
+import com.example.data.remote.GeminiClient
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
