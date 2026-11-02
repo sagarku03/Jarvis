@@ -27,9 +27,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Memory
@@ -69,6 +71,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.BuildConfig
 import com.example.R
 import com.example.data.local.DiagnosticsLogger
 import com.example.domain.model.AppLanguage
@@ -99,6 +102,9 @@ fun SettingsScreen(
     val isVerifyingKey by viewModel.isVerifyingKey.collectAsStateWithLifecycle()
     val isTestingConnection by viewModel.isTestingConnection.collectAsStateWithLifecycle()
     val testConnectionMessage by viewModel.testConnectionMessage.collectAsStateWithLifecycle()
+    val dualConnectionReport by viewModel.dualConnectionReport.collectAsStateWithLifecycle()
+    val isRunningSelfTest by viewModel.isRunningSelfTest.collectAsStateWithLifecycle()
+    val selfTestReport by viewModel.selfTestReport.collectAsStateWithLifecycle()
     val availableVoices by viewModel.availableDeviceVoices.collectAsStateWithLifecycle()
     val diagnostics by viewModel.voiceDiagnostics.collectAsStateWithLifecycle()
 
@@ -115,13 +121,21 @@ fun SettingsScreen(
     var liveVoiceDropdownExpanded by remember { mutableStateOf(false) }
     var phoneVoiceDropdownExpanded by remember { mutableStateOf(false) }
 
-    val friendlyVoiceModelNames = mapOf(
-        "gemini-3.8-live" to "Gemini 3.8 Live (Recommended for Voice)"
-    )
+    val availableVoiceModels = remember(settings.availableModels) {
+        buildList {
+            add("gemini-3.8-live")
+            add("gemini-3.8-flash")
+            addAll(settings.availableModels.filter { it.contains("live") || it.contains("flash") })
+        }.distinct().filterNot { it.contains("2.0") }
+    }
 
-    val friendlyTextModelNames = mapOf(
-        "gemini-3.8-flash" to "Gemini 3.8 Flash (Recommended for Text)"
-    )
+    val availableTextModels = remember(settings.availableModels) {
+        buildList {
+            add("gemini-3.8-flash")
+            add("gemini-3.8-pro")
+            addAll(settings.availableModels.filterNot { it.contains("tts") || it.contains("live") || it.contains("2.0") })
+        }.distinct()
+    }
 
     AuroraBackground {
         LazyColumn(
@@ -198,23 +212,148 @@ fun SettingsScreen(
                         )
                     }
 
-                    if (testConnectionMessage != null) {
+                    if (dualConnectionReport != null) {
+                        val report = dualConnectionReport!!
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(if (report.isOverallSuccess) AuroraColors.GlassFillLight else AuroraColors.Danger.copy(alpha = 0.12f))
+                                .border(1.dp, if (report.isOverallSuccess) AuroraColors.Success.copy(alpha = 0.5f) else AuroraColors.Danger.copy(alpha = 0.5f), RoundedCornerShape(8.dp))
+                                .padding(10.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            // Text Model Ping
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Icon(
+                                    imageVector = if (report.textPing.success) Icons.Default.CheckCircle else Icons.Default.Close,
+                                    contentDescription = null,
+                                    tint = if (report.textPing.success) AuroraColors.Success else AuroraColors.Danger,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Text(
+                                    text = "Text Model (${report.textPing.modelId}): ${if (report.textPing.success) report.textPing.details else (report.textPing.errorSnippet ?: report.textPing.details)}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = if (report.textPing.success) AuroraColors.TextPrimary else AuroraColors.Danger
+                                )
+                            }
+                            // TTS Voice Model Ping
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Icon(
+                                    imageVector = if (report.ttsPing.success) Icons.Default.CheckCircle else Icons.Default.Close,
+                                    contentDescription = null,
+                                    tint = if (report.ttsPing.success) AuroraColors.Success else AuroraColors.Danger,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Text(
+                                    text = "Natural TTS (${report.ttsPing.modelId}): ${if (report.ttsPing.success) report.ttsPing.details else (report.ttsPing.errorSnippet ?: report.ttsPing.details)}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = if (report.ttsPing.success) AuroraColors.TextPrimary else AuroraColors.Danger
+                                )
+                            }
+                        }
+                    } else if (testConnectionMessage != null) {
                         Spacer(modifier = Modifier.height(8.dp))
+                        val isConnOk = testConnectionMessage?.startsWith("Connected", ignoreCase = true) == true
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
                             Icon(
-                                imageVector = Icons.Default.CheckCircle,
+                                imageVector = if (isConnOk) Icons.Default.CheckCircle else Icons.Default.Close,
                                 contentDescription = null,
-                                tint = AuroraColors.Success,
+                                tint = if (isConnOk) AuroraColors.Success else AuroraColors.Danger,
                                 modifier = Modifier.size(16.dp)
                             )
                             Text(
                                 text = testConnectionMessage.orEmpty(),
                                 style = MaterialTheme.typography.bodySmall,
-                                color = AuroraColors.Success
+                                color = if (isConnOk) AuroraColors.Success else AuroraColors.Danger
                             )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+                    AuroraSecondaryButton(
+                        text = if (isRunningSelfTest) "Running 5 Live Checks..." else "Run Full Self-Test",
+                        enabled = !isRunningSelfTest,
+                        onClick = { viewModel.runFullSelfTest() },
+                        modifier = Modifier.fillMaxWidth().testTag("settings_run_self_test_button")
+                    )
+
+                    if (selfTestReport != null) {
+                        val report = selfTestReport!!
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(AuroraColors.GlassFillLight)
+                                .border(1.dp, if (report.allPassed) AuroraColors.Success else AuroraColors.Lavender, RoundedCornerShape(8.dp))
+                                .padding(10.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    "Self-Test Diagnostic Suite",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (report.allPassed) AuroraColors.Success else AuroraColors.Lavender
+                                )
+                                Text(
+                                    if (report.allPassed) "ALL PASS" else "CHECK DETAILS",
+                                    style = JarvisMonoStyle.copy(fontSize = 11.sp, color = if (report.allPassed) AuroraColors.Success else AuroraColors.Danger)
+                                )
+                            }
+                            report.steps.forEach { step ->
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = if (step.passed) Icons.Default.CheckCircle else Icons.Default.Close,
+                                        contentDescription = null,
+                                        tint = if (step.passed) AuroraColors.Success else AuroraColors.Danger,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                    Text(
+                                        text = "${step.stepIndex}. ${step.title}: ${step.detail}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = if (step.passed) AuroraColors.TextPrimary else AuroraColors.Danger
+                                    )
+                                }
+                            }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.End
+                            ) {
+                                AuroraSecondaryButton(
+                                    text = "Copy Diagnostics",
+                                    onClick = {
+                                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+                                        val summaryText = buildString {
+                                            appendLine("### JARVIS Self-Test Report")
+                                            appendLine("Overall: ${if (report.allPassed) "PASSED" else "FAILED"}")
+                                            report.steps.forEach {
+                                                appendLine("- [${if (it.passed) "PASS" else "FAIL"}] ${it.title}: ${it.detail} (${it.latencyMs}ms)")
+                                            }
+                                        }
+                                        val clip = android.content.ClipData.newPlainText("JARVIS Self-Test", summaryText)
+                                        clipboard?.setPrimaryClip(clip)
+                                    }
+                                )
+                            }
                         }
                     }
 
@@ -240,8 +379,7 @@ fun SettingsScreen(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            val displayName = friendlyVoiceModelNames[settings.selectedVoiceModelId]
-                                ?: settings.selectedVoiceModelId
+                            val displayName = GeminiClient.friendlyModelName(settings.selectedVoiceModelId)
                             Text(
                                 text = displayName,
                                 style = MaterialTheme.typography.bodySmall,
@@ -253,9 +391,9 @@ fun SettingsScreen(
                             expanded = voiceModelDropdownExpanded,
                             onDismissRequest = { voiceModelDropdownExpanded = false }
                         ) {
-                            friendlyVoiceModelNames.forEach { (modelId, label) ->
+                            availableVoiceModels.forEach { modelId ->
                                 DropdownMenuItem(
-                                    text = { Text(label) },
+                                    text = { Text(GeminiClient.friendlyModelName(modelId)) },
                                     onClick = {
                                         viewModel.setSelectedVoiceModelId(modelId)
                                         voiceModelDropdownExpanded = false
@@ -287,8 +425,7 @@ fun SettingsScreen(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            val displayName = friendlyTextModelNames[settings.selectedTextModelId]
-                                ?: settings.selectedTextModelId
+                            val displayName = GeminiClient.friendlyModelName(settings.selectedTextModelId)
                             Text(
                                 text = displayName,
                                 style = MaterialTheme.typography.bodySmall,
@@ -300,9 +437,9 @@ fun SettingsScreen(
                             expanded = textModelDropdownExpanded,
                             onDismissRequest = { textModelDropdownExpanded = false }
                         ) {
-                            friendlyTextModelNames.forEach { (modelId, label) ->
+                            availableTextModels.forEach { modelId ->
                                 DropdownMenuItem(
-                                    text = { Text(label) },
+                                    text = { Text(GeminiClient.friendlyModelName(modelId)) },
                                     onClick = {
                                         viewModel.setSelectedTextModelId(modelId)
                                         textModelDropdownExpanded = false
@@ -324,6 +461,15 @@ fun SettingsScreen(
                         fontWeight = FontWeight.Bold
                     )
                     Spacer(modifier = Modifier.height(10.dp))
+
+                    SettingToggleRow(
+                        title = "Real-time Live Mode (WebSocket)",
+                        subtitle = "Direct 2-way streaming via bidiGenerateContent with auto-fallback to cascade",
+                        checked = settings.isRealtimeLiveMode,
+                        onCheckedChange = { viewModel.setRealtimeLiveMode(it) }
+                    )
+
+                    Spacer(modifier = Modifier.height(12.dp))
 
                     Text(
                         text = stringResource(R.string.voice_provider_title),
@@ -828,11 +974,22 @@ fun SettingsScreen(
                     Spacer(modifier = Modifier.height(8.dp))
 
                     Text(
-                        text = stringResource(R.string.settings_about_version),
+                        text = "Version ${BuildConfig.VERSION_NAME} (Build ${BuildConfig.VERSION_CODE})",
                         style = MaterialTheme.typography.bodySmall,
                         color = AuroraColors.TextPrimary,
                         fontWeight = FontWeight.SemiBold
                     )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = "Git Commit: ${BuildConfig.GIT_SHA}",
+                        style = JarvisMonoStyle.copy(fontSize = 11.sp, color = AuroraColors.Lavender)
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = "Build Time: ${BuildConfig.BUILD_TIME}",
+                        style = JarvisMonoStyle.copy(fontSize = 11.sp, color = AuroraColors.TextSecondary)
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
                     Text(
                         text = stringResource(R.string.settings_about_privacy),
                         style = MaterialTheme.typography.bodySmall,

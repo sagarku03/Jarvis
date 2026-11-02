@@ -36,8 +36,16 @@ android {
         applicationId = "com.aistudio.jarvis.vcaixq"
         minSdk = 24
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 220
+        versionName = "2.2.0"
+
+        val gitSha = runCatching {
+            ProcessBuilder("git", "rev-parse", "--short", "HEAD").start().inputStream.bufferedReader().readText().trim()
+        }.getOrDefault("2.2.0")
+        val buildTime = System.currentTimeMillis().toString()
+
+        buildConfigField("String", "GIT_SHA", "\"$gitSha\"")
+        buildConfigField("String", "BUILD_TIME", "\"$buildTime\"")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 

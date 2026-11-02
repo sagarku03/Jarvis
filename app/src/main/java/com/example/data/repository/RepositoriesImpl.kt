@@ -93,22 +93,15 @@ class AgentBackendRepositoryImpl @Inject constructor(
         }
 
         val settings = settingsRepository.settingsFlow.first()
-        val chosenModelId = if (isVoiceInput) {
-            val voice = settings.selectedVoiceModelId.trim()
-            if (voice.isBlank() || voice.contains("2.0") || voice.contains("2.5-flash-lite")) {
-                GeminiClient.DEFAULT_VOICE_MODEL
-            } else {
-                voice
-            }
-        } else {
+        val chosenModelId = run {
             val text = settings.selectedTextModelId.trim()
-            if (text.isBlank() || text.contains("2.0") || text.contains("2.5-flash-lite")) {
+            if (text.isBlank() || text.contains("2.0") || text.contains("2.5-flash-lite") || text.contains("live")) {
                 GeminiClient.DEFAULT_TEXT_MODEL
             } else {
                 text
             }
         }
-        DiagnosticsLogger.log("AgentBackend", "runAgentStep using model: $chosenModelId (isVoiceInput=$isVoiceInput)")
+        DiagnosticsLogger.log("AgentBackend", "runAgentStep using cascade text model: $chosenModelId (isVoiceInput=$isVoiceInput)")
         val pinnedFacts = memories.filter {
             it.pinned || it.category == MemoryCategory.PROFILE.name || it.category == MemoryCategory.CONTACT.name
         }
@@ -908,6 +901,8 @@ class SettingsRepositoryImpl @Inject constructor(
         val SELECTED_VOICE_MODEL_ID = stringPreferencesKey("selected_voice_model_id")
         val SELECTED_VOICE_GENDER = stringPreferencesKey("selected_voice_gender")
         val SELECTED_LIVE_VOICE_NAME = stringPreferencesKey("selected_live_voice_name")
+        val SELECTED_TTS_MODEL_ID = stringPreferencesKey("selected_tts_model_id")
+        val REALTIME_LIVE_MODE = booleanPreferencesKey("realtime_live_mode")
         val AVAILABLE_MODELS = stringPreferencesKey("available_models_delimited")
         val LANGUAGE = stringPreferencesKey("language_code")
         val SELECTED_VOICE_NAME = stringPreferencesKey("selected_voice_name")
@@ -964,11 +959,20 @@ class SettingsRepositoryImpl @Inject constructor(
             savedTextModelId
         }
 
+        val savedTtsModelId = prefs[Keys.SELECTED_TTS_MODEL_ID]
+        val resolvedTtsModelId = if (savedTtsModelId.isNullOrBlank() || savedTtsModelId.contains("2.0") || savedTtsModelId.contains("live")) {
+            GeminiClient.DEFAULT_TTS_MODEL
+        } else {
+            savedTtsModelId
+        }
+
         UserSettings(
             setupComplete = prefs[Keys.SETUP_COMPLETE] ?: false,
             selectedModelId = resolvedModelId,
             selectedTextModelId = resolvedTextModelId,
             selectedVoiceModelId = resolvedVoiceModelId,
+            selectedTtsModelId = resolvedTtsModelId,
+            isRealtimeLiveMode = prefs[Keys.REALTIME_LIVE_MODE] ?: false,
             selectedVoiceGender = prefs[Keys.SELECTED_VOICE_GENDER] ?: "MALE",
             selectedLiveVoiceName = prefs[Keys.SELECTED_LIVE_VOICE_NAME] ?: "Puck",
             availableModels = rawModels,
@@ -1013,6 +1017,14 @@ class SettingsRepositoryImpl @Inject constructor(
 
     override suspend fun setSelectedVoiceModelId(modelId: String) {
         dataStore.edit { it[Keys.SELECTED_VOICE_MODEL_ID] = modelId.removePrefix("models/").trim() }
+    }
+
+    override suspend fun setSelectedTtsModelId(modelId: String) {
+        dataStore.edit { it[Keys.SELECTED_TTS_MODEL_ID] = modelId.removePrefix("models/").trim() }
+    }
+
+    override suspend fun setRealtimeLiveMode(enabled: Boolean) {
+        dataStore.edit { it[Keys.REALTIME_LIVE_MODE] = enabled }
     }
 
     override suspend fun setSelectedVoiceGender(gender: String) {

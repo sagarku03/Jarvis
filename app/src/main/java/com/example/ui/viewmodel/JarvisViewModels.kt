@@ -24,6 +24,8 @@ import com.example.domain.model.ConfirmationLevel
 import com.example.domain.model.ConfirmationRequest
 import com.example.domain.model.ConversationItem
 import com.example.domain.model.DeviceVoiceOption
+import com.example.domain.model.DualConnectionReport
+import com.example.domain.model.FullSelfTestReport
 import com.example.domain.model.LatencyMetrics
 import com.example.domain.model.MemoryCategory
 import com.example.domain.model.MemoryFact
@@ -1073,6 +1075,15 @@ class SettingsViewModel(
     private val _testConnectionMessage = MutableStateFlow<String?>(null)
     val testConnectionMessage: StateFlow<String?> = _testConnectionMessage.asStateFlow()
 
+    private val _dualConnectionReport = MutableStateFlow<DualConnectionReport?>(null)
+    val dualConnectionReport: StateFlow<DualConnectionReport?> = _dualConnectionReport.asStateFlow()
+
+    private val _isRunningSelfTest = MutableStateFlow(false)
+    val isRunningSelfTest: StateFlow<Boolean> = _isRunningSelfTest.asStateFlow()
+
+    private val _selfTestReport = MutableStateFlow<FullSelfTestReport?>(null)
+    val selfTestReport: StateFlow<FullSelfTestReport?> = _selfTestReport.asStateFlow()
+
     val voiceDiagnostics: StateFlow<VoiceDiagnosticsSnapshot> = combine(
         combine(
             voiceSessionManager.state,
@@ -1114,13 +1125,54 @@ class SettingsViewModel(
         _isTestingConnection.value = true
         _testConnectionMessage.value = null
         viewModelScope.launch {
-            val result = geminiClient.testConnection(currentKey)
+            val userSettings = settings.value
+            val report = geminiClient.testDualConnection(
+                textModelId = userSettings.selectedTextModelId,
+                ttsModelId = userSettings.selectedTtsModelId,
+                voiceName = userSettings.selectedLiveVoiceName,
+                overrideKey = currentKey
+            )
             _isTestingConnection.value = false
-            _testConnectionMessage.value = if (result.isSuccess) {
-                "Connected to Gemini successfully"
+            _dualConnectionReport.value = report
+            _testConnectionMessage.value = if (report.isOverallSuccess) {
+                "Connected: Text (${report.textPing.modelId}) and Voice (${report.ttsPing.modelId}) both operational"
             } else {
-                result.exceptionOrNull()?.localizedMessage ?: "Connection failed"
+                when {
+                    !report.textPing.success -> "${report.textPing.modelId}: ${report.textPing.errorSnippet ?: report.textPing.details}"
+                    !report.ttsPing.success -> "${report.ttsPing.modelId}: ${report.ttsPing.errorSnippet ?: report.ttsPing.details}"
+                    else -> "Connection failed"
+                }
             }
+        }
+    }
+
+    fun runFullSelfTest() {
+        val currentKey = apiKeyStore.get()
+        if (currentKey.isNullOrBlank()) {
+            return
+        }
+        _isRunningSelfTest.value = true
+        _selfTestReport.value = null
+        viewModelScope.launch {
+            val report = geminiClient.runSelfTestSuite(apiKeyOverride = currentKey)
+            _selfTestReport.value = report
+            _isRunningSelfTest.value = false
+        }
+    }
+
+    fun clearSelfTestReport() {
+        _selfTestReport.value = null
+    }
+
+    fun setSelectedTtsModelId(modelId: String) {
+        viewModelScope.launch {
+            settingsRepository.setSelectedTtsModelId(modelId)
+        }
+    }
+
+    fun setRealtimeLiveMode(enabled: Boolean) {
+        viewModelScope.launch {
+            settingsRepository.setRealtimeLiveMode(enabled)
         }
     }
 

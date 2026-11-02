@@ -95,8 +95,21 @@ class OpenAppTool @Inject constructor(
                 }
             }
 
+            val canonicalPackages = mapOf(
+                "youtube" to "com.google.android.youtube",
+                "whatsapp" to "com.whatsapp",
+                "instagram" to "com.instagram.android",
+                "chrome" to "com.android.chrome",
+                "google maps" to "com.google.android.apps.maps",
+                "maps" to "com.google.android.apps.maps",
+                "spotify" to "com.spotify.music",
+                "telegram" to "org.telegram.messenger",
+                "gmail" to "com.google.android.gm"
+            )
+            val resolvedPkg = canonicalPackages[lowerTarget] ?: targetApp
+
             val pm = context.packageManager
-            val directLaunch = pm.getLaunchIntentForPackage(targetApp)
+            val directLaunch = pm.getLaunchIntentForPackage(resolvedPkg) ?: pm.getLaunchIntentForPackage(targetApp)
             if (directLaunch != null) {
                 directLaunch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 context.startActivity(directLaunch)

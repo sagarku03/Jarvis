@@ -863,6 +863,12 @@ class ExampleUnitTest {
         override suspend fun setWakePhraseStopAfter30m(enabled: Boolean) {
             flow.value = flow.value.copy(wakePhraseStopAfter30m = enabled)
         }
+        override suspend fun setSelectedTtsModelId(modelId: String) {
+            flow.value = flow.value.copy(selectedTtsModelId = modelId)
+        }
+        override suspend fun setRealtimeLiveMode(enabled: Boolean) {
+            flow.value = flow.value.copy(isRealtimeLiveMode = enabled)
+        }
         override suspend fun setVoiceTimings(firstTokenMs: Long, firstWordMs: Long) {}
     }
 

@@ -262,6 +262,15 @@ class AppContainer(context: Context) {
         )
     }
 
+    val geminiLiveWebSocketManager: com.example.services.voice.GeminiLiveWebSocketManager by lazy {
+        com.example.services.voice.GeminiLiveWebSocketManager(
+            context = appContext,
+            apiKeyStore = apiKeyStore,
+            okHttpClient = okHttpClient,
+            moshi = moshi
+        )
+    }
+
     val voiceSessionManager: VoiceSessionManager by lazy {
         VoiceSessionManager(
             speechRecognizer = speechRecognizerWrapper,

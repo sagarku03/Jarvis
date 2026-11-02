@@ -12,6 +12,12 @@ import com.squareup.moshi.Moshi
 import com.squareup.moshi.Types
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import android.os.SystemClock
+import android.util.Base64
+import com.example.domain.model.ConnectionPingDetail
+import com.example.domain.model.DualConnectionReport
+import com.example.domain.model.FullSelfTestReport
+import com.example.domain.model.SelfTestStepResult
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -76,6 +82,7 @@ class GeminiClient @Inject constructor(
         const val DEFAULT_BASE_URL = "https://generativelanguage.googleapis.com"
         const val DEFAULT_TEXT_MODEL = "gemini-3.8-flash"
         const val DEFAULT_VOICE_MODEL = "gemini-3.8-live"
+        const val DEFAULT_TTS_MODEL = "gemini-3.8-flash-tts"
         const val DEFAULT_FALLBACK_MODEL = "gemini-3.8-flash"
         const val DEFAULT_STABLE_FALLBACK_MODEL = "gemini-3.8-flash"
         const val DEFAULT_LIGHT_FALLBACK_MODEL = "gemini-3.8-flash"
@@ -139,6 +146,14 @@ class GeminiClient @Inject constructor(
     private val listAdapter = moshi.adapter<List<*>>(List::class.java)
 
     private val unsupportedThinkingModels = ConcurrentHashMap.newKeySet<String>()
+
+    private val streamingOkHttpClient: OkHttpClient by lazy {
+        okHttpClient.newBuilder()
+            .connectTimeout(15, TimeUnit.SECONDS)
+            .readTimeout(60, TimeUnit.SECONDS)
+            .writeTimeout(15, TimeUnit.SECONDS)
+            .build()
+    }
 
     suspend fun verifyKeyAndListModels(rawKey: String): KeyVerificationResult = withContext(Dispatchers.IO) {
         val cleanKey = rawKey.trim()
@@ -233,15 +248,31 @@ class GeminiClient @Inject constructor(
         }
     }
 
-    suspend fun testConnection(overrideKey: String? = null): Result<String> = withContext(Dispatchers.IO) {
+    suspend fun testDualConnection(
+        textModelId: String = DEFAULT_TEXT_MODEL,
+        ttsModelId: String = DEFAULT_TTS_MODEL,
+        voiceName: String = "Puck",
+        overrideKey: String? = null
+    ): DualConnectionReport = withContext(Dispatchers.IO) {
         val apiKey = overrideKey?.trim() ?: apiKeyStore.get()?.trim()
         if (apiKey.isNullOrEmpty()) {
-            return@withContext Result.failure(Exception("No API key configured"))
+            return@withContext DualConnectionReport(
+                isOverallSuccess = false,
+                textPing = ConnectionPingDetail(textModelId, false, 401, 0L, "No API key configured", "Key missing"),
+                ttsPing = ConnectionPingDetail(ttsModelId, false, 401, 0L, "No API key configured", "Key missing")
+            )
         }
 
         val baseUrl = baseUrlProvider().trimEnd('/')
-        val url = "$baseUrl/v1beta/models/$DEFAULT_TEXT_MODEL:generateContent"
-        val payload = mapOf(
+        val testClient = okHttpClient.newBuilder()
+            .connectTimeout(10, TimeUnit.SECONDS)
+            .readTimeout(15, TimeUnit.SECONDS)
+            .build()
+
+        // 1. Text Model Ping
+        val cleanTextModel = textModelId.removePrefix("models/").trim().ifEmpty { DEFAULT_TEXT_MODEL }
+        val textUrl = "$baseUrl/v1beta/models/$cleanTextModel:generateContent"
+        val textPayload = mapOf(
             "contents" to listOf(
                 mapOf(
                     "role" to "user",
@@ -249,31 +280,454 @@ class GeminiClient @Inject constructor(
                 )
             )
         )
-        val request = Request.Builder()
-            .url(url)
+        val textRequest = Request.Builder()
+            .url(textUrl)
             .header("x-goog-api-key", apiKey)
             .header("Content-Type", "application/json")
-            .post(mapAdapter.toJson(payload).toRequestBody(JSON_MEDIA_TYPE))
+            .post(mapAdapter.toJson(textPayload).toRequestBody(JSON_MEDIA_TYPE))
             .build()
 
-        val testClient = okHttpClient.newBuilder()
-            .connectTimeout(6, TimeUnit.SECONDS)
-            .readTimeout(8, TimeUnit.SECONDS)
-            .build()
-
-        try {
-            testClient.newCall(request).execute().use { response ->
+        val textStart = SystemClock.elapsedRealtime()
+        val textPing = try {
+            testClient.newCall(textRequest).execute().use { response ->
+                val latency = SystemClock.elapsedRealtime() - textStart
                 val bodyStr = response.body?.string().orEmpty()
                 if (response.isSuccessful) {
-                    Result.success("Working")
+                    val parsed = runCatching { mapAdapter.fromJson(bodyStr) }.getOrNull()
+                    val candidates = parsed?.get("candidates") as? List<*>
+                    val firstCandidate = candidates?.firstOrNull() as? Map<*, *>
+                    val content = firstCandidate?.get("content") as? Map<*, *>
+                    val parts = content?.get("parts") as? List<*>
+                    val firstPart = parts?.firstOrNull() as? Map<*, *>
+                    val reply = (firstPart?.get("text") as? String)?.trim() ?: "OK"
+                    ConnectionPingDetail(
+                        modelId = cleanTextModel,
+                        success = true,
+                        httpCode = response.code,
+                        latencyMs = latency,
+                        details = "HTTP ${response.code} OK: \"$reply\" (${latency}ms)"
+                    )
                 } else {
-                    val parsedErr = parseErrorDetails(bodyStr)
-                    Result.failure(Exception(parsedErr.message.ifEmpty { "HTTP ${response.code}" }))
+                    val err = parseErrorDetails(bodyStr)
+                    ConnectionPingDetail(
+                        modelId = cleanTextModel,
+                        success = false,
+                        httpCode = response.code,
+                        latencyMs = latency,
+                        details = "HTTP ${response.code} ${err.status}",
+                        errorSnippet = err.message.ifBlank { "HTTP ${response.code}" }
+                    )
                 }
             }
         } catch (e: Exception) {
-            Result.failure(e)
+            val latency = SystemClock.elapsedRealtime() - textStart
+            ConnectionPingDetail(
+                modelId = cleanTextModel,
+                success = false,
+                httpCode = 0,
+                latencyMs = latency,
+                details = "Network failure",
+                errorSnippet = e.localizedMessage ?: "Connection error"
+            )
         }
+
+        // 2. TTS Voice Model Ping
+        val cleanTtsModel = ttsModelId.removePrefix("models/").trim().ifEmpty { DEFAULT_TTS_MODEL }
+        val ttsUrl = "$baseUrl/v1beta/models/$cleanTtsModel:generateContent"
+        val ttsPayload = mapOf(
+            "contents" to listOf(
+                mapOf(
+                    "role" to "user",
+                    "parts" to listOf(mapOf("text" to "Hello"))
+                )
+            ),
+            "generationConfig" to mapOf(
+                "responseModalities" to listOf("AUDIO"),
+                "speechConfig" to mapOf(
+                    "voiceConfig" to mapOf(
+                        "prebuiltVoiceConfig" to mapOf(
+                            "voiceName" to voiceName
+                        )
+                    )
+                )
+            )
+        )
+        val ttsRequest = Request.Builder()
+            .url(ttsUrl)
+            .header("x-goog-api-key", apiKey)
+            .header("Content-Type", "application/json")
+            .post(mapAdapter.toJson(ttsPayload).toRequestBody(JSON_MEDIA_TYPE))
+            .build()
+
+        val ttsStart = SystemClock.elapsedRealtime()
+        val ttsPing = try {
+            testClient.newCall(ttsRequest).execute().use { response ->
+                val latency = SystemClock.elapsedRealtime() - ttsStart
+                val bodyStr = response.body?.string().orEmpty()
+                if (response.isSuccessful) {
+                    val parsed = runCatching { mapAdapter.fromJson(bodyStr) }.getOrNull()
+                    val candidates = parsed?.get("candidates") as? List<*>
+                    val firstCandidate = candidates?.firstOrNull() as? Map<*, *>
+                    val content = firstCandidate?.get("content") as? Map<*, *>
+                    val parts = (content?.get("parts") as? List<*>).orEmpty()
+                    var audioBytes = 0
+                    for (p in parts) {
+                        val pMap = p as? Map<*, *> ?: continue
+                        val inlineData = pMap["inlineData"] as? Map<*, *> ?: continue
+                        val b64 = inlineData["data"] as? String
+                        if (!b64.isNullOrEmpty()) {
+                            audioBytes = Base64.decode(b64, Base64.DEFAULT).size
+                            break
+                        }
+                    }
+                    ConnectionPingDetail(
+                        modelId = cleanTtsModel,
+                        success = audioBytes > 0,
+                        httpCode = response.code,
+                        latencyMs = latency,
+                        details = if (audioBytes > 0) "HTTP ${response.code} OK: $audioBytes audio bytes ($voiceName, ${latency}ms)" else "HTTP 200 but 0 audio bytes",
+                        errorSnippet = if (audioBytes > 0) null else "No audio in inlineData"
+                    )
+                } else {
+                    val err = parseErrorDetails(bodyStr)
+                    ConnectionPingDetail(
+                        modelId = cleanTtsModel,
+                        success = false,
+                        httpCode = response.code,
+                        latencyMs = latency,
+                        details = "HTTP ${response.code} ${err.status}",
+                        errorSnippet = err.message.ifBlank { "HTTP ${response.code}" }
+                    )
+                }
+            }
+        } catch (e: Exception) {
+            val latency = SystemClock.elapsedRealtime() - ttsStart
+            ConnectionPingDetail(
+                modelId = cleanTtsModel,
+                success = false,
+                httpCode = 0,
+                latencyMs = latency,
+                details = "Network failure",
+                errorSnippet = e.localizedMessage ?: "Connection error"
+            )
+        }
+
+        DualConnectionReport(
+            isOverallSuccess = textPing.success && ttsPing.success,
+            textPing = textPing,
+            ttsPing = ttsPing
+        )
+    }
+
+    suspend fun testConnection(overrideKey: String? = null): Result<String> = withContext(Dispatchers.IO) {
+        val report = testDualConnection(
+            textModelId = DEFAULT_TEXT_MODEL,
+            ttsModelId = DEFAULT_TTS_MODEL,
+            voiceName = "Puck",
+            overrideKey = overrideKey
+        )
+        if (report.isOverallSuccess) {
+            Result.success("Working (${report.textPing.details}; ${report.ttsPing.details})")
+        } else {
+            val failureDetail = when {
+                !report.textPing.success -> "${report.textPing.modelId}: ${report.textPing.errorSnippet ?: report.textPing.details}"
+                !report.ttsPing.success -> "${report.ttsPing.modelId}: ${report.ttsPing.errorSnippet ?: report.ttsPing.details}"
+                else -> "Connection failed"
+            }
+            Result.failure(Exception(failureDetail))
+        }
+    }
+
+    suspend fun runSelfTestSuite(
+        apiKeyOverride: String? = null,
+        onStepProgress: ((SelfTestStepResult) -> Unit)? = null
+    ): FullSelfTestReport = withContext(Dispatchers.IO) {
+        val apiKey = apiKeyOverride?.trim() ?: apiKeyStore.get()?.trim().orEmpty()
+        val steps = mutableListOf<SelfTestStepResult>()
+
+        if (apiKey.isEmpty()) {
+            val failStep = SelfTestStepResult(
+                stepIndex = 1,
+                title = "Gemini API Key Check",
+                passed = false,
+                detail = "No API key configured in Settings"
+            )
+            steps.add(failStep)
+            onStepProgress?.invoke(failStep)
+            return@withContext FullSelfTestReport(steps = steps, allPassed = false)
+        }
+
+        // 1. ListModels
+        val step1Start = SystemClock.elapsedRealtime()
+        val step1 = try {
+            val res = verifyKeyAndListModels(apiKey)
+            val latency = SystemClock.elapsedRealtime() - step1Start
+            when (res) {
+                is KeyVerificationResult.Valid -> SelfTestStepResult(
+                    stepIndex = 1,
+                    title = "ListModels API",
+                    passed = true,
+                    detail = "HTTP 200: Found ${res.availableModels.size} available models",
+                    latencyMs = latency
+                )
+                is KeyVerificationResult.Invalid -> SelfTestStepResult(
+                    stepIndex = 1,
+                    title = "ListModels API",
+                    passed = false,
+                    detail = "Key invalid: ${res.message}",
+                    latencyMs = latency
+                )
+                is KeyVerificationResult.RateLimited -> SelfTestStepResult(
+                    stepIndex = 1,
+                    title = "ListModels API",
+                    passed = false,
+                    detail = "Rate limited: ${res.message}",
+                    latencyMs = latency
+                )
+                is KeyVerificationResult.NetworkError -> SelfTestStepResult(
+                    stepIndex = 1,
+                    title = "ListModels API",
+                    passed = false,
+                    detail = "Network error: ${res.message}",
+                    latencyMs = latency
+                )
+            }
+        } catch (e: Exception) {
+            SelfTestStepResult(
+                stepIndex = 1,
+                title = "ListModels API",
+                passed = false,
+                detail = "Exception: ${e.localizedMessage ?: "error"}",
+                latencyMs = SystemClock.elapsedRealtime() - step1Start
+            )
+        }
+        steps.add(step1)
+        onStepProgress?.invoke(step1)
+
+        // 2. Text generateContent
+        val step2Start = SystemClock.elapsedRealtime()
+        val step2 = try {
+            val res = generateContent(
+                modelId = DEFAULT_TEXT_MODEL,
+                systemInstruction = "You are a test assistant.",
+                messages = listOf(ChatMessage(role = MessageRole.USER, content = "Say OK")),
+                tools = emptyList()
+            )
+            val latency = SystemClock.elapsedRealtime() - step2Start
+            when (res) {
+                is GeminiTurnResult.Success -> SelfTestStepResult(
+                    stepIndex = 2,
+                    title = "Text Reasoning ($DEFAULT_TEXT_MODEL)",
+                    passed = true,
+                    detail = "HTTP 200 OK: \"${res.assistantText?.trim()?.take(40)}\"",
+                    latencyMs = latency
+                )
+                else -> SelfTestStepResult(
+                    stepIndex = 2,
+                    title = "Text Reasoning ($DEFAULT_TEXT_MODEL)",
+                    passed = false,
+                    detail = "Failed: $res",
+                    latencyMs = latency
+                )
+            }
+        } catch (e: Exception) {
+            SelfTestStepResult(
+                stepIndex = 2,
+                title = "Text Reasoning ($DEFAULT_TEXT_MODEL)",
+                passed = false,
+                detail = "Exception: ${e.localizedMessage}",
+                latencyMs = SystemClock.elapsedRealtime() - step2Start
+            )
+        }
+        steps.add(step2)
+        onStepProgress?.invoke(step2)
+
+        // 3. Streaming SSE
+        val step3Start = SystemClock.elapsedRealtime()
+        val step3 = try {
+            var chunkCount = 0
+            val res = streamGenerateContent(
+                modelId = DEFAULT_TEXT_MODEL,
+                systemInstruction = "You are a test assistant.",
+                messages = listOf(ChatMessage(role = MessageRole.USER, content = "Count 1 to 3")),
+                tools = emptyList(),
+                onTextChunk = { chunkCount++ }
+            )
+            val latency = SystemClock.elapsedRealtime() - step3Start
+            if (res is GeminiTurnResult.Success && chunkCount > 0) {
+                SelfTestStepResult(
+                    stepIndex = 3,
+                    title = "SSE Streaming ($DEFAULT_TEXT_MODEL)",
+                    passed = true,
+                    detail = "HTTP 200 OK: Received $chunkCount streaming chunks",
+                    latencyMs = latency
+                )
+            } else {
+                SelfTestStepResult(
+                    stepIndex = 3,
+                    title = "SSE Streaming ($DEFAULT_TEXT_MODEL)",
+                    passed = false,
+                    detail = "Stream finished with $chunkCount chunks: $res",
+                    latencyMs = latency
+                )
+            }
+        } catch (e: Exception) {
+            SelfTestStepResult(
+                stepIndex = 3,
+                title = "SSE Streaming ($DEFAULT_TEXT_MODEL)",
+                passed = false,
+                detail = "Exception: ${e.localizedMessage}",
+                latencyMs = SystemClock.elapsedRealtime() - step3Start
+            )
+        }
+        steps.add(step3)
+        onStepProgress?.invoke(step3)
+
+        // 4. TTS 6 Voices Test
+        val step4Start = SystemClock.elapsedRealtime()
+        val voices = listOf("Puck", "Charon", "Fenrir", "Aoede", "Kore", "Leda")
+        val voiceResults = mutableMapOf<String, Int>()
+        var allVoicesOk = true
+        var ttsErrorReason = ""
+
+        val baseUrl = baseUrlProvider().trimEnd('/')
+        val ttsTestClient = okHttpClient.newBuilder()
+            .connectTimeout(8, TimeUnit.SECONDS)
+            .readTimeout(10, TimeUnit.SECONDS)
+            .build()
+
+        for (vName in voices) {
+            val ttsPayload = mapOf(
+                "contents" to listOf(
+                    mapOf("role" to "user", "parts" to listOf(mapOf("text" to "Hello")))
+                ),
+                "generationConfig" to mapOf(
+                    "responseModalities" to listOf("AUDIO"),
+                    "speechConfig" to mapOf(
+                        "voiceConfig" to mapOf(
+                            "prebuiltVoiceConfig" to mapOf("voiceName" to vName)
+                        )
+                    )
+                )
+            )
+            val req = Request.Builder()
+                .url("$baseUrl/v1beta/models/$DEFAULT_TTS_MODEL:generateContent")
+                .header("x-goog-api-key", apiKey)
+                .header("Content-Type", "application/json")
+                .post(mapAdapter.toJson(ttsPayload).toRequestBody(JSON_MEDIA_TYPE))
+                .build()
+
+            try {
+                ttsTestClient.newCall(req).execute().use { resp ->
+                    val body = resp.body?.string().orEmpty()
+                    if (resp.isSuccessful) {
+                        val parsed = runCatching { mapAdapter.fromJson(body) }.getOrNull()
+                        val candidates = parsed?.get("candidates") as? List<*>
+                        val firstCandidate = candidates?.firstOrNull() as? Map<*, *>
+                        val content = firstCandidate?.get("content") as? Map<*, *>
+                        val parts = (content?.get("parts") as? List<*>).orEmpty()
+                        var bytes = 0
+                        for (p in parts) {
+                            val inlineData = (p as? Map<*, *>)?.get("inlineData") as? Map<*, *> ?: continue
+                            val b64 = inlineData["data"] as? String
+                            if (!b64.isNullOrEmpty()) {
+                                bytes = Base64.decode(b64, Base64.DEFAULT).size
+                                break
+                            }
+                        }
+                        voiceResults[vName] = bytes
+                        if (bytes == 0) allVoicesOk = false
+                    } else {
+                        allVoicesOk = false
+                        ttsErrorReason = "HTTP ${resp.code} on voice $vName"
+                    }
+                }
+            } catch (e: Exception) {
+                allVoicesOk = false
+                ttsErrorReason = "$vName error: ${e.localizedMessage}"
+            }
+        }
+        val latency4 = SystemClock.elapsedRealtime() - step4Start
+        val step4 = if (allVoicesOk) {
+            val summary = voiceResults.entries.joinToString(", ") { "${it.key}:${it.value}B" }
+            SelfTestStepResult(
+                stepIndex = 4,
+                title = "Natural TTS (6 Voices: Puck, Charon, Fenrir, Aoede, Kore, Leda)",
+                passed = true,
+                detail = "HTTP 200: All 6 voices synthesized audio ($summary)",
+                latencyMs = latency4
+            )
+        } else {
+            SelfTestStepResult(
+                stepIndex = 4,
+                title = "Natural TTS (6 Voices: Puck, Charon, Fenrir, Aoede, Kore, Leda)",
+                passed = false,
+                detail = if (ttsErrorReason.isNotBlank()) ttsErrorReason else "Some voices failed to synthesize audio: $voiceResults",
+                latencyMs = latency4
+            )
+        }
+        steps.add(step4)
+        onStepProgress?.invoke(step4)
+
+        // 5. Gemini Live WebSocket Handshake
+        val step5Start = SystemClock.elapsedRealtime()
+        val wsLatch = java.util.concurrent.CountDownLatch(1)
+        var wsConnected = false
+        var wsDetail = ""
+        val wsUrl = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=$apiKey"
+        val wsRequest = Request.Builder().url(wsUrl).build()
+
+        val wsClient = okHttpClient.newBuilder()
+            .connectTimeout(6, TimeUnit.SECONDS)
+            .readTimeout(6, TimeUnit.SECONDS)
+            .build()
+
+        val webSocket = wsClient.newWebSocket(wsRequest, object : okhttp3.WebSocketListener() {
+            override fun onOpen(webSocket: okhttp3.WebSocket, response: okhttp3.Response) {
+                val setupFrame = mapOf(
+                    "setup" to mapOf(
+                        "model" to "models/gemini-3.8-live",
+                        "generationConfig" to mapOf(
+                            "responseModalities" to listOf("AUDIO"),
+                            "speechConfig" to mapOf(
+                                "voiceConfig" to mapOf(
+                                    "prebuiltVoiceConfig" to mapOf("voiceName" to "Puck")
+                                )
+                            )
+                        )
+                    )
+                )
+                webSocket.send(mapAdapter.toJson(setupFrame))
+                wsConnected = true
+                wsDetail = "WebSocket Handshake Connected (HTTP ${response.code})"
+                webSocket.close(1000, "Self-test finished")
+                wsLatch.countDown()
+            }
+
+            override fun onFailure(webSocket: okhttp3.WebSocket, t: Throwable, response: okhttp3.Response?) {
+                wsConnected = false
+                wsDetail = "Handshake failed: ${t.localizedMessage ?: "error"} (HTTP ${response?.code ?: 0})"
+                wsLatch.countDown()
+            }
+        })
+
+        wsLatch.await(5, TimeUnit.SECONDS)
+        val latency5 = SystemClock.elapsedRealtime() - step5Start
+        val step5 = SelfTestStepResult(
+            stepIndex = 5,
+            title = "Gemini Live WebSocket Handshake",
+            passed = wsConnected,
+            detail = if (wsDetail.isNotBlank()) wsDetail else if (wsConnected) "Live WebSocket Handshake Success" else "WebSocket handshake timed out",
+            latencyMs = latency5
+        )
+        steps.add(step5)
+        onStepProgress?.invoke(step5)
+
+        val allPassed = steps.all { it.passed }
+        FullSelfTestReport(
+            steps = steps,
+            allPassed = allPassed
+        )
     }
 
     suspend fun generateContent(
@@ -491,7 +945,7 @@ class GeminiClient @Inject constructor(
             .build()
 
         try {
-            okHttpClient.newCall(request).execute().use { response ->
+            streamingOkHttpClient.newCall(request).execute().use { response ->
                 val code = response.code
                 if (!response.isSuccessful) {
                     val errorBody = response.body?.string().orEmpty()

@@ -97,6 +97,8 @@ interface SettingsRepository {
     suspend fun setSelectedModelId(modelId: String)
     suspend fun setSelectedTextModelId(modelId: String)
     suspend fun setSelectedVoiceModelId(modelId: String)
+    suspend fun setSelectedTtsModelId(modelId: String)
+    suspend fun setRealtimeLiveMode(enabled: Boolean)
     suspend fun setSelectedVoiceGender(gender: String)
     suspend fun setSelectedLiveVoiceName(voiceName: String)
     suspend fun setAvailableModels(models: List<String>)

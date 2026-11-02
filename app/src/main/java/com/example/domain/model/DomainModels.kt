@@ -304,6 +304,36 @@ data class VoiceEvent(
     val latencyMs: Long = 0L
 )
 
+data class ConnectionPingDetail(
+    val modelId: String,
+    val success: Boolean,
+    val httpCode: Int = 200,
+    val latencyMs: Long = 0L,
+    val details: String = "",
+    val errorSnippet: String? = null
+)
+
+data class DualConnectionReport(
+    val isOverallSuccess: Boolean,
+    val textPing: ConnectionPingDetail,
+    val ttsPing: ConnectionPingDetail,
+    val timestampMs: Long = System.currentTimeMillis()
+)
+
+data class SelfTestStepResult(
+    val stepIndex: Int,
+    val title: String,
+    val passed: Boolean,
+    val detail: String,
+    val latencyMs: Long = 0L
+)
+
+data class FullSelfTestReport(
+    val timestampMs: Long = System.currentTimeMillis(),
+    val steps: List<SelfTestStepResult> = emptyList(),
+    val allPassed: Boolean = false
+)
+
 data class UserFacingError(
     val message: String,
     val actionLabel: String = "Try again",
@@ -315,9 +345,11 @@ data class UserSettings(
     val selectedModelId: String = "gemini-3.8-flash",
     val selectedTextModelId: String = "gemini-3.8-flash",
     val selectedVoiceModelId: String = "gemini-3.8-live",
+    val selectedTtsModelId: String = "gemini-3.8-flash-tts",
+    val isRealtimeLiveMode: Boolean = false,
     val selectedVoiceGender: String = "MALE",
     val selectedLiveVoiceName: String = "Puck",
-    val availableModels: List<String> = listOf("gemini-3.8-flash", "gemini-3.8-live"),
+    val availableModels: List<String> = listOf("gemini-3.8-flash", "gemini-3.8-live", "gemini-3.8-flash-tts"),
     val language: AppLanguage = AppLanguage.EN_IN,
     val voiceEngine: VoiceEngineOption = VoiceEngineOption.NATURAL_GOOGLE,
     val selectedVoiceName: String = "",

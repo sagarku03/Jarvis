@@ -145,6 +145,9 @@ class TtsManager @Inject constructor(
     private val _isUsingFallbackChip = MutableStateFlow(false)
     val isUsingFallbackChip: StateFlow<Boolean> = _isUsingFallbackChip.asStateFlow()
 
+    private val _fallbackReason = MutableStateFlow<String?>(null)
+    val fallbackReason: StateFlow<String?> = _fallbackReason.asStateFlow()
+
     private val _firstAudioLatencyMs = MutableStateFlow(0L)
     val firstAudioLatencyMs: StateFlow<Long> = _firstAudioLatencyMs.asStateFlow()
 
@@ -224,7 +227,10 @@ class TtsManager @Inject constructor(
         activePlaybackJob = scope.launch {
             val resolvedVoice = resolveLiveVoiceName(voiceName, gender)
             val settings = settingsRepository.settingsFlow.first()
-            val chosenVoiceModel = settings.selectedVoiceModelId.ifBlank { "gemini-3.8-flash-tts" }
+            val chosenVoiceModel = run {
+                val tts = settings.selectedTtsModelId.ifBlank { "gemini-3.8-flash-tts" }
+                if (tts.contains("live") || tts.contains("2.0")) "gemini-3.8-flash-tts" else tts
+            }
             _isSpeaking.value = true
             val naturalSuccess = trySpeakGeminiAudio(
                 sentence = sampleText,
@@ -334,7 +340,10 @@ class TtsManager @Inject constructor(
                 raw = voiceName.ifBlank { settings.selectedLiveVoiceName }.ifBlank { settings.selectedVoiceName },
                 gender = settings.selectedVoiceGender
             )
-            val chosenVoiceModel = settings.selectedVoiceModelId.ifBlank { "gemini-3.8-flash-tts" }
+            val chosenVoiceModel = run {
+                val tts = settings.selectedTtsModelId.ifBlank { "gemini-3.8-flash-tts" }
+                if (tts.contains("live") || tts.contains("2.0")) "gemini-3.8-flash-tts" else tts
+            }
 
             val naturalSuccess = trySpeakGeminiAudio(
                 sentence = sentence,
@@ -343,6 +352,7 @@ class TtsManager @Inject constructor(
                 onAudioStarted = {
                     _isSpeaking.value = true
                     _isUsingFallbackChip.value = false
+                    _fallbackReason.value = null
                     val latency = SystemClock.elapsedRealtime() - startTime
                     _firstAudioLatencyMs.value = latency
                     DiagnosticsLogger.logVoiceEvent("TTS_PLAY", "Natural voice ($chosenVoiceName / $chosenVoiceModel) playing", latency)
@@ -352,6 +362,7 @@ class TtsManager @Inject constructor(
 
             if (naturalSuccess) {
                 _isUsingFallbackChip.value = false
+                _fallbackReason.value = null
                 onFinished()
                 return
             } else {
@@ -407,7 +418,8 @@ class TtsManager @Inject constructor(
         if (apiKey.isNullOrEmpty()) return@withContext false
 
         // Check cache first for instant response (< 1.2s target)
-        val cacheKey = "${voiceName}_${sentence.hashCode()}"
+        val cleanModel = if (modelId.contains("live") || modelId.contains("2.0")) "gemini-3.8-flash-tts" else modelId
+        val cacheKey = "${cleanModel}_${voiceName}_${sentence.hashCode()}"
         val cachedPcm = memoryPcmCache[cacheKey] ?: runCatching {
             val file = File(diskCacheDir, "$cacheKey.pcm")
             if (file.exists()) file.readBytes() else null
@@ -415,6 +427,7 @@ class TtsManager @Inject constructor(
 
         if (cachedPcm != null) {
             _isUsingFallbackChip.value = false
+            _fallbackReason.value = null
             playPcmAudio(cachedPcm, onAudioStarted)
             return@withContext true
         }
@@ -439,7 +452,7 @@ class TtsManager @Inject constructor(
         )
 
         val bodyJson = mapAdapter.toJson(promptPayload)
-        val initialModel = modelId.removePrefix("models/").trim().ifEmpty { "gemini-3.8-flash-tts" }
+        val initialModel = cleanModel.removePrefix("models/").trim().ifEmpty { "gemini-3.8-flash-tts" }
         val modelsToTry = mutableListOf<String>()
         modelsToTry.add(initialModel)
         if (!modelsToTry.contains("gemini-3.8-flash-tts")) {
@@ -457,6 +470,9 @@ class TtsManager @Inject constructor(
 
                 val (success, is404) = okHttpClient.newCall(request).execute().use { response ->
                     if (!response.isSuccessful) {
+                        val errBody = response.body?.string().orEmpty()
+                        DiagnosticsLogger.log("TtsManager", "HTTP ${response.code} error on TTS model $activeModel: $errBody")
+                        _fallbackReason.value = "HTTP ${response.code} on $activeModel"
                         return@use Pair(false, response.code == 404)
                     }
                     val rawBody = response.body?.string().orEmpty()
@@ -484,6 +500,7 @@ class TtsManager @Inject constructor(
                         memoryPcmCache[cacheKey] = pcmBytes
                         runCatching { File(diskCacheDir, "$cacheKey.pcm").writeBytes(pcmBytes) }
                         _isUsingFallbackChip.value = false
+                        _fallbackReason.value = null
                         playPcmAudio(pcmBytes, onAudioStarted)
                         Pair(true, false)
                     } else {
