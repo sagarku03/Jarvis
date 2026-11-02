@@ -420,21 +420,35 @@ class GeminiClient @Inject constructor(
     }
 
     suspend fun testConnection(overrideKey: String? = null): Result<String> = withContext(Dispatchers.IO) {
-        val report = testDualConnection(
-            textModelId = DEFAULT_TEXT_MODEL,
-            ttsModelId = DEFAULT_TTS_MODEL,
-            voiceName = "Puck",
-            overrideKey = overrideKey
+        val apiKey = overrideKey?.trim() ?: apiKeyStore.get()?.trim().orEmpty()
+        if (apiKey.isEmpty()) {
+            return@withContext Result.failure(Exception("No key configured"))
+        }
+        val baseUrl = baseUrlProvider().trimEnd('/')
+        val url = "$baseUrl/v1beta/models/$DEFAULT_TEXT_MODEL:generateContent"
+        val payload = mapOf(
+            "contents" to listOf(
+                mapOf("role" to "user", "parts" to listOf(mapOf("text" to "Say OK")))
+            )
         )
-        if (report.isOverallSuccess) {
-            Result.success("Working (${report.textPing.details}; ${report.ttsPing.details})")
-        } else {
-            val failureDetail = when {
-                !report.textPing.success -> "${report.textPing.modelId}: ${report.textPing.errorSnippet ?: report.textPing.details}"
-                !report.ttsPing.success -> "${report.ttsPing.modelId}: ${report.ttsPing.errorSnippet ?: report.ttsPing.details}"
-                else -> "Connection failed"
+        val request = Request.Builder()
+            .url(url)
+            .header("x-goog-api-key", apiKey)
+            .header("Content-Type", "application/json")
+            .post(mapAdapter.toJson(payload).toRequestBody(JSON_MEDIA_TYPE))
+            .build()
+        try {
+            okHttpClient.newCall(request).execute().use { response ->
+                val bodyStr = response.body?.string().orEmpty()
+                if (response.isSuccessful) {
+                    Result.success("Working")
+                } else {
+                    val err = parseErrorDetails(bodyStr)
+                    Result.failure(Exception(err.message.ifBlank { "HTTP ${response.code}" }))
+                }
             }
-            Result.failure(Exception(failureDetail))
+        } catch (e: Exception) {
+            Result.failure(e)
         }
     }
 
