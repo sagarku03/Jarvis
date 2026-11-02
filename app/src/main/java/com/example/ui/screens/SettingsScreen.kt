@@ -58,6 +58,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -89,6 +90,14 @@ import com.example.ui.components.AuroraTextButton
 import com.example.ui.theme.AuroraColors
 import com.example.ui.theme.JarvisMonoStyle
 import com.example.ui.viewmodel.SettingsViewModel
+
+val friendlyVoiceModelNames = mapOf(
+    "gemini-3.1-flash-live-preview" to "Gemini 3.1 Flash Live (Real-Time Audio)"
+)
+
+val friendlyTextModelNames = mapOf(
+    "gemini-3.8-flash" to "Gemini 3.8 Flash (Text & Multimodal)"
+)
 
 @Composable
 fun SettingsScreen(
@@ -123,20 +132,27 @@ fun SettingsScreen(
     var liveVoiceDropdownExpanded by remember { mutableStateOf(false) }
     var phoneVoiceDropdownExpanded by remember { mutableStateOf(false) }
 
+    LaunchedEffect(Unit) {
+        viewModel.loadModels()
+    }
+
     val availableVoiceModels = remember(settings.availableModels) {
         buildList {
-            add("gemini-3.8-live")
-            add("gemini-3.8-flash")
+            add("gemini-3.1-flash-live-preview")
             addAll(settings.availableModels.filter { it.contains("live") || it.contains("flash") })
-        }.distinct().filterNot { it.contains("2.0") }
+        }.distinct().filterNot {
+            it.contains("2.0") || it.contains("2.5-flash-lite") || it.contains("3.8-live")
+        }
     }
 
     val availableTextModels = remember(settings.availableModels) {
         buildList {
             add("gemini-3.8-flash")
             add("gemini-3.8-pro")
-            addAll(settings.availableModels.filterNot { it.contains("tts") || it.contains("live") || it.contains("2.0") })
-        }.distinct()
+            addAll(settings.availableModels.filterNot { it.contains("tts") || it.contains("live") || it.contains("2.0") || it.contains("2.5-flash-lite") || it.contains("3.8-live") })
+        }.distinct().filterNot {
+            it.contains("2.0") || it.contains("2.5-flash-lite") || it.contains("3.8-live")
+        }
     }
 
     AuroraBackground {
@@ -319,6 +335,12 @@ fun SettingsScreen(
                                 )
                             }
                             report.steps.forEach { step ->
+                                val stepTitle = if (step.stepIndex == 5) {
+                                    if (step.title.contains("gemini-3.1-flash-live-preview")) step.title
+                                    else "Gemini Live WebSocket Handshake (gemini-3.1-flash-live-preview)"
+                                } else {
+                                    step.title
+                                }
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -330,7 +352,7 @@ fun SettingsScreen(
                                         modifier = Modifier.size(14.dp)
                                     )
                                     Text(
-                                        text = "${step.stepIndex}. ${step.title}: ${step.detail}",
+                                        text = "${step.stepIndex}. $stepTitle: ${step.detail}",
                                         style = MaterialTheme.typography.bodySmall,
                                         color = if (step.passed) AuroraColors.TextPrimary else AuroraColors.Danger
                                     )
@@ -348,7 +370,12 @@ fun SettingsScreen(
                                             appendLine("### JARVIS Self-Test Report")
                                             appendLine("Overall: ${if (report.allPassed) "PASSED" else "FAILED"}")
                                             report.steps.forEach {
-                                                appendLine("- [${if (it.passed) "PASS" else "FAIL"}] ${it.title}: ${it.detail} (${it.latencyMs}ms)")
+                                                val sTitle = if (it.stepIndex == 5 && !it.title.contains("gemini-3.1-flash-live-preview")) {
+                                                    "Gemini Live WebSocket Handshake (gemini-3.1-flash-live-preview)"
+                                                } else {
+                                                    it.title
+                                                }
+                                                appendLine("- [${if (it.passed) "PASS" else "FAIL"}] $sTitle: ${it.detail} (${it.latencyMs}ms)")
                                             }
                                         }
                                         val clip = android.content.ClipData.newPlainText("JARVIS Self-Test", summaryText)
@@ -381,7 +408,8 @@ fun SettingsScreen(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            val displayName = GeminiClient.friendlyModelName(settings.selectedVoiceModelId)
+                            val displayName = friendlyVoiceModelNames[settings.selectedVoiceModelId]
+                                ?: GeminiClient.friendlyModelName(settings.selectedVoiceModelId)
                             Text(
                                 text = displayName,
                                 style = MaterialTheme.typography.bodySmall,
@@ -395,7 +423,7 @@ fun SettingsScreen(
                         ) {
                             availableVoiceModels.forEach { modelId ->
                                 DropdownMenuItem(
-                                    text = { Text(GeminiClient.friendlyModelName(modelId)) },
+                                    text = { Text(friendlyVoiceModelNames[modelId] ?: GeminiClient.friendlyModelName(modelId)) },
                                     onClick = {
                                         viewModel.setSelectedVoiceModelId(modelId)
                                         voiceModelDropdownExpanded = false
@@ -427,7 +455,8 @@ fun SettingsScreen(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            val displayName = GeminiClient.friendlyModelName(settings.selectedTextModelId)
+                            val displayName = friendlyTextModelNames[settings.selectedTextModelId]
+                                ?: GeminiClient.friendlyModelName(settings.selectedTextModelId)
                             Text(
                                 text = displayName,
                                 style = MaterialTheme.typography.bodySmall,
@@ -441,7 +470,7 @@ fun SettingsScreen(
                         ) {
                             availableTextModels.forEach { modelId ->
                                 DropdownMenuItem(
-                                    text = { Text(GeminiClient.friendlyModelName(modelId)) },
+                                    text = { Text(friendlyTextModelNames[modelId] ?: GeminiClient.friendlyModelName(modelId)) },
                                     onClick = {
                                         viewModel.setSelectedTextModelId(modelId)
                                         textModelDropdownExpanded = false
@@ -465,8 +494,8 @@ fun SettingsScreen(
                     Spacer(modifier = Modifier.height(10.dp))
 
                     SettingToggleRow(
-                        title = "Real-time Live Mode (WebSocket)",
-                        subtitle = "Direct 2-way streaming via bidiGenerateContent with auto-fallback to cascade",
+                        title = "Real-time Live mode",
+                        subtitle = "Sub-second bidirectional audio over WebSocket (gemini-3.1-flash-live-preview)",
                         checked = settings.isRealtimeLiveMode,
                         onCheckedChange = { viewModel.setRealtimeLiveMode(it) }
                     )

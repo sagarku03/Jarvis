@@ -198,11 +198,11 @@ class ExampleRobolectricTest {
 
         // 1. Dual model persistence
         settingsRepo.setSelectedTextModelId("gemini-3.8-flash")
-        settingsRepo.setSelectedVoiceModelId("gemini-3.8-live")
+        settingsRepo.setSelectedVoiceModelId("gemini-3.1-flash-live-preview")
 
         val state1 = settingsRepo.settingsFlow.first()
         assertEquals("gemini-3.8-flash", state1.selectedTextModelId)
-        assertEquals("gemini-3.8-live", state1.selectedVoiceModelId)
+        assertEquals("gemini-3.1-flash-live-preview", state1.selectedVoiceModelId)
 
         // 2. Voice gender and live voice name persistence
         settingsRepo.setSelectedVoiceGender("FEMALE")

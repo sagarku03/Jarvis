@@ -121,7 +121,7 @@ class SetupViewModel(
     val verificationSuccess: StateFlow<Boolean> = _verificationSuccess.asStateFlow()
 
     private val _availableModels = MutableStateFlow(
-        listOf("gemini-3.8-flash", "gemini-3.8-live", "gemini-2.5-flash", "gemini-2.5-pro")
+        listOf("gemini-3.8-flash", "gemini-3.1-flash-live-preview", "gemini-2.5-flash", "gemini-2.5-pro")
     )
     val availableModels: StateFlow<List<String>> = _availableModels.asStateFlow()
 
@@ -1116,6 +1116,51 @@ class SettingsViewModel(
         _maskedApiKey.value = apiKeyStore.mask()
     }
 
+    fun loadModels() {
+        viewModelScope.launch {
+            val key = apiKeyStore.get()
+            val available = if (!key.isNullOrBlank()) {
+                val res = geminiClient.verifyKeyAndListModels(key)
+                if (res is KeyVerificationResult.Valid) {
+                    val rawModels = res.availableModels.filterNot {
+                        it.contains("2.0") || it.contains("2.5-flash-lite") || it.contains("3.8-live")
+                    }
+                    buildList {
+                        add("gemini-3.8-flash")
+                        add("gemini-3.1-flash-live-preview")
+                        addAll(rawModels)
+                    }.distinct()
+                } else {
+                    listOf("gemini-3.8-flash", "gemini-3.1-flash-live-preview")
+                }
+            } else {
+                listOf("gemini-3.8-flash", "gemini-3.1-flash-live-preview")
+            }
+            settingsRepository.setAvailableModels(available)
+
+            val current = settingsRepository.settingsFlow.first()
+            val voiceToSet = if (current.selectedVoiceModelId.isBlank() ||
+                current.selectedVoiceModelId.contains("2.0") ||
+                current.selectedVoiceModelId.contains("2.5-flash-lite") ||
+                current.selectedVoiceModelId.contains("3.8-live")
+            ) {
+                "gemini-3.1-flash-live-preview"
+            } else {
+                current.selectedVoiceModelId
+            }
+            val textToSet = if (current.selectedTextModelId.isBlank() ||
+                current.selectedTextModelId.contains("2.0") ||
+                current.selectedTextModelId.contains("2.5-flash-lite")
+            ) {
+                "gemini-3.8-flash"
+            } else {
+                current.selectedTextModelId
+            }
+            settingsRepository.setSelectedVoiceModelId(voiceToSet)
+            settingsRepository.setSelectedTextModelId(textToSet)
+        }
+    }
+
     fun testAiConnection() {
         val currentKey = apiKeyStore.get()
         if (currentKey.isNullOrBlank()) {
@@ -1188,19 +1233,23 @@ class SettingsViewModel(
                 is KeyVerificationResult.Valid -> {
                     apiKeyStore.save(trimmed)
                     _maskedApiKey.value = apiKeyStore.mask()
-                    val rawModels = res.availableModels.filterNot { it.contains("2.0") }
+                    val rawModels = res.availableModels.filterNot {
+                        it.contains("2.0") || it.contains("2.5-flash-lite") || it.contains("3.8-live")
+                    }
                     val models = buildList {
-                        add(GeminiClient.DEFAULT_TEXT_MODEL)
-                        add(GeminiClient.DEFAULT_VOICE_MODEL)
+                        add("gemini-3.8-flash")
+                        add("gemini-3.1-flash-live-preview")
                         addAll(rawModels)
                     }.distinct()
                     settingsRepository.setAvailableModels(models)
                     val currentSelected = settings.value.selectedModelId
                     val chosen = when {
-                        !currentSelected.contains("2.0") && models.contains(currentSelected) -> currentSelected
-                        else -> GeminiClient.DEFAULT_TEXT_MODEL
+                        !currentSelected.contains("2.0") && !currentSelected.contains("2.5-flash-lite") && models.contains(currentSelected) -> currentSelected
+                        else -> "gemini-3.8-flash"
                     }
                     settingsRepository.setSelectedModelId(chosen)
+                    settingsRepository.setSelectedTextModelId("gemini-3.8-flash")
+                    settingsRepository.setSelectedVoiceModelId("gemini-3.1-flash-live-preview")
                     settingsRepository.setSetupComplete(true)
                     agentOrchestrator.clearKeyRejectedBanner()
                     _keyStatusMessage.value = "Connected! Available models: ${models.size}"

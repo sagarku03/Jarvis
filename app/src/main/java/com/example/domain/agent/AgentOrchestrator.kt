@@ -136,6 +136,14 @@ class AgentOrchestrator @Inject constructor(
         }
     }
 
+    fun setStreamingText(text: String?) {
+        _streamingText.value = text
+    }
+
+    fun setLastResponseText(text: String) {
+        _lastResponseText.value = text
+    }
+
     fun cancelActiveTurn() {
         activeJob?.cancel()
         activeJob = null

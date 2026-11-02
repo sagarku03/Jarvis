@@ -36,12 +36,12 @@ android {
         applicationId = "com.aistudio.jarvis.vcaixq"
         minSdk = 24
         targetSdk = 36
-        versionCode = 220
-        versionName = "2.2.0"
+        versionCode = 221
+        versionName = "2.2.1"
 
         val gitSha = runCatching {
             ProcessBuilder("git", "rev-parse", "--short", "HEAD").start().inputStream.bufferedReader().readText().trim()
-        }.getOrDefault("2.2.0")
+        }.getOrDefault("2.2.1")
         val buildTime = System.currentTimeMillis().toString()
 
         buildConfigField("String", "GIT_SHA", "\"$gitSha\"")

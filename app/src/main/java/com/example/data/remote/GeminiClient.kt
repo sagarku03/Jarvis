@@ -42,7 +42,7 @@ sealed class KeyVerificationResult {
     ) : KeyVerificationResult()
 
     data class Invalid(val message: String) : KeyVerificationResult()
-    data class RateLimited(val message: String, val availableModels: List<String> = listOf("gemini-3.8-flash", "gemini-3.8-live")) : KeyVerificationResult()
+    data class RateLimited(val message: String, val availableModels: List<String> = listOf("gemini-3.8-flash", "gemini-3.1-flash-live-preview")) : KeyVerificationResult()
     data class NetworkError(val message: String) : KeyVerificationResult()
 }
 
@@ -81,7 +81,7 @@ class GeminiClient @Inject constructor(
     companion object {
         const val DEFAULT_BASE_URL = "https://generativelanguage.googleapis.com"
         const val DEFAULT_TEXT_MODEL = "gemini-3.8-flash"
-        const val DEFAULT_VOICE_MODEL = "gemini-3.8-live"
+        const val DEFAULT_VOICE_MODEL = "gemini-3.1-flash-live-preview"
         const val DEFAULT_TTS_MODEL = "gemini-3.8-flash-tts"
         const val DEFAULT_FALLBACK_MODEL = "gemini-3.8-flash"
         const val DEFAULT_STABLE_FALLBACK_MODEL = "gemini-3.8-flash"
@@ -96,8 +96,12 @@ class GeminiClient @Inject constructor(
         fun friendlyModelName(rawId: String): String {
             val clean = rawId.removePrefix("models/").lowercase(Locale.US)
             return when {
+                clean.contains("3.1-flash-live") || clean.contains("flash-live") || clean == "gemini-3.1-flash-live-preview" ->
+                    "Gemini 3.1 Flash Live (Voice)"
                 clean.contains("3.8-live") || clean.contains("3-8-live") || clean == "gemini-3.8-live" ->
                     "Gemini 3.8 Live (Voice)"
+                clean.contains("live") ->
+                    "Gemini Live (Voice)"
                 clean.contains("3.8-flash") || clean.contains("3-8-flash") || clean == "gemini-3.8-flash" ->
                     "Gemini 3.8 Flash (Text)"
                 clean.contains("flash-lite") || clean.contains("flash_lite") || clean.contains("8b") ->
@@ -113,7 +117,7 @@ class GeminiClient @Inject constructor(
         fun getNextFallbackModel(failedModel: String): String {
             val clean = failedModel.removePrefix("models/").lowercase(Locale.US)
             return when {
-                clean.contains("live") || clean.contains("3.8-live") || clean.contains("3-8-live") -> DEFAULT_TEXT_MODEL
+                clean.contains("live") || clean.contains("voice") -> DEFAULT_VOICE_MODEL
                 else -> DEFAULT_TEXT_MODEL
             }
         }
@@ -189,12 +193,17 @@ class GeminiClient @Inject constructor(
                                 ?.mapNotNull { it as? String }
                                 .orEmpty()
                             val lowerName = name.lowercase(Locale.US)
-                            val isExcluded = EXCLUDED_MODEL_PATTERNS.any { lowerName.contains(it) }
+                            val isLiveVoice = lowerName == DEFAULT_VOICE_MODEL || lowerName.contains("3.1-flash-live")
+                            val isExcluded = !isLiveVoice && EXCLUDED_MODEL_PATTERNS.any { lowerName.contains(it) }
                             val isDead = lowerName.contains("2.0") || lowerName.contains("2-0")
-                            if ("generateContent" in methods && !isExcluded && !isDead) name else null
+                            if ((("generateContent" in methods) || isLiveVoice) && !isExcluded && !isDead) name else null
                         }.distinct()
 
-                        val finalModels = supportedModels.ifEmpty { listOf(DEFAULT_TEXT_MODEL, DEFAULT_VOICE_MODEL) }
+                        val finalModels = buildList {
+                            add(DEFAULT_TEXT_MODEL)
+                            add(DEFAULT_VOICE_MODEL)
+                            addAll(supportedModels)
+                        }.distinct().filterNot { it.contains("2.0") || it.contains("2-0") }
                         val defaultModel = selectDefaultModel(finalModels)
                         DiagnosticsLogger.log("GeminiClient", "Key verified. Available stable models: ${finalModels.size}")
                         KeyVerificationResult.Valid(
@@ -250,7 +259,7 @@ class GeminiClient @Inject constructor(
 
     suspend fun testDualConnection(
         textModelId: String = DEFAULT_TEXT_MODEL,
-        ttsModelId: String = DEFAULT_TTS_MODEL,
+        ttsModelId: String = DEFAULT_VOICE_MODEL,
         voiceName: String = "Puck",
         overrideKey: String? = null
     ): DualConnectionReport = withContext(Dispatchers.IO) {
@@ -278,6 +287,9 @@ class GeminiClient @Inject constructor(
                     "role" to "user",
                     "parts" to listOf(mapOf("text" to "Say OK"))
                 )
+            ),
+            "generationConfig" to mapOf(
+                "thinkingConfig" to mapOf("thinkingBudget" to 0)
             )
         )
         val textRequest = Request.Builder()
@@ -331,85 +343,153 @@ class GeminiClient @Inject constructor(
             )
         }
 
-        // 2. TTS Voice Model Ping
-        val cleanTtsModel = ttsModelId.removePrefix("models/").trim().ifEmpty { DEFAULT_TTS_MODEL }
-        val ttsUrl = "$baseUrl/v1beta/models/$cleanTtsModel:generateContent"
-        val ttsPayload = mapOf(
-            "contents" to listOf(
-                mapOf(
-                    "role" to "user",
-                    "parts" to listOf(mapOf("text" to "Hello"))
+        // 2. Voice Model Ping (Live WebSocket for gemini-3.1-flash-live-preview or REST Audio for TTS)
+        val cleanVoiceModel = ttsModelId.removePrefix("models/").trim().ifEmpty { DEFAULT_VOICE_MODEL }
+        val voiceStart = System.currentTimeMillis()
+        val isLiveModel = cleanVoiceModel.contains("live") || cleanVoiceModel == DEFAULT_VOICE_MODEL
+
+        val ttsPing = if (isLiveModel) {
+            val wsLatch = java.util.concurrent.CountDownLatch(1)
+            var wsConnected = false
+            var wsDetail = ""
+            var wsHttpCode = 0
+            val wsUrl = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=$apiKey"
+            val wsRequest = Request.Builder().url(wsUrl).build()
+            val wsClient = okHttpClient.newBuilder()
+                .connectTimeout(6, TimeUnit.SECONDS)
+                .readTimeout(6, TimeUnit.SECONDS)
+                .build()
+
+            try {
+                wsClient.newWebSocket(wsRequest, object : okhttp3.WebSocketListener() {
+                    override fun onOpen(webSocket: okhttp3.WebSocket, response: okhttp3.Response) {
+                        wsHttpCode = response.code
+                        val setupFrame = mapOf(
+                            "setup" to mapOf(
+                                "model" to "models/$cleanVoiceModel",
+                                "generationConfig" to mapOf(
+                                    "responseModalities" to listOf("AUDIO"),
+                                    "speechConfig" to mapOf(
+                                        "voiceConfig" to mapOf(
+                                            "prebuiltVoiceConfig" to mapOf("voiceName" to voiceName)
+                                        )
+                                    )
+                                )
+                            )
+                        )
+                        webSocket.send(mapAdapter.toJson(setupFrame))
+                        wsConnected = true
+                        wsDetail = "WebSocket Live Handshake Connected (HTTP ${response.code})"
+                        webSocket.close(1000, "Ping complete")
+                        wsLatch.countDown()
+                    }
+
+                    override fun onFailure(webSocket: okhttp3.WebSocket, t: Throwable, response: okhttp3.Response?) {
+                        wsConnected = false
+                        wsHttpCode = response?.code ?: 0
+                        wsDetail = "Live Handshake failed ($cleanVoiceModel): ${t.localizedMessage ?: "error"} (HTTP ${response?.code ?: 0})"
+                        wsLatch.countDown()
+                    }
+                })
+                wsLatch.await(5, TimeUnit.SECONDS)
+                val latency = System.currentTimeMillis() - voiceStart
+                ConnectionPingDetail(
+                    modelId = cleanVoiceModel,
+                    success = wsConnected,
+                    httpCode = if (wsHttpCode != 0) wsHttpCode else (if (wsConnected) 101 else 0),
+                    latencyMs = latency,
+                    details = if (wsConnected) "Live Voice ($cleanVoiceModel): Operational (${latency}ms)" else wsDetail.ifBlank { "Live handshake timed out" },
+                    errorSnippet = if (wsConnected) null else wsDetail.ifBlank { "Live WebSocket handshake timed out" }
                 )
-            ),
-            "generationConfig" to mapOf(
-                "responseModalities" to listOf("AUDIO"),
-                "speechConfig" to mapOf(
-                    "voiceConfig" to mapOf(
-                        "prebuiltVoiceConfig" to mapOf(
-                            "voiceName" to voiceName
+            } catch (e: Exception) {
+                val latency = System.currentTimeMillis() - voiceStart
+                ConnectionPingDetail(
+                    modelId = cleanVoiceModel,
+                    success = false,
+                    httpCode = 0,
+                    latencyMs = latency,
+                    details = "Live voice connection failure",
+                    errorSnippet = e.localizedMessage ?: "Connection error"
+                )
+            }
+        } else {
+            val ttsUrl = "$baseUrl/v1beta/models/$cleanVoiceModel:generateContent"
+            val ttsPayload = mapOf(
+                "contents" to listOf(
+                    mapOf(
+                        "role" to "user",
+                        "parts" to listOf(mapOf("text" to "Hello"))
+                    )
+                ),
+                "generationConfig" to mapOf(
+                    "responseModalities" to listOf("AUDIO"),
+                    "speechConfig" to mapOf(
+                        "voiceConfig" to mapOf(
+                            "prebuiltVoiceConfig" to mapOf(
+                                "voiceName" to voiceName
+                            )
                         )
                     )
                 )
             )
-        )
-        val ttsRequest = Request.Builder()
-            .url(ttsUrl)
-            .header("x-goog-api-key", apiKey)
-            .header("Content-Type", "application/json")
-            .post(mapAdapter.toJson(ttsPayload).toRequestBody(JSON_MEDIA_TYPE))
-            .build()
+            val ttsRequest = Request.Builder()
+                .url(ttsUrl)
+                .header("x-goog-api-key", apiKey)
+                .header("Content-Type", "application/json")
+                .post(mapAdapter.toJson(ttsPayload).toRequestBody(JSON_MEDIA_TYPE))
+                .build()
 
-        val ttsStart = System.currentTimeMillis()
-        val ttsPing = try {
-            testClient.newCall(ttsRequest).execute().use { response ->
-                val latency = System.currentTimeMillis() - ttsStart
-                val bodyStr = response.body?.string().orEmpty()
-                if (response.isSuccessful) {
-                    val parsed = runCatching { mapAdapter.fromJson(bodyStr) }.getOrNull()
-                    val candidates = parsed?.get("candidates") as? List<*>
-                    val firstCandidate = candidates?.firstOrNull() as? Map<*, *>
-                    val content = firstCandidate?.get("content") as? Map<*, *>
-                    val parts = (content?.get("parts") as? List<*>).orEmpty()
-                    var audioBytes = 0
-                    for (p in parts) {
-                        val pMap = p as? Map<*, *> ?: continue
-                        val inlineData = pMap["inlineData"] as? Map<*, *> ?: continue
-                        val b64 = inlineData["data"] as? String
-                        if (!b64.isNullOrEmpty()) {
-                            audioBytes = Base64.decode(b64, Base64.DEFAULT).size
-                            break
+            try {
+                testClient.newCall(ttsRequest).execute().use { response ->
+                    val latency = System.currentTimeMillis() - voiceStart
+                    val bodyStr = response.body?.string().orEmpty()
+                    if (response.isSuccessful) {
+                        val parsed = runCatching { mapAdapter.fromJson(bodyStr) }.getOrNull()
+                        val candidates = parsed?.get("candidates") as? List<*>
+                        val firstCandidate = candidates?.firstOrNull() as? Map<*, *>
+                        val content = firstCandidate?.get("content") as? Map<*, *>
+                        val parts = (content?.get("parts") as? List<*>).orEmpty()
+                        var audioBytes = 0
+                        for (p in parts) {
+                            val pMap = p as? Map<*, *> ?: continue
+                            val inlineData = pMap["inlineData"] as? Map<*, *> ?: continue
+                            val b64 = inlineData["data"] as? String
+                            if (!b64.isNullOrEmpty()) {
+                                audioBytes = Base64.decode(b64, Base64.DEFAULT).size
+                                break
+                            }
                         }
+                        ConnectionPingDetail(
+                            modelId = cleanVoiceModel,
+                            success = audioBytes > 0,
+                            httpCode = response.code,
+                            latencyMs = latency,
+                            details = if (audioBytes > 0) "HTTP ${response.code} OK: $audioBytes audio bytes ($voiceName, ${latency}ms)" else "HTTP 200 but 0 audio bytes",
+                            errorSnippet = if (audioBytes > 0) null else "No audio in inlineData"
+                        )
+                    } else {
+                        val err = parseErrorDetails(bodyStr)
+                        ConnectionPingDetail(
+                            modelId = cleanVoiceModel,
+                            success = false,
+                            httpCode = response.code,
+                            latencyMs = latency,
+                            details = "HTTP ${response.code} ${err.status}",
+                            errorSnippet = err.message.ifBlank { "HTTP ${response.code}" }
+                        )
                     }
-                    ConnectionPingDetail(
-                        modelId = cleanTtsModel,
-                        success = audioBytes > 0,
-                        httpCode = response.code,
-                        latencyMs = latency,
-                        details = if (audioBytes > 0) "HTTP ${response.code} OK: $audioBytes audio bytes ($voiceName, ${latency}ms)" else "HTTP 200 but 0 audio bytes",
-                        errorSnippet = if (audioBytes > 0) null else "No audio in inlineData"
-                    )
-                } else {
-                    val err = parseErrorDetails(bodyStr)
-                    ConnectionPingDetail(
-                        modelId = cleanTtsModel,
-                        success = false,
-                        httpCode = response.code,
-                        latencyMs = latency,
-                        details = "HTTP ${response.code} ${err.status}",
-                        errorSnippet = err.message.ifBlank { "HTTP ${response.code}" }
-                    )
                 }
+            } catch (e: Exception) {
+                val latency = System.currentTimeMillis() - voiceStart
+                ConnectionPingDetail(
+                    modelId = cleanVoiceModel,
+                    success = false,
+                    httpCode = 0,
+                    latencyMs = latency,
+                    details = "Network failure",
+                    errorSnippet = e.localizedMessage ?: "Connection error"
+                )
             }
-        } catch (e: Exception) {
-            val latency = System.currentTimeMillis() - ttsStart
-            ConnectionPingDetail(
-                modelId = cleanTtsModel,
-                success = false,
-                httpCode = 0,
-                latencyMs = latency,
-                details = "Network failure",
-                errorSnippet = e.localizedMessage ?: "Connection error"
-            )
         }
 
         DualConnectionReport(
@@ -429,6 +509,9 @@ class GeminiClient @Inject constructor(
         val payload = mapOf(
             "contents" to listOf(
                 mapOf("role" to "user", "parts" to listOf(mapOf("text" to "Say OK")))
+            ),
+            "generationConfig" to mapOf(
+                "thinkingConfig" to mapOf("thinkingBudget" to 0)
             )
         )
         val request = Request.Builder()
@@ -700,7 +783,7 @@ class GeminiClient @Inject constructor(
             override fun onOpen(webSocket: okhttp3.WebSocket, response: okhttp3.Response) {
                 val setupFrame = mapOf(
                     "setup" to mapOf(
-                        "model" to "models/gemini-3.8-live",
+                        "model" to "models/$DEFAULT_VOICE_MODEL",
                         "generationConfig" to mapOf(
                             "responseModalities" to listOf("AUDIO"),
                             "speechConfig" to mapOf(
@@ -713,14 +796,14 @@ class GeminiClient @Inject constructor(
                 )
                 webSocket.send(mapAdapter.toJson(setupFrame))
                 wsConnected = true
-                wsDetail = "WebSocket Handshake Connected (HTTP ${response.code})"
+                wsDetail = "WebSocket Handshake Connected ($DEFAULT_VOICE_MODEL, HTTP ${response.code})"
                 webSocket.close(1000, "Self-test finished")
                 wsLatch.countDown()
             }
 
             override fun onFailure(webSocket: okhttp3.WebSocket, t: Throwable, response: okhttp3.Response?) {
                 wsConnected = false
-                wsDetail = "Handshake failed: ${t.localizedMessage ?: "error"} (HTTP ${response?.code ?: 0})"
+                wsDetail = "Handshake failed ($DEFAULT_VOICE_MODEL): ${t.localizedMessage ?: "error"} (HTTP ${response?.code ?: 0})"
                 wsLatch.countDown()
             }
         })
@@ -729,9 +812,9 @@ class GeminiClient @Inject constructor(
         val latency5 = System.currentTimeMillis() - step5Start
         val step5 = SelfTestStepResult(
             stepIndex = 5,
-            title = "Gemini Live WebSocket Handshake",
+            title = "Gemini Live WebSocket Handshake ($DEFAULT_VOICE_MODEL)",
             passed = wsConnected,
-            detail = if (wsDetail.isNotBlank()) wsDetail else if (wsConnected) "Live WebSocket Handshake Success" else "WebSocket handshake timed out",
+            detail = if (wsDetail.isNotBlank()) wsDetail else if (wsConnected) "Live WebSocket Handshake Success ($DEFAULT_VOICE_MODEL)" else "WebSocket handshake timed out",
             latencyMs = latency5
         )
         steps.add(step5)
@@ -743,6 +826,11 @@ class GeminiClient @Inject constructor(
             allPassed = allPassed
         )
     }
+
+    suspend fun runFullSelfTest(
+        apiKeyOverride: String? = null,
+        onStepProgress: ((SelfTestStepResult) -> Unit)? = null
+    ): FullSelfTestReport = runSelfTestSuite(apiKeyOverride, onStepProgress)
 
     suspend fun generateContent(
         modelId: String,
@@ -1184,14 +1272,9 @@ class GeminiClient @Inject constructor(
             "maxOutputTokens" to 1024
         )
 
-        // Minimum thinking configuration per model family
-        if (allowThinking) {
-            val lowerModel = modelId.lowercase(Locale.US)
-            if (!lowerModel.contains("live") && (lowerModel.contains("3-") || lowerModel.contains("gemini-3") || lowerModel.contains("3.8"))) {
-                generationConfig["thinkingConfig"] = mapOf("thinkingLevel" to "low")
-            } else if (lowerModel.contains("2.5")) {
-                generationConfig["thinkingConfig"] = mapOf("thinkingBudget" to 0)
-            }
+        // Turn off thinking latency completely so conversational queries respond immediately
+        if (allowThinking && !modelId.lowercase(Locale.US).contains("live")) {
+            generationConfig["thinkingConfig"] = mapOf("thinkingBudget" to 0)
         }
 
         val result = mutableMapOf<String, Any?>(

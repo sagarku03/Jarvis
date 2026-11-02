@@ -1064,17 +1064,17 @@ class ExampleUnitTest {
     @Test
     fun dualModelArchitecture_defaultsAndFriendlyNames() {
         assertEquals("gemini-3.8-flash", GeminiClient.DEFAULT_TEXT_MODEL)
-        assertEquals("gemini-3.8-live", GeminiClient.DEFAULT_VOICE_MODEL)
+        assertEquals("gemini-3.1-flash-live-preview", GeminiClient.DEFAULT_VOICE_MODEL)
 
-        assertEquals("Gemini 3.8 Live (Voice)", GeminiClient.friendlyModelName("gemini-3.8-live"))
-        assertEquals("Gemini 3.8 Live (Voice)", GeminiClient.friendlyModelName("models/gemini-3.8-live"))
+        assertEquals("Gemini 3.1 Flash Live (Voice)", GeminiClient.friendlyModelName("gemini-3.1-flash-live-preview"))
+        assertEquals("Gemini 3.1 Flash Live (Voice)", GeminiClient.friendlyModelName("models/gemini-3.1-flash-live-preview"))
         assertEquals("Gemini 3.8 Flash (Text)", GeminiClient.friendlyModelName("gemini-3.8-flash"))
         assertEquals("Gemini 3.8 Flash (Text)", GeminiClient.friendlyModelName("models/gemini-3.8-flash"))
 
         val settings = UserSettings()
         assertEquals("gemini-3.8-flash", settings.selectedModelId)
         assertEquals("gemini-3.8-flash", settings.selectedTextModelId)
-        assertEquals("gemini-3.8-live", settings.selectedVoiceModelId)
+        assertEquals("gemini-3.1-flash-live-preview", settings.selectedVoiceModelId)
         assertEquals("MALE", settings.selectedVoiceGender)
         assertEquals("Puck", settings.selectedLiveVoiceName)
     }
@@ -1359,21 +1359,21 @@ class ExampleUnitTest {
 
     @Test
     fun geminiClient_fallbackChain_resolvesFrom38FlashAndLive() {
-        // Fallback chain: 3.8-live and 3.8-flash resolve cleanly
+        // Fallback chain: 3.1-flash-live and 3.8-flash resolve cleanly
         assertEquals("gemini-3.8-flash", GeminiClient.getNextFallbackModel("gemini-3.8-flash"))
         assertEquals("gemini-3.8-flash", GeminiClient.getNextFallbackModel("models/gemini-3.8-flash"))
-        assertEquals("gemini-3.8-flash", GeminiClient.getNextFallbackModel("gemini-3.8-live"))
-        assertEquals("gemini-3.8-flash", GeminiClient.getNextFallbackModel("models/gemini-3.8-live"))
+        assertEquals("gemini-3.8-flash", GeminiClient.getNextFallbackModel("gemini-3.1-flash-live-preview"))
+        assertEquals("gemini-3.8-flash", GeminiClient.getNextFallbackModel("models/gemini-3.1-flash-live-preview"))
 
         // Default model selection prioritizes 3.8-flash
-        assertEquals("gemini-3.8-flash", GeminiClient.selectDefaultModel(listOf("gemini-3.8-flash", "gemini-3.8-live")))
+        assertEquals("gemini-3.8-flash", GeminiClient.selectDefaultModel(listOf("gemini-3.8-flash", "gemini-3.1-flash-live-preview")))
         assertEquals("gemini-3.8-flash", GeminiClient.selectDefaultModel(listOf("gemini-3.8-flash", "gemini-1.5-pro")))
 
         // Friendly names
         assertEquals("Gemini 3.8 Flash (Text)", GeminiClient.friendlyModelName("gemini-3.8-flash"))
-        assertEquals("Gemini 3.8 Live (Voice)", GeminiClient.friendlyModelName("gemini-3.8-live"))
+        assertEquals("Gemini 3.1 Flash Live (Voice)", GeminiClient.friendlyModelName("gemini-3.1-flash-live-preview"))
         assertEquals("Gemini 3.8 Flash (Text)", GeminiClient.friendlyModelName("models/gemini-3.8-flash"))
-        assertEquals("Gemini 3.8 Live (Voice)", GeminiClient.friendlyModelName("models/gemini-3.8-live"))
+        assertEquals("Gemini 3.1 Flash Live (Voice)", GeminiClient.friendlyModelName("models/gemini-3.1-flash-live-preview"))
     }
 
     @Test
@@ -1592,9 +1592,9 @@ class ExampleUnitTest {
         assertEquals("model", contents[1]["role"])
         assertEquals("user", contents[2]["role"]) // Tool response sent as user turn with functionResponse
 
-        // B) Gemini 3.8 Live (Voice) does NOT include thinkingConfig
+        // B) Gemini 3.1 Flash Live (Voice) does NOT include thinkingConfig
         val payloadLive = client.buildGenerateContentPayload(
-            modelId = "gemini-3.8-live",
+            modelId = "gemini-3.1-flash-live-preview",
             systemInstruction = "You are Jarvis.",
             messages = listOf(ChatMessage(role = MessageRole.USER, content = "Hello")),
             tools = emptyList(),
@@ -1810,14 +1810,14 @@ class ExampleUnitTest {
 
             // 1. Direct SettingsRepository testing
             assertEquals("gemini-3.8-flash", fakeSettingsRepo.flow.value.selectedTextModelId)
-            assertEquals("gemini-3.8-live", fakeSettingsRepo.flow.value.selectedVoiceModelId)
+            assertEquals("gemini-3.1-flash-live-preview", fakeSettingsRepo.flow.value.selectedVoiceModelId)
             assertEquals("MALE", fakeSettingsRepo.flow.value.selectedVoiceGender)
             assertEquals("Puck", fakeSettingsRepo.flow.value.selectedLiveVoiceName)
 
             fakeSettingsRepo.setSelectedTextModelId("gemini-3.8-flash")
-            fakeSettingsRepo.setSelectedVoiceModelId("gemini-3.8-live")
+            fakeSettingsRepo.setSelectedVoiceModelId("gemini-3.1-flash-live-preview")
             assertEquals("gemini-3.8-flash", fakeSettingsRepo.flow.value.selectedTextModelId)
-            assertEquals("gemini-3.8-live", fakeSettingsRepo.flow.value.selectedVoiceModelId)
+            assertEquals("gemini-3.1-flash-live-preview", fakeSettingsRepo.flow.value.selectedVoiceModelId)
 
             fakeSettingsRepo.setSelectedVoiceGender("FEMALE")
             fakeSettingsRepo.setSelectedLiveVoiceName("Aoede")
@@ -1864,7 +1864,7 @@ class ExampleUnitTest {
 
             // Verify initial state
             assertEquals("gemini-3.8-flash", viewModel.settings.value.selectedTextModelId)
-            assertEquals("gemini-3.8-live", viewModel.settings.value.selectedVoiceModelId)
+            assertEquals("gemini-3.1-flash-live-preview", viewModel.settings.value.selectedVoiceModelId)
 
             // Change text model via ViewModel
             viewModel.setSelectedTextModelId("gemini-3.8-flash")
@@ -1872,9 +1872,9 @@ class ExampleUnitTest {
             assertEquals("gemini-3.8-flash", fakeSettingsRepo.flow.value.selectedTextModelId)
 
             // Change voice model via ViewModel
-            viewModel.setSelectedVoiceModelId("gemini-3.8-live")
+            viewModel.setSelectedVoiceModelId("gemini-3.1-flash-live-preview")
             testDispatcher.scheduler.advanceUntilIdle()
-            assertEquals("gemini-3.8-live", fakeSettingsRepo.flow.value.selectedVoiceModelId)
+            assertEquals("gemini-3.1-flash-live-preview", fakeSettingsRepo.flow.value.selectedVoiceModelId)
 
             // Change gender to FEMALE: live voice should automatically switch to Aoede
             viewModel.setSelectedVoiceGender("FEMALE")

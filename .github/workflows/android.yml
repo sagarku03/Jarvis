@@ -75,13 +75,13 @@ jobs:
 
       - name: Prepare Named Release APK
         run: |
-          cp app/build/outputs/apk/debug/app-debug.apk JARVIS-v2.2.0-Gemini3.8.apk
+          cp app/build/outputs/apk/debug/app-debug.apk JARVIS-v2.2.1-Gemini3.1Live.apk
 
       - name: Upload Debug APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: JARVIS-v2.2.0-Gemini3.8.apk
-          path: JARVIS-v2.2.0-Gemini3.8.apk
+          name: JARVIS-v2.2.1-Gemini3.1Live.apk
+          path: JARVIS-v2.2.1-Gemini3.1Live.apk
 
       - name: Assemble Release APK
         if: env.RELEASE_KEYSTORE_BASE64 != ''
@@ -132,22 +132,22 @@ jobs:
       - name: Download Debug APK
         uses: actions/download-artifact@v4
         with:
-          name: JARVIS-v2.2.0-Gemini3.8.apk
+          name: JARVIS-v2.2.1-Gemini3.1Live.apk
 
       - name: Download Verification Report
         uses: actions/download-artifact@v4
         with:
           name: VERIFICATION.md
 
-      - name: Create or Update GitHub Release v2.2.0
+      - name: Create or Update GitHub Release v2.2.1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release delete v2.2.0 --yes 2>/dev/null || true
-          git tag -d v2.2.0 2>/dev/null || true
-          git push origin :refs/tags/v2.2.0 2>/dev/null || true
-          gh release create v2.2.0 \
-            JARVIS-v2.2.0-Gemini3.8.apk \
+          gh release delete v2.2.1 --yes 2>/dev/null || true
+          git tag -d v2.2.1 2>/dev/null || true
+          git push origin :refs/tags/v2.2.1 2>/dev/null || true
+          gh release create v2.2.1 \
+            JARVIS-v2.2.1-Gemini3.1Live.apk \
             VERIFICATION.md \
-            --title "JARVIS v2.2.0 - Gemini 3.8 Cascade & Real-Time Live Architecture" \
+            --title "JARVIS v2.2.1 - Gemini 3.1 Live Voice & Gemini 3.8 Flash" \
             --notes-file VERIFICATION.md

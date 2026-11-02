@@ -27,7 +27,8 @@ class VoiceSessionManager @Inject constructor(
     private val ttsEngine: TtsEngineWrapper,
     private val audioRecorder: PcmAudioRecorder? = null,
     private val wakeWordEngine: WakeWordEngine,
-    private val ttsManager: TtsManager? = null
+    private val ttsManager: TtsManager? = null,
+    private val geminiLiveWebSocketManager: GeminiLiveWebSocketManager? = null
 ) {
     companion object {
         const val SPEAKER_TAIL_DELAY_MS = 500L
@@ -299,12 +300,39 @@ class VoiceSessionManager @Inject constructor(
         }
     }
 
+    fun onLiveAudioStarted() {
+        tailTransitionJob?.cancel()
+        closeMicrophoneImmediately()
+        _state.value = VoiceSessionState.SPEAKING
+    }
+
+    fun startLiveSession(
+        voiceName: String = "Puck",
+        onFallbackToCascade: (String) -> Unit = {}
+    ) {
+        geminiLiveWebSocketManager?.connect(voiceName, onFallbackToCascade)
+    }
+
+    fun stopLiveSession() {
+        geminiLiveWebSocketManager?.stopAudioPlayback()
+        geminiLiveWebSocketManager?.disconnect()
+    }
+
+    fun sendLiveAudioChunk(pcm16k: ByteArray): Boolean {
+        return geminiLiveWebSocketManager?.sendAudioChunk(pcm16k) ?: false
+    }
+
+    fun sendLiveTextPrompt(text: String, endOfTurn: Boolean = true): Boolean {
+        return geminiLiveWebSocketManager?.sendTextPrompt(text, endOfTurn) ?: false
+    }
+
     fun bargeInAndListen(
         language: AppLanguage,
         onFinalTranscript: (String) -> Unit,
         onError: (String) -> Unit
     ) {
         tailTransitionJob?.cancel()
+        geminiLiveWebSocketManager?.stopAudioPlayback()
         ttsManager?.stop()
         ttsEngine.stop()
         startListening(language, onFinalTranscript, onError)
@@ -313,6 +341,8 @@ class VoiceSessionManager @Inject constructor(
     fun stopAll() {
         tailTransitionJob?.cancel()
         closeMicrophoneImmediately()
+        geminiLiveWebSocketManager?.stopAudioPlayback()
+        geminiLiveWebSocketManager?.disconnect()
         ttsManager?.stop()
         ttsEngine.stop()
         _state.value = VoiceSessionState.IDLE
@@ -322,6 +352,7 @@ class VoiceSessionManager @Inject constructor(
     fun transitionToIdle() {
         tailTransitionJob?.cancel()
         closeMicrophoneImmediately()
+        geminiLiveWebSocketManager?.stopAudioPlayback()
         _state.value = VoiceSessionState.IDLE
         syncWakeWordWithSessionState()
     }

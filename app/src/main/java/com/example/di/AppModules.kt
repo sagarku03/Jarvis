@@ -277,7 +277,8 @@ class AppContainer(context: Context) {
             ttsEngine = ttsEngineWrapper,
             audioRecorder = null,
             wakeWordEngine = wakeWordEngine,
-            ttsManager = ttsManager
+            ttsManager = ttsManager,
+            geminiLiveWebSocketManager = geminiLiveWebSocketManager
         )
     }
 

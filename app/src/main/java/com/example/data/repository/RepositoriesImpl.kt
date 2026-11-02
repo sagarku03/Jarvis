@@ -94,14 +94,23 @@ class AgentBackendRepositoryImpl @Inject constructor(
 
         val settings = settingsRepository.settingsFlow.first()
         val chosenModelId = run {
-            val text = settings.selectedTextModelId.trim()
-            if (text.isBlank() || text.contains("2.0") || text.contains("2.5-flash-lite") || text.contains("live")) {
-                GeminiClient.DEFAULT_TEXT_MODEL
+            if (isVoiceInput) {
+                val voice = settings.selectedVoiceModelId.trim()
+                if (voice.isBlank() || voice.contains("2.0") || voice.contains("2.5-flash-lite")) {
+                    "gemini-3.1-flash-live-preview"
+                } else {
+                    voice
+                }
             } else {
-                text
+                val text = settings.selectedTextModelId.trim()
+                if (text.isBlank() || text.contains("2.0") || text.contains("2.5-flash-lite") || text.contains("live")) {
+                    "gemini-3.8-flash"
+                } else {
+                    text
+                }
             }
         }
-        DiagnosticsLogger.log("AgentBackend", "runAgentStep using cascade text model: $chosenModelId (isVoiceInput=$isVoiceInput)")
+        DiagnosticsLogger.log("AgentBackend", "runAgentStep using chosen model: $chosenModelId (isVoiceInput=$isVoiceInput)")
         val pinnedFacts = memories.filter {
             it.pinned || it.category == MemoryCategory.PROFILE.name || it.category == MemoryCategory.CONTACT.name
         }
@@ -946,7 +955,7 @@ class SettingsRepositoryImpl @Inject constructor(
         }
 
         val savedVoiceModelId = prefs[Keys.SELECTED_VOICE_MODEL_ID]
-        val resolvedVoiceModelId = if (savedVoiceModelId.isNullOrBlank() || savedVoiceModelId.contains("2.0") || savedVoiceModelId.contains("2.5-flash-lite")) {
+        val resolvedVoiceModelId = if (savedVoiceModelId.isNullOrBlank() || savedVoiceModelId.contains("2.0") || savedVoiceModelId.contains("2.5-flash-lite") || savedVoiceModelId == "gemini-3.8-live") {
             GeminiClient.DEFAULT_VOICE_MODEL
         } else {
             savedVoiceModelId
@@ -972,7 +981,7 @@ class SettingsRepositoryImpl @Inject constructor(
             selectedTextModelId = resolvedTextModelId,
             selectedVoiceModelId = resolvedVoiceModelId,
             selectedTtsModelId = resolvedTtsModelId,
-            isRealtimeLiveMode = prefs[Keys.REALTIME_LIVE_MODE] ?: false,
+            isRealtimeLiveMode = prefs[Keys.REALTIME_LIVE_MODE] ?: true,
             selectedVoiceGender = prefs[Keys.SELECTED_VOICE_GENDER] ?: "MALE",
             selectedLiveVoiceName = prefs[Keys.SELECTED_LIVE_VOICE_NAME] ?: "Puck",
             availableModels = rawModels,

@@ -71,7 +71,7 @@ def perform_streaming_request(url, data_dict=None, headers=None, timeout=20):
         latency = int((time.time() - start) * 1000)
         return 0, [], latency, str(e)
 
-def test_websocket_handshake(api_key, model_id="gemini-3.8-live"):
+def test_websocket_handshake(api_key, model_id="gemini-3.1-flash-live-preview"):
     host = "generativelanguage.googleapis.com"
     path = f"/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key={api_key}"
     port = 443
@@ -189,7 +189,7 @@ def main():
         "models": models_list[:10],
         "passed": status == 200 and len(models_list) > 0,
         "has_3_8_flash": any("3.8-flash" in m for m in models_list),
-        "has_3_8_live": any("3.8-live" in m for m in models_list)
+        "has_3_1_live": any("3.1-flash-live" in m for m in models_list)
     }
 
     # CHECK 2: Text generateContent
@@ -331,7 +331,7 @@ def main():
     )
 
     with open("VERIFICATION.md", "w") as f:
-        f.write("# Live Gemini 3.8 Device & API Verification Report\n\n")
+        f.write("# Live Gemini 3.1 Live & 3.8 Flash Verification Report\n\n")
         f.write(f"**Generated**: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())}\n")
         f.write(f"**Overall Status**: {'🟢 ALL TESTS PASSED' if all_passed else '⚠️ PARTIAL / FAILURES DETECTED'}\n\n")
 
@@ -370,7 +370,7 @@ def main():
             f.write(f"| **{voice}** | {gender} | `{vdata['status']}` | `{vdata['mime_type']}` | `{vdata['audio_bytes']} B` | `{vdata['latency_ms']} ms` | {res_str} |\n")
         f.write("\n")
 
-        f.write("## 5. Real-Time Live Mode (WebSocket Handshake)\n")
+        f.write("## 5. Real-Time Live Mode (WebSocket Handshake: `gemini-3.1-flash-live-preview`)\n")
         f.write(f"- **Endpoint**: `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent`\n")
         f.write(f"- **HTTP Upgrade Status**: `{results['live_websocket']['status']}`\n")
         f.write(f"- **Latency**: `{results['live_websocket']['latency_ms']} ms`\n")
@@ -379,7 +379,7 @@ def main():
 
         f.write("## Verification Conclusion\n")
         if all_passed:
-            f.write("All 5 verification layers have passed with real HTTP and WebSocket evidence from Google Generative Language APIs. Gemini 3.8 cascade, dynamic models, voice switching, and live mode are fully operational.\n")
+            f.write("All 5 verification layers have passed with real HTTP and WebSocket evidence from Google Generative Language APIs. Gemini 3.1 Live real-time bidirectional WebSocket and Gemini 3.8 Flash text are fully operational.\n")
         else:
             f.write("One or more live verification checks encountered issues. Review details above.\n")
 
